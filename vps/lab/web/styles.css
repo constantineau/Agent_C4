@@ -32,7 +32,7 @@ h1, h2, h3, h4 { font-family: var(--font-display); }
 .gatebox input { width: 100%; padding: 12px; border-radius: 9px; border: 1px solid var(--line);
   background: var(--panel2); color: var(--ink); font-size: 16px; margin-bottom: 12px; }
 .gatebox button { width: 100%; padding: 12px; border: none; border-radius: 9px;
-  background: var(--accent); color: #04121f; font-weight: 700; font-size: 15px; cursor: pointer; }
+  background: var(--accent); color: var(--ink-on-accent); font-weight: 700; font-size: 15px; cursor: pointer; }
 .err { color: var(--bad); font-size: 13px; min-height: 18px; margin-top: 10px; }
 
 /* top bar + tabs */
@@ -45,7 +45,14 @@ h1, h2, h3, h4 { font-family: var(--font-display); }
   background: var(--accent); padding: 4px 8px 3px; border-radius: 5px; text-transform: uppercase; }
 .brand .wl { font-size: 11px; letter-spacing: .28em; text-transform: uppercase; color: var(--muted);
   font-weight: 700; }
-.tabs { display: flex; gap: 2px; flex-wrap: wrap; flex: 1; align-items: center; }
+/* one row that scrolls sideways when it doesn't fit (iPad upright), never a wrapped second line with
+   orphan dividers (#97 G67, #99 G75, #105 G97). app.js keepTabVisible scrolls the selected tab in. */
+.tabs { display: flex; gap: 2px; flex-wrap: nowrap; flex: 1; min-width: 0; align-items: center;
+  overflow-x: auto; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
+.tabs a { flex: none; }
+/* too narrow for brand + tabs + Sign out on one line: the tabs take their own full-width row */
+@media (max-width: 1180px) { .tabs { order: 3; flex-basis: 100%; } }
 .tabs a { color: var(--muted); text-decoration: none; padding: 7px 11px; border-radius: 7px;
   font-size: 13px; white-space: nowrap; box-shadow: inset 0 0 0 0 var(--accent); transition: color .12s; }
 .tabs a:hover { background: var(--panel2); color: var(--ink); }
@@ -58,7 +65,9 @@ h1, h2, h3, h4 { font-family: var(--font-display); }
   border-radius: 8px; padding: 6px 12px; cursor: pointer; font-size: 13px; font-family: var(--font-body); }
 .ghost:hover { border-color: var(--accent); color: var(--ink); }
 
-main { padding: 18px; max-width: 1200px; margin: 0 auto; }
+/* bottom padding clears the floating Feedback pill (feedback.js) so it never covers the last row
+   (#101 G82, #103 G92); the Save bar raises it further (body.has-savebar main) */
+main { padding: 18px 18px 72px; max-width: 1200px; margin: 0 auto; }
 /* plain links on the dark cards: steel, same colour visited or not (#94). Zero specificity via
    :where() so any classed link (a.mini, buttons-as-links) keeps its own styling. */
 :where(main) :where(a:link, a:visited) { color: var(--cyan); text-decoration: underline;
@@ -83,14 +92,23 @@ main { padding: 18px; max-width: 1200px; margin: 0 auto; }
 /* primary action — the one place the signature magenta is spent. Bare <button>s in the content area
    become the magenta CTA; .mini/.ghost stay secondary; #optRun + .gatebox button already use --accent. */
 button { font-family: var(--font-body); }
-main button:not(.mini):not(.ghost) { background: var(--accent); color: var(--ink-on-accent);
+main button:not(.mini):not(.ghost):not(.pill) { background: var(--accent); color: var(--ink-on-accent);
   border: none; border-radius: 8px; padding: 9px 16px; font-weight: 700; font-size: 13px;
   cursor: pointer; letter-spacing: .01em; }
-main button:not(.mini):not(.ghost):hover { filter: brightness(1.07); }
-main button:not(.mini):not(.ghost):disabled { opacity: .55; cursor: default; }
+main button:not(.mini):not(.ghost):not(.pill):hover { filter: brightness(1.07); }
+main button:not(.mini):not(.ghost):not(.pill):disabled { opacity: .55; cursor: default; }
+/* a pill that is a button (Debrief's archived-race toggle) stays a pill, not a red CTA (#97 G21) */
+button.pill { cursor: pointer; font-family: var(--font-body); }
 
 /* inputs + accessible focus (cyan = interaction; magenta stays reserved for the primary CTA) */
 input, select, textarea { font-family: var(--font-body); }
+/* dark by default: native date/time pickers, scrollbars and form controls follow the dark theme, and
+   a bare input/textarea/select (no class) is no longer a white browser box (#97 G61, #99 G71, #104 G93).
+   :where() keeps this at zero specificity so every classed field rule still wins. */
+:root { color-scheme: dark; }
+:where(input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=file]):not([type=button]):not([type=submit]),
+  textarea, select) { background: var(--panel2); color: var(--ink); border: 1px solid var(--line);
+  border-radius: 6px; padding: 4px 6px; font-size: 13px; }
 .ein:focus, input:focus, select:focus, textarea:focus { outline: none; border-color: var(--cyan);
   box-shadow: 0 0 0 1px var(--cyan); }
 :focus-visible { outline: 2px solid var(--cyan); outline-offset: 1px; }
@@ -141,7 +159,7 @@ button.mini { background: var(--panel2); color: var(--ink); border: 1px solid va
   border-radius: 7px; padding: 6px 10px; font-size: 12px; cursor: pointer; white-space: nowrap; }
 button.mini:hover { border-color: var(--accent); }
 #ingBtn { width: 100%; padding: 10px; border: none; border-radius: 8px; background: var(--accent);
-  color: #04121f; font-weight: 700; cursor: pointer; margin-top: 4px; }
+  color: var(--ink-on-accent); font-weight: 700; cursor: pointer; margin-top: 4px; }
 #ingBtn:disabled { opacity: .6; cursor: default; }
 .ing-cands { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
 .cand { display: flex; justify-content: space-between; align-items: center; gap: 8px;
@@ -155,7 +173,7 @@ button.mini:hover { border-color: var(--accent); }
 .banner.draft button { margin-left: 8px; }
 
 /* ---------- course & marks review ---------- */
-.coursemap { width: 100%; max-width: 760px; height: 380px; background: var(--bg);
+.coursemap { width: 100%; height: 380px; background: var(--bg);
   border: 1px solid var(--line); border-radius: 10px; margin-bottom: 12px; }
 .coursemap .leaflet-tile { filter: none; }
 /* map labels: dark chip, white text (Leaflet's default tooltip is a white box) */
@@ -180,13 +198,15 @@ button.mini:hover { border-color: var(--accent); }
 /* ---------- Gameplan route map (Leaflet, [C]) ---------- */
 .routemap { width: 100%; height: 480px; border: 1px solid var(--line); border-radius: 10px;
   margin-bottom: 10px; background: #aadaff; }
-.routemap .leaflet-control.mv-ctl { background: rgba(255,255,255,0.94); color: #16202b;
+/* the map's control panel is white: its fields stay light, not the dark default above */
+.routemap .leaflet-control.mv-ctl { color-scheme: light; background: rgba(255,255,255,0.94); color: #16202b;
   padding: 6px 9px; border-radius: 8px; box-shadow: 0 1px 5px rgba(0,0,0,0.3); font-size: 12px;
   line-height: 1.5; }
 .routemap .mv-ctl b { font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
   color: #5a6b7b; }
 .routemap .mv-chk { cursor: pointer; }
 .routemap .mv-chk input { margin-right: 4px; }
+.routemap .mv-ctl select { background: #fff; color: #16202b; border: 1px solid #c4cdd6; padding: 1px 3px; }
 .routemap .mv-windmode select { font-size: 11px; margin-left: 3px; }
 .routemap .mv-play { border: 1px solid #c4cdd6; background: #fff; color: #16202b; cursor: pointer;
   border-radius: 6px; width: 26px; height: 24px; font-size: 12px; padding: 0; vertical-align: middle; }
@@ -214,13 +234,13 @@ td select, .finedit select { background: var(--panel2); color: var(--ink); borde
   border-radius: 6px; padding: 4px; font-size: 12px; }
 tr.needrow { background: rgba(245,196,81,.07); }
 #saveCourseBtn { padding: 10px 18px; border: none; border-radius: 8px; background: var(--accent);
-  color: #04121f; font-weight: 700; cursor: pointer; }
+  color: var(--ink-on-accent); font-weight: 700; cursor: pointer; }
 #saveCourseBtn:disabled { opacity: .6; }
 
 /* ---------- Races detail — editable review form ---------- */
 .dactions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 12px; }
 #detailSaveBtn { padding: 8px 16px; border: none; border-radius: 8px; background: var(--accent);
-  color: #04121f; font-weight: 700; cursor: pointer; }
+  color: var(--ink-on-accent); font-weight: 700; cursor: pointer; }
 #detailSaveBtn:disabled { opacity: .6; }
 .ein { background: var(--panel2); color: var(--ink); border: 1px solid var(--line);
   border-radius: 6px; padding: 4px 6px; font-size: 13px; font-family: inherit; }
@@ -228,6 +248,7 @@ tr.needrow { background: rgba(245,196,81,.07); }
 .ein.ta { width: 100%; min-height: 38px; resize: vertical; line-height: 1.35; box-sizing: border-box; }
 .dhead h2 .ein { font-size: 20px; font-weight: 700; min-width: 320px; }
 .dmeta .ein { font-size: 12px; }
+.ein.wide { min-width: 220px; }   /* organizer, start area, region, scoring method: don't clip (#104 G44) */
 .esel { background: var(--panel2); color: var(--ink); border: 1px solid var(--line);
   border-radius: 6px; padding: 4px; font-size: 12px; }
 .echk { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
@@ -239,6 +260,12 @@ tr.needrow { background: rgba(245,196,81,.07); }
 .opt { max-width: 1320px; }
 .opt-controls { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 10px; }
 .opt-controls label, .opt-group label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+/* a checkbox or radio sits BESIDE its words, not stacked above them: the column rule above is for
+   "label over field" pairs (#100 G28, #81 G38, #103 G89) */
+.opt-controls label:has(> input:is([type=checkbox], [type=radio])),
+.opt-group label:has(> input:is([type=checkbox], [type=radio])),
+.opt-controls label.optchk, .opt-group label.optchk, .opt-controls label.req-flag, .opt-group label.req-flag {
+  flex-direction: row; align-items: center; gap: 5px; }
 .opt-controls select, .opt-controls input[type=datetime-local], .opt-controls input[type=text], .opt-controls input[type=number],
 .opt-group select, .opt-group input[type=datetime-local], .opt-group input[type=text], .opt-group input[type=number] {
   background: var(--panel2); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 8px; font-size: 14px; }
@@ -256,7 +283,7 @@ tr.needrow { background: rgba(245,196,81,.07); }
 .opt-models { display: flex; gap: 14px; flex-wrap: wrap; margin: 6px 0 10px; }
 .optchk { font-size: 13px; color: var(--ink); display: inline-flex; align-items: center; gap: 5px; }
 #optRun { padding: 9px 18px; border: none; border-radius: 8px; background: var(--accent);
-  color: #04121f; font-weight: 700; cursor: pointer; }
+  color: var(--ink-on-accent); font-weight: 700; cursor: pointer; }
 #optRun:disabled { opacity: .6; cursor: default; }
 .opt-stats { display: flex; gap: 22px; flex-wrap: wrap; margin-bottom: 14px; }
 .opt-stats > div { display: flex; flex-direction: column; }
@@ -344,7 +371,9 @@ a.mini { text-decoration: none; display: inline-block; }
 .sail-C0, .sail-bg-C0 { background: #4dd6c9; }      /* Code 0 — teal (light-air reacher) */
 .sail-A2, .sail-bg-A2 { background: #7ee0a8; }      /* A2 — green */
 .sail-A3, .sail-bg-A3 { background: #f5c451; }      /* A3 — amber */
-.sail-S2, .sail-bg-S2 { background: #ff8042; }      /* S2 — orange */
+.sail-S1, .sail-bg-S1,
+.sail-S2, .sail-bg-S2 { background: #ff8042; }      /* S1 kite — orange (cert id S2-A, same sail) */
+.sail-SS, .sail-bg-SS { background: #f28cc4; }      /* SS staysail — pink */
 .jib-edit { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin: 8px 0 4px;
   font-size: 12px; color: var(--muted); }
 .jib-edit label { display: flex; gap: 5px; align-items: center; }
@@ -367,10 +396,16 @@ a.mini { text-decoration: none; display: inline-block; }
 .xo-zone { position: absolute; top: 0; height: 100%; display: flex; align-items: center;
   justify-content: center; font-size: 10px; font-weight: 700; color: #04121f;
   border-right: 1px solid rgba(0,0,0,.25); }
-/* toss-up overlay: a two-colour diagonal hatch over the solid zones marking a near-tie (carry either) */
-.xo-ol { position: absolute; top: 0; height: 100%; display: flex; align-items: flex-start;
-  justify-content: center; font-size: 10px; font-weight: 800; color: rgba(4,18,31,.75);
-  border-left: 1px dashed rgba(0,0,0,.55); border-right: 1px dashed rgba(0,0,0,.55); }
+/* toss-up: a thin two-colour striped strip along the track's bottom edge marking a near-tie (carry
+   either). It sits under the zones, so it never covers their labels. */
+.xo-track.xo-tu { height: 24px; }
+.xo-tu .xo-zone { height: calc(100% - 5px); }
+.xo-ol { position: absolute; bottom: 0; height: 5px; }
+.pg-fold > summary { cursor: pointer; list-style: none; }
+.pg-fold > summary::-webkit-details-marker { display: none; }
+.pg-fold > summary h4 { display: inline-block; }
+.pg-fold > summary h4::before { content: "▸ "; }
+.pg-fold[open] > summary h4::before { content: "▾ "; }
 .pg-wrap { overflow-x: auto; }
 table.pg { border-collapse: collapse; font-size: 11px; margin-top: 4px; }
 table.pg th, table.pg td { border: 1px solid var(--line); padding: 3px 7px; text-align: right; color: var(--ink); }
@@ -381,10 +416,12 @@ table.pg td.pg-twa { color: var(--muted); font-weight: 600; }
 .dep-grid { display: flex; flex-direction: column; gap: 7px; margin-top: 10px; }
 .dep-row { display: flex; align-items: center; gap: 10px; font-size: 13px; }
 .dep-row .muted { font-size: 12px; }
+.dep-cmds-h { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  margin: 6px 0; font-size: 12px; }
 .dep-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
 .dep-cmds { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px;
   padding: 11px 13px; font-size: 12px; line-height: 1.55; color: var(--ink); overflow-x: auto;
-  white-space: pre; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  white-space: pre-wrap; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 
 /* ---- Fleet roster table ---- */
 table.fleet-tbl { border-collapse: collapse; width: 100%; font-size: 12px; }
@@ -438,6 +475,20 @@ table.mon-tbl tr.mon-row { cursor: pointer; }
 table.mon-tbl tr.mon-row:hover td { background: var(--panel2); }
 table.mon-tbl tr.mon-row.own td { background: rgba(245,196,81,.10); color: #f5c451; font-weight: 700; }
 table.mon-tbl tr.mon-row td { padding-top: 7px; padding-bottom: 7px; }
+table.mon-tbl tr.mon-row.old:not(.own) td { color: var(--muted); }
+/* our live boat: hull along a fresh true heading, COG as its own line (dim when barely moving) */
+.mon-vec-wrap { background: none; border: none; }
+.mon-vec-wrap svg { display: block; overflow: visible; }
+.mon-hull path { fill: #f5c451; stroke: #0b0b0e; stroke-width: 2; }
+.mon-cog line, .mon-cog path { stroke: #f5c451; stroke-width: 2.5; fill: none; stroke-linecap: round; }
+.mon-cog.dim { opacity: .35; }
+.mon-sw-line { width: 14px; height: 0; border-radius: 0; border-top: 2.5px solid #f5c451; vertical-align: 3px; }
+.mon-sw-line.dim { opacity: .35; }
+/* sign-in: password box with a Show/Hide toggle beside it (#106 G99) */
+.gatebox .pw-row { display: flex; gap: 8px; margin-bottom: 12px; }
+.gatebox .pw-row input { flex: 1; min-width: 0; margin-bottom: 0; }
+.gatebox .pw-row button { width: auto; min-width: 64px; min-height: 44px; padding: 0 12px;
+  background: var(--panel2); color: var(--ink); border: 1px solid var(--line); font-weight: 600; font-size: 13px; }
 
 /* ---------- unsaved edits: fixed Save bar + tab marker + leave prompt (app.js syncDirty) ----------
    Sits above the bottom edge so a long page (Rules 4,500 px, Course 1,600 px) can be saved without
@@ -462,6 +513,29 @@ body:not(.is-dirty) .if-dirty, body.is-dirty .if-clean { display: none; }
 .tabs a.dirty::after { content: " ●"; color: var(--warn); }
 @media (max-width: 600px) { .savebar { right: 16px; bottom: calc(64px + env(safe-area-inset-bottom)); } }
 
+/* ---------- touch targets: 44 px on any touch screen (#81, #84, #104 G45) ----------
+   `any-pointer`, not `pointer`: an iPad with a keyboard/trackpad still gets finger-sized controls.
+   Mouse-only desktops keep the dense tables. Labels that wrap a checkbox/radio are the target, so a
+   tap anywhere on the words toggles it. */
+@media (any-pointer: coarse) {
+  .tabs a { min-height: 44px; display: inline-flex; align-items: center; }
+  .ghost, button.mini, a.mini, main button:not(.qh-btn), .gatebox button, .modal button {
+    min-height: 44px; }
+  a.mini { display: inline-flex; align-items: center; }
+  .cin, .ein, .esel, td select, .finedit select, .req-l2 select, .jib-edit input,
+  .opt-controls select, .opt-controls input, .opt-group select, .opt-group input,
+  :where(main) :where(input:not([type=checkbox]):not([type=radio]):not([type=range]), select) {
+    min-height: 44px; }
+  .ein.ta, :where(main) textarea { min-height: 44px; }
+  input[type=checkbox], input[type=radio] { width: 22px; height: 22px; margin: 0; flex: none; }
+  label:has(> input:is([type=checkbox], [type=radio])), .optchk, .echk, .req-flag, .req-chk,
+  .jib-edit label, .mv-chk { display: inline-flex; align-items: center; gap: 8px; min-height: 44px;
+    cursor: pointer; }
+  /* a label holding only a box (checklist ticks, Learnings adjust table) is a 44 px square */
+  .req-chk { min-width: 44px; justify-content: center; }
+  .routemap .mv-play, .routemap .mv-cc .cc-collapse { min-width: 44px; min-height: 44px; }
+}
+
 .modal-back { position: fixed; inset: 0; z-index: 60; background: rgba(0,0,0,.6); display: flex;
   align-items: center; justify-content: center; padding: 16px; }
 .modal { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 22px;
@@ -471,6 +545,14 @@ body:not(.is-dirty) .if-dirty, body.is-dirty .if-clean { display: none; }
 .modal p b { color: var(--ink); }
 .modal-btns { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
 .modal button.danger { color: var(--bad); border-color: var(--bad); }
+/* "Removed X · Undo" after a ✕ (app.js undoToast): above the Save bar, which shows once a row is removed */
+.undo-toast { position: fixed; z-index: 45; left: 50%; transform: translateX(-50%);
+  bottom: calc(84px + env(safe-area-inset-bottom)); display: flex; align-items: center; gap: 12px;
+  padding: 6px 6px 6px 16px; border-radius: 12px; background: var(--panel); border: 1px solid var(--line);
+  box-shadow: 0 6px 24px rgba(0,0,0,.55); font-size: 15px; color: var(--ink); max-width: calc(100vw - 32px); }
+.undo-toast[hidden] { display: none; }
+.undo-toast button { min-height: 44px; padding: 0 18px; border-radius: 9px; font-weight: 700; color: var(--accent2); }
+@media (max-width: 600px) { .undo-toast { bottom: calc(136px + env(safe-area-inset-bottom)); } }
 
 /* "?" detail toggle (app.js qhelp): a small round "?" with a 44px touch target that doesn't grow
    the line; tap shows/hides the detail text below it. */

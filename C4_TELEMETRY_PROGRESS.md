@@ -3,6 +3,19 @@
 Goal (Cole): **lose no telemetry**, and **copy all telemetry off the Pi to the VPS**.
 Deletion from the boat is allowed only *after* an off-boat copy is sha256-verified.
 
+## ⏸ 2026-11-09 — matcher blind eval RUNNING on the Orin (session root-f0)
+Decision 25 (re-run matcher blind eval on the Orin). Full 240 examples, idle box, tuned (qwen2.5-matcher) then stock (qwen2.5:7b-instruct), corpus from 4ea52e8 (= Orin HEAD) gen_corpus --seed 7. Detached on the Orin: `~/eval-20261109/` (run.log, log-*.txt, eval-*.json; `--resume` safe). Started 14:53Z, ~1.6 h. Nov 6 partial (96, under load): tuned F1 0.35, top-1 0.45 — FAIL. Copilot answers queue behind it while it runs (boat on the hard).
+
+## ⏸ PICK UP HERE — 2026-11-06 evening (main 4ea52e8, DEPLOYED)
+
+**Fix waves 4-5 MERGED + DEPLOYED ~20:40Z** (Cole: "merge 230-238 go deploy"): #230 chat race-gate leak (#48.1), #231 matcher drift sign/night key/polar cache (#43, #44.4), #232 copilot notes vs tiles + off-boat fallback + tool args + recap fleet (Fixes #53; #185-1/3), #233 GPS push course hash + n2kout claim settle (#183-11, #184-13), #234 selector settle/reset, deviation off-line band, drift sign, no-wind tile N/A (#40, #43, #46.7), #235 interpolated polar in fatigue/polar mining (#67.3-4), #236 Lab run ids, one push at a time, checklist tick save check, import START signal (#182-5/9/10/11), #237 pace plays name marks + same-sails check (#52), #238 restore drill exact paths + atomic GRIB/wave temp (#202-3/7).
+- VPS: Lab + agent rollback `:pre-20261106c`.
+- Pi: engine + n2kout, 13 files, backup `~/deploy-backups/w45-20261106T204014Z`, images `:pre-20261106T204014Z`; all endpoints 200, 0 restarts.
+- Orin: ff to 4ea52e8 (tag `pre-deploy-20261106c`); `/etc/sr33/copilot.env` gained `ENGINE_BOAT_NETS=10.10.10.0/24,127.0.0.0/8,100.79.180.102/32` (backup `~/pre-pull-backup/copilot.env.20261106c`) so the Pi's Tailscale fallback stays allowed; copilot healthy.
+- Shore push re-run 7/7 green.
+- PLAN: triage of all open defects in /root/c4-ops/fixes-2026-11/ (triage-A/B/C.md, fix-brief.md). ~30 batches left, most gated on Cole's 27 decisions. Then rewrite DESIGN.md as the as-built doc.
+- Known minor (#236): a tick saved but reply lost gets undone on the page; follow-up on #182.
+
 ## ⏸ PICK UP HERE — 2026-11-06 (dev 7d94462 = main 83cb9f3, DEPLOYED)
 
 **Batch 4 MERGED + DEPLOYED 2026-11-06 ~15:30Z on Cole's "merge 224 225 226 228 go deploy":** #224 (#153 timing plays manual-only), #225 (#149 playbook routes on the Lab's chart + boat draft, #151 refuse missing mark positions), #226 (#113 sail text follows the tile's verdict), #228 (#150 course hash, #152 refuse a missing/broken locked playbook; fsync on copilot + Pi approval writes). #228 was squashed onto dev after #225 by hand: push() runs the missing-marks check first, then the bundle check; _course_for ignores a non-dict bundle.

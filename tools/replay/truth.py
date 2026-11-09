@@ -97,18 +97,20 @@ def build(archive_db, start, end, step_s, out_dir, boat_id="sr33", spool_db=None
     not_ais = f" AND source NOT IN ({','.join('?' * len(ais))})" if ais else ""
 
     # One row per (path, source, second) — the LAST sample in that second, never an average,
-    # so wrap-around angles (359 deg -> 1 deg) cannot be smeared into a bogus midpoint.
+    # so wrap-around angles (359 deg -> 1 deg) cannot be smeared into a bogus midpoint. The
+    # MAX(time) is what makes it the last: SQLite takes the bare `value` from the row that holds
+    # the MAX. Without an aggregate it picks an arbitrary row of the group (#50).
     placeholders = ",".join("?" * len(PATHS))
     rows = []
     for tbl in tables:
         got = conn.execute(
-            f"SELECT path, source, substr(time,1,19) AS sec, value FROM {tbl} "
+            f"SELECT path, source, substr(time,1,19) AS sec, value, MAX(time) FROM {tbl} "
             f"WHERE boat_id=? AND path IN ({placeholders}) AND value IS NOT NULL "
             f"AND time > ? AND time <= ?" + not_ais +
             f" GROUP BY path, source, sec ORDER BY sec", (boat_id, *PATHS, lo, hi, *ais),
         ).fetchall()
         print(f"[truth] {len(got):,} per-second samples from {tbl}")
-        rows.extend(got)
+        rows.extend(r[:4] for r in got)
     print(f"[truth] {len(rows):,} per-second samples across {len(PATHS)} paths")
 
     # bucket -> the freshest sample at or before each output timestamp, per (path, source)

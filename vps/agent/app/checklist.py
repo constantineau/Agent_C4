@@ -27,6 +27,7 @@ a time item's ack is per-window (tonight's ack doesn't silence tomorrow night).
 """
 import math
 import os
+import threading
 import time
 
 from . import datasource, navigator
@@ -105,6 +106,12 @@ def _normalize(items):
     return out
 
 
+# One lock around every read-modify-write of the checklist blob (#183-6). The engine serves
+# sync endpoints from a thread pool, so a poll that read the blob before a crew ack and saved
+# after it wrote the ack away. A poll now saves only the latches it added, re-read under the lock.
+_LOCK = threading.Lock()
+
+
 def _blob():
     try:
         return datasource.active().get_checklist() or {}
@@ -124,10 +131,11 @@ def load(body):
     norm = _normalize(items)
     if not norm:
         return {"loaded": False, "detail": "no checklist items (need id + text)"}
-    datasource.active().save_checklist({"items": norm, "loaded_at": time.time(),
-                                        "race_id": body.get("race_id")
-                                        or (body.get("definition") or {}).get("race_id"),
-                                        "acks": {}, "armed": {}})
+    with _LOCK:
+        datasource.active().save_checklist({"items": norm, "loaded_at": time.time(),
+                                            "race_id": body.get("race_id")
+                                            or (body.get("definition") or {}).get("race_id"),
+                                            "acks": {}, "armed": {}})
     return {"loaded": True, "items": len(norm)}
 
 
@@ -240,7 +248,7 @@ def get_checklist(route=None, now=None):
                 "counts": {}, "now": round(now)}
     acks, armed = dict(blob.get("acks") or {}), dict(blob.get("armed") or {})
     ctx = _context(route)
-    out, dirty = [], False
+    out, new_arms = [], {}
     for item in items:
         in_window, wkey, measure = _eval_item(item, ctx, now)
         it = dict(item)
@@ -249,7 +257,7 @@ def get_checklist(route=None, now=None):
         if in_window and (not arm or arm.get("window") != wkey):
             arm = {"at": now, "window": wkey}              # newly armed (or a new night)
             armed[item["id"]] = arm
-            dirty = True
+            new_arms[item["id"]] = arm
         # a time item's latch expires with its night (re-arms next sunset);
         # location/event latches persist until acked
         aw = str((arm or {}).get("window", ""))
@@ -266,10 +274,14 @@ def get_checklist(route=None, now=None):
         else:
             it["status"] = "pending"
         out.append(it)
-    if dirty:                                              # persist new latches (restart-safe)
-        blob["armed"] = armed
+    if new_arms:                                           # persist new latches (restart-safe)
         try:
-            datasource.active().save_checklist(blob)
+            with _LOCK:
+                fresh = _blob()
+                # the same list still aboard (not reloaded meanwhile): merge only our latches
+                if fresh.get("loaded_at") == blob.get("loaded_at") and fresh.get("items"):
+                    fresh["armed"] = {**(fresh.get("armed") or {}), **new_arms}
+                    datasource.active().save_checklist(fresh)
         except Exception:
             pass
     active = [i for i in out if i["status"] == "active"]
@@ -291,12 +303,23 @@ def ack(body, now=None):
     items = {i["id"]: i for i in (blob.get("items") or [])}
     if iid not in items:
         return {"available": False, "note": f"no checklist item '{iid}'"}
-    acks = dict(blob.get("acks") or {})
-    if body.get("undo"):
-        acks.pop(iid, None)
-    else:
+    wkey = None
+    if not body.get("undo"):
+        # the live read (navigator) stays outside the lock; only the blob update is inside
         _, wkey, _ = _eval_item(items[iid], _context(body.get("route")), now)
-        acks[iid] = {"at": now, "window": wkey}
-    blob["acks"] = acks
-    datasource.active().save_checklist(blob)
+    loaded_at = blob.get("loaded_at")
+    with _LOCK:
+        blob = _blob()
+        if blob.get("loaded_at") != loaded_at:
+            # the list was reloaded while we read: the same id may now be a different item
+            return {"available": False, "note": "checklist was reloaded, try again"}
+        if iid not in {i["id"] for i in (blob.get("items") or [])}:
+            return {"available": False, "note": f"no checklist item '{iid}'"}
+        acks = dict(blob.get("acks") or {})
+        if body.get("undo"):
+            acks.pop(iid, None)
+        else:
+            acks[iid] = {"at": now, "window": wkey}
+        blob["acks"] = acks
+        datasource.active().save_checklist(blob)
     return get_checklist(body.get("route"), now=now)

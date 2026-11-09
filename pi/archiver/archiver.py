@@ -39,6 +39,10 @@ try:
     from shared import n2k_sources, race_window
 except ImportError:                     # pragma: no cover - image without shared/
     n2k_sources = race_window = None
+try:
+    from shared import clock_trust
+except ImportError:                     # pragma: no cover - image without shared/
+    clock_trust = None
 
 # Writes are offloaded to executor threads (fsync on a slow SD card shouldn't stall the
 # event loop), so the connection is shared across threads and a lock serializes writers.
@@ -1177,6 +1181,8 @@ def write_status(state, guard=None, path=None, now=None):
         "moved_file_check": (state["moved_file_check"].summary()
                              if state.get("moved_file_check") is not None else None),
         "note": state.get("check_note"),       # quiet: not a "Not recording" reason
+        "clock_trusted": (None if state.get("clock") is None
+                          else bool(state["clock"].source)),
     }
     try:
         tmp = path.with_name(path.name + ".tmp")
@@ -1233,6 +1239,7 @@ async def flusher(conn, buf, loop, state=None, db=None, wake=None, guard=None):
         now = time.monotonic()
         if not buf:
             state["last_write_ok"] = now  # nothing stuck: a quiet bus is not a failing disk
+            state["drained_at"] = now     # nothing collected so far is still waiting
         if (guard is not None or state.get("status_path")) and (
                 state.pop("_status_dirty", False)
                 or now - state.get("_status_t", float("-inf")) >= STATUS_EVERY_S):
@@ -1264,6 +1271,17 @@ async def _recover(buf, loop, state, path):
     state["rotate_pending"] = False
     state["rotations"] = state.get("rotations", 0) + 1
     state["generation"] = state.get("generation", 0) + 1   # a new file: older verdicts are moot
+    if state.get("clock_open_gen") is not None:
+        # Clock still untrusted (stretch open): the fresh file's stretch starts at row 1, and
+        # is saved BEFORE the first row lands, so a crash right after cannot lose it.
+        state["clock_open_gen"], state["clock_from_id"] = state["generation"], 1
+        try:
+            await loop.run_in_executor(None, open_clock_window, state["conn"], 1)
+            state["clock_saved"] = True
+        except Exception as exc:          # the pruner retries; nothing is pruned meanwhile
+            state["clock_saved"] = False
+            print(f"[archive] could not record the untrusted-clock stretch on the fresh "
+                  f"file ({exc})", flush=True)
     state["_status_dirty"] = True
     return True
 
@@ -1287,6 +1305,17 @@ async def _flush_once(buf, loop, state, path, guard):
             return
     if not buf:
         return
+    if state.get("clock_open_gen") is not None and not state.get("clock_saved") \
+            and state.get("conn") is not None:
+        # The untrusted-clock stretch failed to save earlier: try again before these
+        # stale-dated rows land (recording is never held up for it).
+        try:
+            await loop.run_in_executor(None, open_clock_window, state["conn"],
+                                       state.get("clock_from_id"))
+            state["clock_saved"] = True
+        except Exception:
+            pass
+    taken = time.monotonic()
     rows, buf[:] = buf[:], []
     # Two attempts: a corruption error on the first rotates and writes the same batch into the
     # fresh file straight away. If the rotation or the second write fails too, the rows go back.
@@ -1326,6 +1355,7 @@ async def _flush_once(buf, loop, state, path, guard):
             return
     state["total"] = state.get("total", 0) + len(rows) - len(dropped)
     state["last_write_ok"] = time.monotonic()
+    state["drained_at"] = taken           # everything collected before `taken` is settled
     # report the AIS skip count too — silence here would look identical to a filter that
     # had quietly stopped working, or to one wrongly eating own-ship data
     skipped = state.get("skipped", 0)
@@ -1356,6 +1386,7 @@ def _requeue(buf, rows, state, why):
 RETAIN_DAYS = float(os.environ.get("ARCHIVE_RETAIN_DAYS", "7"))
 ENGINE_DB = os.environ.get("ENGINE_DB", "/var/lib/sr33/engine/engine.db")
 PRUNE_EVERY_S = float(os.environ.get("ARCHIVE_PRUNE_EVERY_S", "3600"))
+CLOCK_RECHECK_S = float(os.environ.get("ARCHIVE_CLOCK_RECHECK_S", "30"))
 # Off-boat gate (#181). When set, the prune deletes only rows that copyoff.py has already copied
 # off the boat AND had verified there: its ledger's `verified_through_id` for THIS archive file
 # (keyed by inode, so a rotated fresh file starts at 0). No ledger, an unreadable one, or one that
@@ -1487,6 +1518,10 @@ def session_windows(engine_db=None, conn=None, now=None):
               "button's windows; rebuild the archiver", flush=True)
         return wins
     for s in sessions:
+        # Each derivation is a motion query; a rotation must not wait behind all of them,
+        # only behind the one in flight (#184-12).
+        if _ROTATING.is_set():
+            raise _PruneStopped()
         try:
             w = _derived_window(conn, sessions, s, now)
         except Exception as exc:
@@ -1503,6 +1538,86 @@ def session_windows(engine_db=None, conn=None, now=None):
 # rows on a ~10 MB/s card is minutes — and the 300k-row buffer fills in ~7 min of that.
 PRUNE_CHUNK_ROWS = int(os.environ.get("ARCHIVE_PRUNE_CHUNK_ROWS", "20000"))
 PRUNE_PAUSE_S = float(os.environ.get("ARCHIVE_PRUNE_PAUSE_S", "0.05"))
+
+
+class _PruneStopped(Exception):
+    """A rotation began while the prune was still working out what to keep."""
+
+
+# ---- CLOCK NOT YET TRUSTED (#184-9, settled in #240) ----------------------------------------
+# The Pi has no RTC: until NTP or a GNSS fix sets its clock, rows are stamped with whatever date
+# it woke up with. Recording goes on regardless; the prune waits until the clock is trusted
+# (see `pruner`). And because those rows carry a stale date that a later prune would read as
+# "old", the stretch is remembered by ROW ID while it is being written (ids do not depend on the
+# clock), and the prune never deletes those ids. Not as a time window: a stretch can hold both
+# stale and corrected times, and its min..max time would shield unrelated history in between.
+# sync_state['untrusted_clock'] = JSON list of {boot, from_id, to_id}; to_id is null while the
+# stretch is still open.
+_CLOCK_KEY = "untrusted_clock"
+
+
+def _clock_windows(conn):
+    """The recorded stretches. Unlike `_meta`, a read or write error RAISES here: a stretch
+    that silently failed to save is a stretch the prune would delete."""
+    with _WRITE_LOCK:
+        row = conn.execute("SELECT v FROM sync_state WHERE k = ?", (_CLOCK_KEY,)).fetchone()
+    if not row or row[0] is None:
+        return []
+    wins = json.loads(row[0])               # damaged: raise, never read it as "nothing kept"
+    if not isinstance(wins, list) or not all(isinstance(w, dict) and "from_id" in w
+                                             for w in wins):
+        raise ValueError(f"sync_state[{_CLOCK_KEY!r}] is damaged: {row[0][:200]!r}")
+    return wins
+
+
+def _save_clock_windows(conn, wins):
+    with _WRITE_LOCK:
+        conn.execute("INSERT OR REPLACE INTO sync_state (k, v) VALUES (?, ?)",
+                     (_CLOCK_KEY, json.dumps(wins)))
+        conn.commit()
+
+
+def clock_window_open(conn):
+    return any(w.get("to_id") is None for w in _clock_windows(conn))
+
+
+def _close_clock_windows(conn, wins):
+    """Close every open stretch at the archive's current top id."""
+    with _WRITE_LOCK:
+        top = conn.execute("SELECT max(id) FROM readings").fetchone()[0] or 0
+    for w in wins:
+        if w.get("to_id") is None:
+            w["to_id"] = max(top, int(w["from_id"]) - 1)
+    return wins
+
+
+def open_clock_window(conn, from_id=None):
+    """Start remembering an untrusted-clock stretch on this archive file. `from_id` defaults
+    to the next row id; a file this process created itself starts at 1. An earlier stretch
+    still open (a run that died before trust) is closed first, at the current top."""
+    wins = _close_clock_windows(conn, _clock_windows(conn))
+    if from_id is None:
+        with _WRITE_LOCK:
+            from_id = (conn.execute("SELECT max(id) FROM readings").fetchone()[0] or 0) + 1
+    wins.append({"boot": clock_trust.boot_id() if clock_trust else "", "from_id": int(from_id),
+                 "to_id": None})
+    _save_clock_windows(conn, wins)
+    return wins
+
+
+def close_clock_windows(conn):
+    """The clock is trusted now: close any open stretch (no-op when there is none)."""
+    wins = _clock_windows(conn)
+    if any(w.get("to_id") is None for w in wins):
+        _save_clock_windows(conn, _close_clock_windows(conn, wins))
+    return wins
+
+
+def clock_keep_ids(conn):
+    """The closed untrusted-clock stretches, as [from_id, to_id] ranges the prune never
+    deletes."""
+    return [[int(w["from_id"]), int(w["to_id"])] for w in _clock_windows(conn)
+            if w.get("to_id") is not None and int(w["to_id"]) >= int(w["from_id"])]
 
 
 def _prune_gaps(wins, cutoff):
@@ -1556,11 +1671,25 @@ def _prune(conn, engine_db=None, retain_days=None, chunk_rows=None, pause_s=None
         id_cap = " AND +id <= ?"
     chunk = max(1, int(PRUNE_CHUNK_ROWS if chunk_rows is None else chunk_rows))
     pause = PRUNE_PAUSE_S if pause_s is None else float(pause_s)
-    wins = session_windows(engine_db, conn=conn)
+    try:
+        wins = session_windows(engine_db, conn=conn)
+    except _PruneStopped:
+        print("[archive] prune stopped before deleting anything — the archive is being "
+              "rotated", flush=True)
+        return None
     if wins is None:
         print("[archive] prune SKIPPED — engine sessions table unreadable (never delete blind)",
               flush=True)
         return None
+    # Rows written before the clock was trusted carry a stale date: always kept. A stretch
+    # still open has no time span yet, so nothing is pruned until it is closed.
+    if clock_window_open(conn):
+        print("[archive] prune SKIPPED — an untrusted-clock stretch is still open", flush=True)
+        return None
+    keep_ids = clock_keep_ids(conn)
+
+    def kept(i):
+        return any(a <= i <= b for a, b in keep_ids)
     cutoff = _iso(datetime.now(timezone.utc).timestamp() - days * 86400)
     # Delete only inside the GAPS between kept windows, never filtering windows row by row: a
     # LIMIT bounds the rows a query returns, not the rows it scans, so a filter over a big kept
@@ -1569,26 +1698,46 @@ def _prune(conn, engine_db=None, retain_days=None, chunk_rows=None, pause_s=None
     # chunk scans exactly the rows it deletes; kept rows are never read.
     total, chunks = 0, 0
     for lo, lo_incl, hi in _prune_gaps(wins, cutoff):
-        since = lo
+        # A (time, id) cursor: rows of an untrusted-clock stretch are selected (so each chunk
+        # scans at most `chunk` rows, never a whole kept stretch under the write lock) but not
+        # deleted, and the cursor still moves past them.
+        since, since_id = lo, None
         while True:
             if _ROTATING.is_set():
                 print(f"[archive] prune stopped after {total} rows — the archive is being "
                       f"rotated", flush=True)
                 return total
+            cap = (through,) if id_cap else ()
             with _WRITE_LOCK:
-                sel = conn.execute(
-                    f"SELECT id, time FROM readings WHERE time {'>=' if lo_incl else '>'} ? "
-                    f"AND time >= ? AND time < ?{id_cap} ORDER BY time LIMIT ?",
-                    (lo, since, hi, *((through,) if id_cap else ()), chunk)).fetchall()
+                # Two seeks, so a chunk never re-reads rows it has passed, even when many share
+                # one timestamp: the rest of the cursor's timestamp (index seek on time =, id >),
+                # then later timestamps.
+                sel = []
+                if since_id is not None:
+                    sel = conn.execute(
+                        f"SELECT id, time FROM readings WHERE time = ? AND id > ?{id_cap} "
+                        f"ORDER BY id LIMIT ?", (since, since_id, *cap, chunk)).fetchall()
+                if len(sel) < chunk and since_id is None:
+                    sel += conn.execute(
+                        f"SELECT id, time FROM readings WHERE time {'>=' if lo_incl else '>'} ? "
+                        f"AND time < ?{id_cap} ORDER BY time, id LIMIT ?",
+                        (lo, hi, *cap, chunk - len(sel))).fetchall()
+                elif len(sel) < chunk:
+                    # `since` is past `lo` already; no `lo` bound, or the planner seeks from it
+                    sel += conn.execute(
+                        f"SELECT id, time FROM readings WHERE time > ? AND time < ?{id_cap} "
+                        f"ORDER BY time, id LIMIT ?",
+                        (since, hi, *cap, chunk - len(sel))).fetchall()
                 if not sel:
                     break
-                conn.execute("DELETE FROM readings WHERE id IN "
-                             "(SELECT value FROM json_each(?))",
-                             (json.dumps([r[0] for r in sel]),))
-                conn.commit()
-            total += len(sel)
+                gone = [r[0] for r in sel if not kept(r[0])]
+                if gone:
+                    conn.execute("DELETE FROM readings WHERE id IN "
+                                 "(SELECT value FROM json_each(?))", (json.dumps(gone),))
+                    conn.commit()
+            total += len(gone)
             chunks += 1
-            since = sel[-1][1]            # everything selected was deleted: always progresses
+            since, since_id = sel[-1][1], sel[-1][0]
             if pause > 0:
                 time.sleep(pause)         # outside the write lock: the flusher's turn
     if total:
@@ -1597,12 +1746,52 @@ def _prune(conn, engine_db=None, retain_days=None, chunk_rows=None, pause_s=None
     return total
 
 
+def _clock_housekeeping(state):
+    """Keep the untrusted-clock stretch on the CURRENT file up to date. Returns True when the
+    clock is trusted AND the stretch is safely closed (the prune may run). Raises when the
+    stretch cannot be saved (the pruner then skips this pass).
+
+    A file that replaced the one the stretch was opened on (a rotation) was created by this
+    process, so its stretch starts at row 1. The stretch is closed only after the flusher has
+    drained everything collected before trust was seen (`drained_at`): rows still in the RAM
+    buffer or a write retry carry the stale date too, and closing at the current top id would
+    leave them out."""
+    clock, conn, gen = state.get("clock"), state["conn"], state.get("generation", 0)
+    if clock is None:
+        return True
+    trusted = clock.trusted
+    open_gen = state.get("clock_open_gen")
+    if open_gen is not None and open_gen != gen:
+        state["clock_from_id"], state["clock_saved"] = 1, False
+        state["clock_open_gen"] = open_gen = gen
+    if open_gen is not None and not state.get("clock_saved"):
+        open_clock_window(conn, state.get("clock_from_id"))
+        state["clock_saved"] = True
+    if not trusted:
+        if open_gen is None:
+            open_clock_window(conn)
+            state["clock_open_gen"], state["clock_saved"] = gen, True
+        return False
+    if open_gen is not None:
+        seen = state.setdefault("clock_trust_seen", time.monotonic())
+        if state.get("drained_at", float("-inf")) <= seen:
+            return False                    # pre-trust rows may still be on their way
+    close_clock_windows(conn)               # also one a run that died left open
+    state["clock_open_gen"] = None
+    return True
+
+
 async def pruner(state, loop):
     while True:
         try:
             if state.get("rotate_pending") or state.get("conn") is None:
                 # never prune a file that just reported corruption, nor through a missing handle
                 print("[archive] prune skipped this hour — archive recovery pending", flush=True)
+            elif not await loop.run_in_executor(None, _clock_housekeeping, state):
+                if not state.get("_clock_wait_said"):
+                    state["_clock_wait_said"] = True
+                    print("[archive] prune waiting — the clock is not trusted yet (no NTP sync "
+                          "or GNSS time); recording goes on", flush=True)
             else:
                 await loop.run_in_executor(None, prune, state["conn"])
         except Exception as exc:      # never let housekeeping kill the recorder
@@ -1611,7 +1800,11 @@ async def pruner(state, loop):
                 # the file is bad even if the last write was not: the flusher rotates it next
                 state["rotate_pending"] = True
                 state["_status_dirty"] = True
-        await asyncio.sleep(PRUNE_EVERY_S)
+        # While the clock is untrusted, look again soon: the stretch must be closed (and a
+        # rotated file's stretch opened) close to when trust arrives, not an hour later.
+        clock = state.get("clock")
+        settled = clock is None or (clock.source and state.get("clock_open_gen") is None)
+        await asyncio.sleep(PRUNE_EVERY_S if settled else min(PRUNE_EVERY_S, CLOCK_RECHECK_S))
 
 
 def start_background_check(state, loop, db, rotated, engine_db=None):
@@ -1688,7 +1881,14 @@ async def check_scheduler(state, loop, db, rotated, engine_db=None, later_s=None
     long run after an earlier pass. A deferral asks the flusher for a checkpoint, so the WAL the
     check held back is recycled."""
     later = CHECK_LATER_S if later_s is None else later_s
+    # The moved-aside file is tried first, but a check of it that is deferred or errors must not
+    # hold up the live file's checks (nor "Archive check overdue") until it passes (#184-15):
+    # after such a result the live file gets its turn, and the moved file is tried again on the
+    # next round.
+    moved, try_moved = rotated, True
     while True:
+        rotated = moved if try_moved else None
+        try_moved = True
         conn, gen = state.get("conn"), state.get("generation", 0)
         if state.get("rotate_pending") or conn is None:
             await asyncio.sleep(later)          # the flusher is replacing the file
@@ -1715,15 +1915,17 @@ async def check_scheduler(state, loop, db, rotated, engine_db=None, later_s=None
             await asyncio.sleep(0.2)
         status = chk.result["status"]
         if status in ("deferred", "error"):
-            if chk.live:
-                state["checkpoint_due"] = True
-                note = await loop.run_in_executor(None, _overdue_note, conn)
-                state["check_note"] = note or f"Archive check waiting: {chk.result['detail']}"
-                state["_status_dirty"] = True
+            if not chk.live:
+                try_moved = False               # the live file's turn; the moved one next round
+                continue
+            state["checkpoint_due"] = True
+            note = await loop.run_in_executor(None, _overdue_note, conn)
+            state["check_note"] = note or f"Archive check waiting: {chk.result['detail']}"
+            state["_status_dirty"] = True
             await asyncio.sleep(later)
             continue
         if not chk.live:
-            rotated = None                      # the evidence check is done; now the live file
+            moved = None                        # the evidence check is done; now the live file
             continue
         if status == "ok" and (state.get("conn") is not conn
                                or state.get("generation", 0) != gen):
@@ -1791,6 +1993,22 @@ async def run(db=None, ws_connect=None, state=None, check=True):
     loop = asyncio.get_running_loop()
     conn, top, rotated = await open_until_ready(db, loop)
     state["conn"] = conn
+    if clock_trust is not None and "clock" not in state:
+        state["clock"] = clock_trust.ClockTrust(db.with_name("clock-trusted"))
+    clock = state.get("clock")
+    if clock is not None:
+        # Before the first row: an untrusted stretch starts at the next id. (Trusted: close a
+        # stretch an earlier run of this boot left open.)
+        if not clock.trusted:
+            state["clock_open_gen"] = state.get("generation", 0)
+            state["clock_from_id"] = (top or 0) + 1
+            try:
+                await loop.run_in_executor(None, open_clock_window, conn,
+                                           state["clock_from_id"])
+                state["clock_saved"] = True
+            except Exception as exc:        # the pruner retries it; nothing is pruned meanwhile
+                print(f"[archive] could not record the untrusted-clock stretch ({exc})",
+                      flush=True)
     state["last_write_ok"] = time.monotonic()
     state["last_telemetry"] = time.monotonic()   # grace from startup, then the real clock
     if rotated:
@@ -1815,6 +2033,10 @@ async def run(db=None, ws_connect=None, state=None, check=True):
                 async for msg in ws:
                     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
                     rows = parse_delta(msg, now, state)
+                    if clock is not None and not clock.source:
+                        for r in rows:
+                            if r[3] == clock_trust.GNSS_PATH:
+                                clock.note_gnss(r[5])
                     if rows:
                         # Only usable telemetry ends an outage: a Signal K that accepts and
                         # closes (or sends only hellos) must still read "no instrument data".

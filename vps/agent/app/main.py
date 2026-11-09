@@ -495,8 +495,7 @@ def racelog_trust(start: float, end: float, step_s: float = None):
     by = {p: {} for p in paths}
     for r in rows:
         by[r["path"]].setdefault(r["source"], []).append((r["epoch"], float(r["value"])))
-    chosen = {p: trust_window.pick_source(by[p], p.rsplit(".", 1)[-1].lower(), devices)
-              for p in paths}
+    chosen = trust_window.pick_path_sources(by, devices)
 
     def series(path, scale=1.0):
         src = chosen[path]
@@ -523,9 +522,7 @@ def racelog_trust(start: float, end: float, step_s: float = None):
         [(t, v * deg) for t, v in by[paths[1]].get(cog_src, [])],
         series(paths[2], 1.943844))
     heading = trust_window.heading_segments(merged, step_s)
-    roll = dict(series(paths[3], deg))
-    pitch = dict(series(paths[4], deg))
-    att = [(t, v, pitch.get(t)) for t, v in sorted(roll.items())]
+    att = trust_window.attitude_rows(series(paths[3], deg), series(paths[4], deg))
     attitude = trust_window.attitude_segments(att, step_s)
     channels = {"heading": heading, "attitude": attitude}
     return {"window": {"start": float(start), "end": float(end)},
@@ -587,7 +584,14 @@ async def ws(websocket: WebSocket):
     async def reader():
         while True:
             msg = await websocket.receive_text()
-            reply = await run_in_threadpool(agent.answer, msg, history)
+            # One bad turn must not end the session (#183-9): the crew gets a plain line and the
+            # socket stays open for the next question.
+            try:
+                reply = await run_in_threadpool(agent.answer, msg, history)
+            except Exception as exc:
+                print(f"[ws] answer failed: {exc!r}", flush=True)
+                q.put_nowait({"role": "system", "text": agent.UNAVAILABLE})
+                continue
             history.append({"role": "user", "content": msg})
             history.append({"role": "assistant", "content": reply})
             history[:] = history[-20:]  # cap thread memory
@@ -602,7 +606,17 @@ async def ws(websocket: WebSocket):
     rt = asyncio.create_task(reader())
     wt = asyncio.create_task(writer())
     try:
-        await asyncio.wait({rt, wt}, return_when=asyncio.FIRST_COMPLETED)
+        done, _ = await asyncio.wait({rt, wt}, return_when=asyncio.FIRST_COMPLETED)
+        # A task that died on anything but the client leaving used to close the chat silently
+        # (#183-9). Say so before closing, so the crew knows to reconnect.
+        exc = next((t.exception() for t in done if not t.cancelled() and t.exception()), None)
+        if exc is not None and not isinstance(exc, WebSocketDisconnect):
+            print(f"[ws] chat session ended: {exc!r}", flush=True)
+            try:
+                await websocket.send_json({"role": "system", "text": agent.UNAVAILABLE})
+                await websocket.close(code=1011)
+            except Exception:
+                pass
     finally:
         rt.cancel()
         wt.cancel()

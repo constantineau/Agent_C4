@@ -97,15 +97,21 @@ orin_area agent pi/orin/copilot/**/test_*.py
 area agent /repo /repo/vps/agent:/repo:/repo/pi/archiver vps/agent/**/test_*.py
 # shared/ is pure stdlib, imported by every service; the agent image is as good as any.
 area agent /repo /repo shared/**/test_*.py
+# The Signal K plugin step (#171) is shell scripts; the test drives them with sh (stdlib python).
+area agent /repo /repo pi/signalk/**/test_*.py
 # The VPS backup tooling (#180) is stdlib python run on the host; any python image will do.
 area agent /repo /repo tools/backup/**/test_*.py
+# The replay rig's python half (truth.py) is stdlib + shared/; same reasoning.
+area agent /repo /repo tools/replay/**/test_*.py
+# The seed scripts (#39) and the Pi deploy record (#187) are stdlib python / bash run on the host.
+area agent /repo /repo vps/db/seed/**/test_*.py pi/deploy/**/test_*.py
 # The lab reads its data from the image's /srv layout (races, boats, polars), built from this tree.
 area lab /srv /srv vps/lab/**/test_*.py
 # The Orin's onboard plume and re-route reuse the Lab's wind code and optimizer (#124), so they
 # test in the Lab image (eccodes/cfgrib).
 area lab /srv /srv pi/orin/plume/**/test_*.py pi/orin/reroute/**/test_*.py
-# The console's pure JS modules and the replay rig: plain node, pinned major.
-node_area pi/console/**/test_*.js tools/replay/**/test_*.js tools/**/*.test.mjs
+# The console's pure JS modules, the Lab's pure web helpers and the replay rig: plain node, pinned major.
+node_area pi/console/**/test_*.js vps/lab/test_*.js tools/replay/**/test_*.js tools/**/*.test.mjs
 
 # Every tracked test file must have run (or be excluded with a reason): nothing is missed silently.
 unwired=()

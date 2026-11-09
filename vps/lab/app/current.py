@@ -31,6 +31,11 @@ THREDDS = os.environ.get("CURRENTS_THREDDS",
 _DOMAIN = (41.6, 46.37, -88.06, -79.70)   # s, n, w, e
 FILL = -9000.0                            # GLOFS land/missing sentinel is -99999
 
+# Built fields, reused only for the same dataset cycle, area, full time span and processing (#44.2).
+# key -> (field, built_at, exact); `exact` = built from the cycle it was keyed on, not a fallback.
+CACHE_VERSION = 1      # bump when the processing changes: a field built by older code is not reused
+CACHE_MAX_H = float(os.environ.get("CURRENTS_CACHE_MAX_H", "6"))   # secondary time limit
+FALLBACK_RETRY_S = 3600   # a field from an older cycle (the newest wasn't posted yet) is retried after this
 _cache = {}
 _stuck = None          # the last read that timed out and may still be hung (#203)
 _fetch_lock = threading.Lock()   # check/start/join/update of `_stuck` as one step (Codex on #220)
@@ -224,6 +229,26 @@ def _fetch(url, bbox, want_axes):
         return box["v"]
 
 
+def _cache_get(key, now):
+    """The cached field for `key`, or None when absent or past its limit: CACHE_MAX_H, or
+    FALLBACK_RETRY_S for a field built from an older cycle than the key's."""
+    hit = _cache.get(key)
+    if hit is None:
+        return None
+    field, built, exact = hit
+    if now - built < (CACHE_MAX_H * 3600 if exact else min(FALLBACK_RETRY_S, CACHE_MAX_H * 3600)):
+        return field
+    _cache.pop(key, None)
+    return None
+
+
+def _cache_put(key, field, exact, now):
+    for k, (_f, built, _e) in list(_cache.items()):    # drop expired entries: keys change by cycle
+        if now - built >= CACHE_MAX_H * 3600:
+            _cache.pop(k, None)
+    _cache[key] = (field, now, exact)
+
+
 def build_currentfield(bbox, t_start, t_end, on_progress=None):
     """Best-effort LMHOFS surface-current field over the course bbox + window. ZeroCurrent on any miss."""
     log = on_progress or (lambda *_: None)
@@ -247,16 +272,20 @@ def build_currentfield(bbox, t_start, t_end, on_progress=None):
     if times[-1] < t_end:
         times[-1] = t_end
 
-    key = (round(s, 2), round(n, 2), round(w, 2), round(e, 2), int(t_start // 3600), int(STEP_H))
-    if key in _cache:
+    import time
+    want = _cycle_for(t_start)              # the newest posted cycle: a new one is a new key
+    key = (CACHE_VERSION, want.strftime("%Y%m%d%H"), round(s, 2), round(n, 2), round(w, 2),
+           round(e, 2), int(t_start), int(t_end), STEP_H, MAX_SLICES)
+    hit = _cache_get(key, time.time())
+    if hit is not None:
         log("currents: LMHOFS field (cached)")
-        return _cache[key]
+        return hit
 
     # pick the freshest posted cycle (step back a few if not yet available)
     hung = False
     for back in range(CYCLE_FALLBACKS + 1):
         import datetime
-        cyc = _cycle_for(t_start) - datetime.timedelta(hours=6 * back)
+        cyc = want - datetime.timedelta(hours=6 * back)
         cyc_ep = cyc.replace(tzinfo=datetime.timezone.utc).timestamp()
         lons = lats = None
         slices = []
@@ -285,7 +314,7 @@ def build_currentfield(bbox, t_start, t_end, on_progress=None):
                     int(round((times[-1]-cyc_ep)/3600))], "domain": "lmhofs"}
             field = GLOFSCurrent(lons, lats, slices, meta)
             if not hung:                      # a cut-short field is used once, not kept
-                _cache[key] = field
+                _cache_put(key, field, back == 0, time.time())
             log(f"currents: LMHOFS {len(slices)} slices from {cyc.strftime('%Y-%m-%d %HZ')}")
             return field
         if hung:

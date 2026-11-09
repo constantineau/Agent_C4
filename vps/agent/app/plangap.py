@@ -8,7 +8,8 @@ was optimized around. A large sustained gap means the plan is running on weather
 show up, whatever the current forecast claims.
 
 Observed wind = a short windowed mean of own instruments (`PLANGAP_WINDOW_MIN`, TWD circular) so
-a single gust or a tack can't fake a gap; instantaneous fallback when the archive is thin. The
+a single gust or a tack can't fake a gap; instantaneous fallback when the archive is thin (still
+inside that window: older wind is not the wind the boat has now). The
 promise = the fingerprint bracketing pair around now (TWD via shortest angle); before the first
 point it clamps forward up to `PLANGAP_CLAMP_LEAD_H` (pre-start: the promise for the start), and
 it goes `na` once the fingerprint timeline is spent. Position honesty: the gap is reported with
@@ -80,13 +81,17 @@ def _observed_wind():
         y = sum(math.sin(v) for v in twd_v)
         twd = math.degrees(math.atan2(y, x)) % 360
         return (sum(tws_v) / len(tws_v) * _MS_TO_KN, twd, min(len(tws_v), len(twd_v)))
+    # Instantaneous fallback, held to the same window as the mean (#45.1): `latest_value` had no
+    # time, and onboard it falls back to the archive's last row forever, so wind from hours ago
+    # (or yesterday's sail) was compared with the plan for NOW as if the boat had it.
     try:
-        w = src.latest_value("environment.wind.speedTrue")
-        d = src.latest_value("environment.wind.directionTrue")
-        w = w[0] if isinstance(w, (tuple, list)) else w
-        d = d[0] if isinstance(d, (tuple, list)) else d
-        if w is not None and d is not None:
-            return (float(w) * _MS_TO_KN, float(d) * _RAD_TO_DEG % 360, 1)
+        w = src.latest_sample("environment.wind.speedTrue")
+        d = src.latest_sample("environment.wind.directionTrue")
+        cut = time.time() - WINDOW_MIN * 60.0
+        if (w and d and w[0] is not None and d[0] is not None
+                and w[1] is not None and d[1] is not None
+                and float(w[1]) >= cut and float(d[1]) >= cut):
+            return (float(w[0]) * _MS_TO_KN, float(d[0]) * _RAD_TO_DEG % 360, 1)
     except Exception:
         pass
     return (None, None, 0)

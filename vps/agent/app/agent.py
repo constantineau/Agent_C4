@@ -342,8 +342,10 @@ def _fallback(message: str) -> str:
                 + (f" — {pct}% of polar." if pct else "."))
     # default: best-value snapshot (use the chat/LLM path for multi-source detail)
     stale = " (STALE)" if s.get("stale") else ""
+    # Name the heading's reference: a magnetic stand-in is ~7-9° off true here (#183-8).
+    href = {"true": "T", "magnetic": "M"}.get(s.get("heading_ref"), "")
     return (f"TWS {s.get('tws')} kts, TWA {s.get('twa')}°, STW {s.get('stw')} kts, "
-            f"SOG {s.get('sog')} kts, HDG {s.get('heading')}°, heel {s.get('heel')}°. "
+            f"SOG {s.get('sog')} kts, HDG {s.get('heading')}°{href}, heel {s.get('heel')}°. "
             f"Data age {s.get('data_age_seconds')}s{stale}. (ask for sources to cross-check)")
 
 
@@ -363,8 +365,19 @@ def _claude_loop(message: str, history: list) -> str:
             model=MODEL, max_tokens=1024, system=system,
             tools=tool_list, messages=messages,
         )
+        text = "".join(b.text for b in resp.content if b.type == "text").strip()
+        if resp.stop_reason in ("end_turn", "stop_sequence"):
+            return text
+        if resp.stop_reason == "max_tokens":
+            # Cut off, not finished (#183-9): never pass a truncated answer off as complete. A
+            # cut-off mid tool call has no usable text; the caller falls back to the readout.
+            if not text:
+                raise RuntimeError("answer cut off before any text")
+            return text + " … (cut off; ask a narrower question)"
         if resp.stop_reason != "tool_use":
-            return "".join(b.text for b in resp.content if b.type == "text").strip()
+            if not text:
+                raise RuntimeError(f"no answer (stop_reason {resp.stop_reason})")
+            return text
         messages.append({"role": "assistant", "content": resp.content})
         results = []
         for block in resp.content:
@@ -373,11 +386,28 @@ def _claude_loop(message: str, history: list) -> str:
                     race_mode.audit_refusal("chat_llm", tool=block.name)
                     out = {"withheld": True, "reason": race_mode.REFUSAL}
                 else:
-                    out = tools.dispatch(block.name, block.input)
-                results.append({"type": "tool_result", "tool_use_id": block.id,
-                                "content": json.dumps(out, default=str)})
+                    out = tools.dispatch(block.name, block.input)   # never raises (#183-9)
+                result = {"type": "tool_result", "tool_use_id": block.id,
+                          "content": json.dumps(out, default=str)}
+                if isinstance(out, dict) and out.get("tool_failed"):
+                    result["is_error"] = True
+                results.append(result)
         messages.append({"role": "user", "content": results})
     return "Stopped after too many tool calls — try a narrower question."
+
+
+UNAVAILABLE = "Navigator unavailable. Try again in a minute."
+
+
+def _safe_fallback(message: str) -> str:
+    """The no-LLM readout, guarded: if it fails too, the crew gets a plain line, not a dead
+    socket. The race gate lives inside `_fallback` (checked before every gated call), so this
+    path is gated exactly like a normal no-key answer."""
+    try:
+        return _fallback(message)
+    except Exception as exc:
+        print(f"[agent] fallback failed: {exc!r}", flush=True)
+        return UNAVAILABLE
 
 
 def answer(message: str, history: list | None = None) -> str:
@@ -386,5 +416,7 @@ def answer(message: str, history: list | None = None) -> str:
         try:
             return _claude_loop(message, history)
         except Exception as exc:  # fall back rather than drop the crew's question
-            return f"[LLM error, using direct readout] {_fallback(message)}  ({exc})"
-    return _fallback(message)
+            # The error detail goes to the log, not to the crew (#183-9).
+            print(f"[agent] LLM error: {exc!r}", flush=True)
+            return f"(Direct readout, AI unavailable) {_safe_fallback(message)}"
+    return _safe_fallback(message)

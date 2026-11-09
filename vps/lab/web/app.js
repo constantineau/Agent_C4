@@ -29,8 +29,8 @@ function esetNum(path, raw) {
   const v = Number(t); if (!Number.isNaN(v)) eset(path, v);
 }
 const attr = (s) => esc(s).replace(/'/g, "&#39;");
-function ein(path, val, ph) {
-  return `<input class="ein" value="${attr(val == null ? "" : val)}" placeholder="${attr(ph || "")}"
+function ein(path, val, ph, cls) {
+  return `<input class="ein${cls ? " " + cls : ""}" value="${attr(val == null ? "" : val)}" placeholder="${attr(ph || "")}"
     oninput="eset('${path}', this.value)">`;
 }
 function enm(path, val, ph) {
@@ -39,8 +39,16 @@ function enm(path, val, ph) {
 }
 function etxt(path, val, ph) {
   return `<textarea class="ein ta" placeholder="${attr(ph || "")}"
-    oninput="eset('${path}', this.value)">${esc(val == null ? "" : val)}</textarea>`;
+    oninput="eset('${path}', this.value); growTa(this)">${esc(val == null ? "" : val)}</textarea>`;
 }
+// Grow a review textarea to fit its text, so nothing is cut off (#105 G46). Skips hidden ones
+// (scrollHeight 0) so they don't collapse.
+function growTa(el) {
+  el.style.height = "auto";
+  if (el.scrollHeight) el.style.height = (el.scrollHeight + el.offsetHeight - el.clientHeight) + "px";
+}
+function growAllTa() { document.querySelectorAll("textarea.ein.ta").forEach(growTa); }
+window.addEventListener("resize", () => requestAnimationFrame(growAllTa));
 function esel(path, val, opts) {
   return `<select class="esel" onchange="eset('${path}', this.value)">` +
     opts.map((o) => `<option ${o === val ? "selected" : ""} value="${attr(o)}">${esc(o)}</option>`).join("") +
@@ -93,6 +101,15 @@ async function unlock() {
   } catch (e) { err.textContent = "Can't reach the Lab. Try again."; }
 }
 function logout() { sessionStorage.removeItem("c4lab.token"); Lab.token = null; location.reload(); }
+/* Show / Hide the typed password (#106 G99): easy to mistype on an iPad keyboard. */
+function pwToggle() {
+  const pw = document.getElementById("pw"), b = document.getElementById("pwShow");
+  const show = pw.type === "password";
+  pw.type = show ? "text" : "password";
+  b.textContent = show ? "Hide" : "Show";
+  b.setAttribute("aria-pressed", String(show));
+  pw.focus();
+}
 async function api(path, opts = {}) {
   const headers = Object.assign({}, opts.headers, Lab.token ? { Authorization: "Bearer " + Lab.token } : {});
   const res = await fetch(path, Object.assign({}, opts, { headers }));
@@ -138,12 +155,16 @@ async function route() {
     if (!ok) { history.replaceState(null, "", routeHash); return; }
     history.replaceState(null, "", target);
   }
+  // The Undo toast belongs to the tab it was offered on: hide it once we really leave, not when
+  // a click is answered with Stay (#270).
+  if (target !== routeHash) hideUndoToast();
   routeHash = target;
   const sec = target.slice(1);
   activeSec = sec;
   syncDirty();   // the bar + markers belong to the tab being entered
   document.querySelectorAll("#tabs a").forEach((a) =>
     a.classList.toggle("active", a.getAttribute("href") === "#" + sec));
+  keepTabVisible(document.querySelector("#tabs a.active"));
   if (sec === "races") return renderRaces();
   if (sec === "course") return renderCourse();
   if (sec === "gameplan") return renderGameplan();
@@ -156,6 +177,16 @@ async function route() {
   if (sec === "polar") return renderPolar();
   location.hash = "#races";          // unknown route → the library
 }
+// The tab row scrolls sideways when it doesn't fit (iPad upright): bring the selected tab into view.
+// Scrolls only the row itself (not scrollIntoView, which can also move the page).
+function keepTabVisible(a) {
+  const row = a && a.parentElement;
+  if (!row || row.scrollWidth <= row.clientWidth) return;
+  const r = row.getBoundingClientRect(), t = a.getBoundingClientRect(), pad = 24;
+  if (t.left < r.left) row.scrollLeft -= r.left - t.left + pad;
+  else if (t.right > r.right) row.scrollLeft += t.right - r.right + pad;
+}
+window.addEventListener("resize", () => keepTabVisible(document.querySelector("#tabs a.active")));
 const clone = (o) => JSON.parse(JSON.stringify(o));
 
 /* ---------- unsaved edits — ONE mechanism for every form that holds edits (DIRTY_SOURCES) ----------
@@ -260,6 +291,29 @@ function askModal(title, bodyHtml, buttons, focus, dismiss) {
     el.querySelector(`[data-c=${focus}]`).focus();
   });
 }
+// "Removed X · Undo" for one-tap ✕ removals (#96 G19, #105 G50). undo() puts the item back; the
+// caller checks it still applies. The toast closes after 8 s or when the tab changes.
+let undoTimer = 0;
+function undoToast(text, undo) {
+  let el = document.getElementById("undoToast");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "undoToast"; el.className = "undo-toast"; el.setAttribute("role", "status");
+    document.body.appendChild(el);
+  }
+  el.innerHTML = `<span>${esc(text)}</span><button type="button" class="ghost">Undo</button>`;
+  el.hidden = false;
+  clearTimeout(undoTimer);
+  undoTimer = setTimeout(() => { el.hidden = true; }, 8000);
+  el.querySelector("button").onclick = () => { el.hidden = true; clearTimeout(undoTimer); undo(); };
+}
+function hideUndoToast() {
+  const el = document.getElementById("undoToast");
+  if (el) el.hidden = true;
+  clearTimeout(undoTimer);
+}
+// Empty state for the tabs that need a race: links to Races (#96 G60, #97 G66, #104 G94).
+function noRaceYet() { return '<div class="placeholder">No race yet. <a href="#races">Add one in Races</a>.</div>'; }
 function askUnsaved() {
   const srcs = dirtySources(), names = dirtyLabels(srcs).map((n) => `<b>${esc(n)}</b>`).join(" and ");
   const body = onlyDraft(srcs) ? `The draft ${names} is not saved.`
@@ -329,10 +383,15 @@ async function renderRaces() {
         <div class="racelist" id="racelist">${Lab.races.map(raceItem).join("") ||
           '<div class="muted">No races yet. Add one above.</div>'}</div></div>
     </div>
-    <div id="raceDetail" class="detail"><div class="placeholder">Select a race.</div></div>
+    <div id="raceDetail" class="detail">${raceDetailEmpty()}</div>
   </div>`;
   renderSources();
   if (Lab.sel) loadRace(Lab.sel);
+}
+// Nothing open on the right: say what to do (#104 G94). An empty library has nothing to select.
+function raceDetailEmpty() {
+  return (Lab.races || []).length ? '<div class="placeholder">Pick a race from the library.</div>'
+    : '<div class="placeholder">No race yet. Add one with <b>Add a race</b>.</div>';
 }
 function raceItem(r) {
   const rev = r.reviewed ? `<span class="pill ok">✓ approved</span>`
@@ -513,21 +572,64 @@ function paintDetail() {
   const box = document.getElementById("raceDetail");
   if (!box) return;
   const d = Lab.editDef, v = Lab.editVal || {};
-  if (!d) { box.innerHTML = '<div class="placeholder">Select a race.</div>'; return; }
+  if (!d) { box.innerHTML = raceDetailEmpty(); return; }
   box.innerHTML = detailActions(d, v) + detailBanner(v) + detailHead(d) +
     (d.courses || []).map((c, i) => detailCourseCard(c, i)).join("") +
     detailDelegated(d) +
     detailWatchCard(d) +
     detailProvenance(d.provenance || {});
+  growAllTa();
   syncDirty();
 }
 function detailBanner(v) {
   const errs = (v.errors || []), warns = (v.warnings || []);
   return errs.length
-    ? `<div class="banner review"><b>${errs.length} errors</b>: ${errs.map(esc).join(" · ")}</div>`
+    ? `<div class="banner review"><b>${errs.length} errors</b>: ${errs.map((m) => plainCheck(m, Lab.editDef)).join(" · ")}</div>`
     : warns.length
-      ? `<div class="banner review"><b>Check these (${warns.length}):</b> ${warns.map(esc).join(" · ")}</div>`
+      ? `<div class="banner review"><b>Check these (${warns.length}):</b> ${warns.map((m) => plainCheck(m, Lab.editDef)).join(" · ")}</div>`
       : `<div class="banner ok">No problems found. Ready to approve.</div>`;
+}
+// The validator (shared/race_def.py) speaks in field paths and ids; the banner says the same thing
+// in plain words with a link to the tab that fixes it (#104 G96). Anything not listed shows as is.
+const PYS = String.raw`('(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|None)`;   // one Python repr'd value
+const pyUnq = (v) => (v === "None" || v == null ? "?" : v.slice(1, -1).replace(/\\(.)/g, "$1"));
+const CHECK_WORDS = [   // [pattern, what the first value names, (values) => [plain text, tab]]
+  [/^rules_profile\.tracker_permitted unset/, "", () => ["Tracker allowed on board? Not set. Check the SI.", "rules"]],
+  [/^no requirements\/checklist items/, "", () => ["No checklist items yet.", "rules"]],
+  [`^requirement ${PYS} is delivered to the iPad but has no trigger`, "req",
+    (r) => [`Checklist item ${r} goes to the iPad but has no "when".`, "rules"]],
+  [`^requirement ${PYS}: bad (category|phase|trigger_type) ${PYS}`, "req",
+    (r, f, v) => [`Checklist item ${r}: unknown ${f === "trigger_type" ? "trigger" : f} "${v}".`, "rules"]],
+  [`^mark ${PYS} \\(\\w+\\) has no coordinates`, "mark", (m) => [`Mark ${m} has no position.`, "course"]],
+  [`^mark ${PYS}: coords need review`, "mark", (m) => [`Mark ${m}: check its position.`, "course"]],
+  [`^mark ${PYS}: coord out of range`, "mark", (m) => [`Mark ${m}: position is out of range.`, "course"]],
+  [`^mark ${PYS}: bad (rounding|type) ${PYS}`, "mark", (m, f, v) => [`Mark ${m}: unknown ${f} "${v}".`, "course"]],
+  [`^course ${PYS} has no finish defined`, "course", (c) => [`Course ${c}: no finish.`, "course"]],
+  [`^course ${PYS}: finish has no points`, "course", (c) => [`Course ${c}: finish has no position.`, "course"]],
+  [`^course ${PYS}: finish coords need review`, "course", (c) => [`Course ${c}: check the finish position.`, "course"]],
+  [`^course ${PYS}: finish point (\\d+) has no coordinates`, "course", (c, k) => [`Course ${c}: finish point ${k} has no position.`, "course"]],
+  [/^tracker block has no provider/, "", () => ["Tracker: no provider set.", "fleet"]],
+  [/^tracker is permitted but not fetchable/, "", () => ["Tracker allowed, but no race id or link, so no fleet.", "fleet"]],
+  [`^tracker provider ${PYS} not fetchable`, "name", (t) => [`Tracker ${t}: no race id or link.`, "fleet"]],
+].map(([re, kind, say]) => [typeof re === "string" ? new RegExp(re) : re, kind, say]);
+const CHECK_TAB = { rules: "Rules", course: "Course", fleet: "Fleet" };
+function plainCheck(msg, d) {
+  d = d || {};
+  for (const [re, kind, say] of CHECK_WORDS) {
+    const m = re.exec(String(msg));
+    if (!m) continue;
+    const vals = m.slice(1).map((v) => (/^(?:'[^]*'|"[^]*"|None)$/.test(v) ? pyUnq(v) : v));
+    if (kind === "req") {   // name the item by its text, not its id
+      const r = (d.requirements || []).find((x) => x.id === vals[0]);
+      vals[0] = `"${r && r.text ? r.text : vals[0]}"`;
+    } else if (kind === "course") {
+      const c = (d.courses || []).find((x) => x.id === vals[0]);
+      vals[0] = `"${c && c.name ? c.name : vals[0]}"`;
+    } else if (kind) vals[0] = `"${vals[0]}"`;
+    const [text, tab] = say(...vals);
+    return `${esc(text)} <a href="#${tab}">${CHECK_TAB[tab]} →</a>`;
+  }
+  return esc(msg);
 }
 function detailActions(d, v) {
   if (Lab.isDraft) {
@@ -546,10 +648,10 @@ function detailActions(d, v) {
 }
 function detailHead(d) {
   return `<div class="dhead"><h2>${ein("name", d.name, "Race name")}</h2>
-      <div class="dmeta">${ein("organizing_authority", d.organizing_authority, "organizer")}<br>
+      <div class="dmeta">${ein("organizing_authority", d.organizing_authority, "organizer", "wide")}<br>
         Start ${ein("start_date", d.start_date, "YYYY-MM-DD")} ·
-        ${ein("start_area", d.start_area, "start area")} ·
-        ${ein("region", d.region, "region")}</div></div>`;
+        ${ein("start_area", d.start_area, "start area", "wide")} ·
+        ${ein("region", d.region, "region", "wide")}</div></div>`;
 }
 // Course geometry is edited in ONE place — the Course & Marks tab (map + geocode + gate/island
 // fields). The Races detail just summarizes each course, same delegation pattern as rules/fleet.
@@ -660,8 +762,8 @@ function detailWatchCard(d) {
   const onSel = (i, on) => `<select class="esel" onchange="watchBlockSet(${i}, 'on', this.value)">` +
     ["A", "B", "ALL"].map((o) => `<option ${o === on ? "selected" : ""}>${o}</option>`).join("") + `</select>`;
   const rows = w.blocks.map((b, i) => `<tr>
-      <td><input type="datetime-local" value="${epochToWall(b.start, tz)}" onchange="watchBlockSet(${i}, 'start', this.value)"></td>
-      <td><input type="datetime-local" value="${epochToWall(b.end, tz)}" onchange="watchBlockSet(${i}, 'end', this.value)"></td>
+      <td><input class="ein" type="datetime-local" value="${epochToWall(b.start, tz)}" onchange="watchBlockSet(${i}, 'start', this.value)"></td>
+      <td><input class="ein" type="datetime-local" value="${epochToWall(b.end, tz)}" onchange="watchBlockSet(${i}, 'end', this.value)"></td>
       <td class="muted">${hours(b)}h</td>
       <td>${onSel(i, b.on)}</td>
       <td><input class="ein" value="${attr(b.note || "")}" placeholder="note" onchange="watchBlockSet(${i}, 'note', this.value)"></td>
@@ -672,7 +774,7 @@ function detailWatchCard(d) {
       ${qhelp("Goes to the boat with the rest of the race prep. The iPad crew screen shows who's on and can change it live.")}</div>
     ${teamRow("A")}${teamRow("B")}
     <div class="opt-controls" style="margin-top:8px">
-      <label>Start <input type="datetime-local" id="wgAnchor"></label>
+      <label>Start <input class="ein" type="datetime-local" id="wgAnchor"></label>
       <label>Total <input class="ein num" id="wgHours" value="48" style="width:52px"> h</label>
       <label>Pattern <select id="wgPattern" onchange="document.getElementById('wgCustom').style.display = this.value === 'custom' ? '' : 'none'">
         <option value="4on4off">4 on / 4 off</option><option value="3on3off">3 on / 3 off</option>
@@ -765,7 +867,7 @@ async function renderCourse() {
   const view = document.getElementById("view");
   if (!Lab.races) { try { Lab.races = (await (await apiGet("/api/races")).json()).races || []; } catch (e) {} }
   if (!Lab.sel && Lab.races && Lab.races.length) Lab.sel = Lab.races[0].race_id;
-  if (!Lab.sel) { view.innerHTML = '<div class="placeholder">No race yet. Add one in the Races tab.</div>'; return; }
+  if (!Lab.sel) { view.innerHTML = noRaceYet(); return; }
   view.innerHTML = '<div class="loading">Loading course…</div>';
   try { Lab.editDef = await (await apiGet("/api/races/" + encodeURIComponent(Lab.sel))).json(); }
   catch (e) { view.innerHTML = '<div class="placeholder">Failed to load.</div>'; return; }
@@ -794,7 +896,7 @@ function courseEditCard(c, ci) {
     const isGate = m.type === "gate", isIsland = m.type === "island";
     return `<tr class="${need ? "needrow" : ""}">
       <td class="mono">${esc(m.seq)}</td>
-      <td><input class="cin" style="width:140px" value="${esc(m.name || "")}"
+      <td><input class="cin" style="width:auto;min-width:140px" size="${Math.max(16, String(m.name || "").length + 2)}" value="${esc(m.name || "")}"
         onchange="editMark(${ci},${mi},'name',this.value)"></td>
       <td><select onchange="editMark(${ci},${mi},'type',this.value)">
         ${["waypoint", "gate", "island", "buoy"].map((t) =>
@@ -912,10 +1014,16 @@ function addMark(ci) {
   document.getElementById("courseMsg").textContent = "Mark added. Set its name and lat/lon, then Save.";
 }
 function removeMark(ci, mi) {
-  const marks = Lab.editDef.courses[ci].marks;
-  marks.splice(mi, 1);
+  const def = Lab.editDef, marks = def.courses[ci].marks;
+  const [gone] = marks.splice(mi, 1);
   marks.forEach((m, i) => { m.seq = i + 1; });   // re-sequence
   paintCourse();
+  undoToast(`Removed mark ${gone.name || gone.seq}.`, () => {
+    if (Lab.editDef !== def || activeSec !== "course") return;   // another race or tab now
+    marks.splice(mi, 0, gone);
+    marks.forEach((m, i) => { m.seq = i + 1; });
+    paintCourse();
+  });
 }
 function editStart(ci, field, val) {
   const c = Lab.editDef.courses[ci]; c.start = c.start || {};
@@ -1058,10 +1166,14 @@ function optStartNote() {
   const sd = Opt.startDefault ? Object.assign({}, Opt.startDefault) : null, tz = optTz();
   // the screen can sit open past the gun — the server then routes from now, so say that
   if (sd && sd.source === "race_start" && sd.race_start.epoch <= Date.now() / 1000) sd.source = "now_passed";
-  if ((Opt.start || "").trim())
-    return "Routes from the time you picked. Clear it to route from "
+  if ((Opt.start || "").trim()) {
+    // echo the UTC the route will use, so the zone can't be misread (#100 G31)
+    const e = optStartEpoch();
+    const utc = tz && e != null ? `${new Date(e * 1000).toISOString().slice(0, 16).replace("T", " ")} UTC. ` : "";
+    return utc + "Routes from the time you picked. Clear it to route from "
       + (!sd || sd.source === "race_start" ? "the race start." : "now.");
-  const when = (e) => epochToWall(e, tz || "UTC").replace("T", " ") + (tz ? " race local" : " UTC");
+  }
+  const when = (e) => epochToWall(e, tz || "UTC").replace("T", " ") + " " + (tz ? tzAbbr(tz, e) : "UTC");
   if (!sd) return "Blank routes from the race start if a gun time is set, otherwise from now.";
   const rs = sd.race_start;
   if (sd.source === "race_start")
@@ -1073,6 +1185,21 @@ function optStartNote() {
 function optStartInput(v) {
   Opt.start = v;
   const n = document.getElementById("optStartNote"); if (n) n.textContent = optStartNote();
+  const z = document.getElementById("optStartTz"); if (z) z.textContent = optStartZone();
+}
+// The zone's short name at a moment, e.g. "EDT" (or "GMT-4" where the zone has none).
+function tzAbbr(tz, epoch) {
+  try {
+    const p = new Intl.DateTimeFormat("en-US", { timeZone: tz, timeZoneName: "short" })
+      .formatToParts(new Date((epoch != null ? epoch : Date.now() / 1000) * 1000));
+    return (p.find((x) => x.type === "timeZoneName") || {}).value || tz;
+  } catch (e) { return tz; }
+}
+// The Start label's zone: the race zone's short name at the picked time (else the race start).
+function optStartZone() {
+  const tz = optTz(); if (!tz) return "UTC";
+  const sd = Opt.startDefault, e = optStartEpoch();
+  return tzAbbr(tz, e != null ? e : sd && sd.race_start ? sd.race_start.epoch : null);
 }
 
 // The race venue's IANA timezone, if the loaded RaceDefinition carries one.
@@ -1124,10 +1251,6 @@ async function renderGameplan() {
   if (!Opt.raceId && Opt.races.length) await optPickRace(Opt.races[0].race_id, false);
   await optLoadStartDefault();
   if (stale("gameplan")) return;
-  const startTz = optTz();
-  const startTitle = (startTz
-    ? "Start time, race local (" + startTz + ")."
-    : "Start time (UTC).") + " Leave blank to use the race start.";
   view.innerHTML = `<div class="opt">
     <div class="card">
       <h3>Gameplan <span class="muted" style="font-weight:400">— best route on the forecast</span></h3>
@@ -1139,8 +1262,8 @@ async function renderGameplan() {
               ${Opt.races.map((r) => `<option value="${esc(r.race_id)}" ${r.race_id === Opt.raceId ? "selected" : ""}>${esc(r.name)}</option>`).join("")}
             </select></label>
           <label>Course <select id="optCourse" onchange="Opt.courseId=this.value">${optCourseOpts()}</select></label>
-          <label>Start (${startTz ? "race local" : "UTC"}) <input type="datetime-local" id="optStart"
-            title="${esc(startTitle)}" value="${esc(Opt.start || "")}" oninput="optStartInput(this.value)"></label>
+          <label>Start (<span id="optStartTz">${esc(optStartZone())}</span>) <input type="datetime-local" id="optStart"
+            value="${esc(Opt.start || "")}" oninput="optStartInput(this.value)"></label>
           <span id="optStartNote" class="opt-start-note">${esc(optStartNote())}</span>
         </div>
         <div class="opt-group">
@@ -1159,15 +1282,15 @@ async function renderGameplan() {
       <div id="boatModelOut"></div>
       <div class="opt-run">
         <label class="optchk"><input type="checkbox" id="optAvoid" checked> Avoid land &amp; zones</label>
-        <label class="optchk" title="Slows the boat in waves. Uncheck for flat water."><input type="checkbox" id="optWaves" checked> Waves</label>
-        <label class="optchk" title="Includes water current. Run once without it to see what it's worth."><input type="checkbox" id="optCurrent" checked> Current</label>
-        <label class="optchk" title="Also routes each weather model on its own and draws them all."><input type="checkbox" id="optPerModel"> Route per model <span class="muted">(slower)</span></label>
-        <label class="optchk" title="Fine is sharper near shore but slower. Fast is quicker.">Detail
+        <label class="optchk"><input type="checkbox" id="optWaves" checked> Waves</label>${qhelp("Slows the boat in waves. Uncheck for flat water.")}
+        <label class="optchk"><input type="checkbox" id="optCurrent" checked> Current</label>${qhelp("Includes water current. Run once without it to see what it's worth.")}
+        <label class="optchk"><input type="checkbox" id="optPerModel"> Route per model <span class="muted">(slower)</span></label>${qhelp("Also routes each weather model on its own and draws them all.")}
+        <label class="optchk">Detail
           <select id="optRes" oninput="updateResHint()">
             <option value="fast"${Opt.resolution === "fast" ? " selected" : ""}>Fast</option>
             <option value="auto"${(Opt.resolution || "auto") === "auto" ? " selected" : ""}>Auto</option>
             <option value="fine"${Opt.resolution === "fine" ? " selected" : ""}>Fine</option>
-          </select></label>
+          </select></label>${qhelp("Fine is sharper near shore but slower. Fast is quicker.")}
         <button id="optRun" onclick="runOptimize()" ${Opt.running ? "disabled" : ""}>${Opt.running ? "Routing…" : "Find route →"}</button>
         <span id="optResHint" class="muted" style="font-size:11px"></span>
       </div>
@@ -1179,12 +1302,12 @@ async function renderGameplan() {
       <h3>Playbook <span class="muted" style="font-weight:400">— which side, and when to switch</span></h3>
       <div class="muted" style="font-size:12px;margin-bottom:8px">Routes many forecasts. Says which side to start and what would change it.
         ${qhelp("Groups the routes by which side of the first beat they favour. Claude writes the reasons, the cost and what would change the call, plus a decision tree. Freeze it to take it on the boat.")}</div>
-      <label class="muted" style="font-size:12px" title="More scenarios cover more weather but take longer.">Depth
+      <label class="muted" style="font-size:12px">Depth
         <select id="pbFan" style="margin:0 8px 0 4px">
           <option value="quick">Quick: 6 scenarios, ~5 min (race morning)</option>
           <option value="standard">Standard: 9 scenarios, ~7 min</option>
           <option value="deep" selected>Deep: 15 scenarios, ~15 min (early in the week)</option>
-        </select></label>
+        </select></label>${qhelp("More scenarios cover more weather but take longer.")}
       <button id="pbRun" onclick="synthPlaybook()" ${Pb.running ? "disabled" : ""}>${Pb.running ? "Building…" : "Build playbook →"}</button>
       <div id="pbOut"></div>
     </div></div>`;
@@ -1339,7 +1462,7 @@ function renderBoatModel() {
 }
 
 // Sail palette (mirrors the .sail-bg-* CSS) — used to hatch the toss-up overlap bands in two colors.
-const SAIL_COLORS = { J1: "#36b3ff", J2: "#66a9e0", J3: "#9b8cff", C0: "#4dd6c9", A3: "#f5c451", S1: "#ff8042" };
+const SAIL_COLORS = { J1: "#36b3ff", J2: "#66a9e0", J3: "#9b8cff", C0: "#4dd6c9", SS: "#f28cc4", A3: "#f5c451", S1: "#ff8042" };
 const sailColor = (s) => SAIL_COLORS[s] || "#8899a6";
 function hexRgba(hex, a) {
   const h = String(hex).replace("#", "");
@@ -1358,17 +1481,17 @@ function boatModelCard(m) {
       const w = ((z.twa_max - z.twa_min) / 180 * 100).toFixed(1);
       return `<div class="xo-zone sail-bg-${esc(z.short)}" style="left:${left}%;width:${w}%" title="${esc(z.label)} ${z.twa_min}–${z.twa_max}°">${esc(z.short)}</div>`;
     }).join("");
-    // toss-up overlays: two sails within ~2% of target → a translucent two-colour diagonal hatch drawn
-    // over the solid zones (the zones still show through the gaps), so a sail the winner-take-all bands
-    // erased on a near-tie reappears in its own colour.
+    // toss-up overlays: two sails within ~2% of target → a thin two-colour striped strip along the
+    // bottom of the track, so a sail the winner-take-all bands erased on a near-tie reappears in its
+    // own colour without covering the zone labels (#101 G32).
     const overlaps = ((m.overlaps || {})[String(t)] || []).map((o) => {
       const left = (o.twa_min / 180 * 100).toFixed(1);
       const w = ((o.twa_max - o.twa_min) / 180 * 100).toFixed(1);
-      const c1 = hexRgba(sailColor(o.sails[0]), 0.72), c2 = hexRgba(sailColor(o.sails[1]), 0.72);
-      const bg = `repeating-linear-gradient(45deg, ${c1} 0 4px, transparent 4px 8px, ${c2} 8px 12px, transparent 12px 16px)`;
-      return `<div class="xo-ol" style="left:${left}%;width:${w}%;background:${bg}" title="Toss-up: ${esc(o.sails.join(" ≈ "))} at ${o.twa_min}–${o.twa_max}°. Either sail works.">≈</div>`;
+      const c1 = hexRgba(sailColor(o.sails[0]), 1), c2 = hexRgba(sailColor(o.sails[1]), 1);
+      const bg = `repeating-linear-gradient(90deg, ${c1} 0 6px, ${c2} 6px 12px)`;
+      return `<div class="xo-ol" style="left:${left}%;width:${w}%;background:${bg}" title="Toss-up: ${esc(o.sails.join(" ≈ "))} at ${o.twa_min}–${o.twa_max}°. Either sail works."></div>`;
     }).join("");
-    return `<div class="xo-row"><span class="xo-tws">${t} kts</span><div class="xo-track">${zones}${overlaps}</div></div>`;
+    return `<div class="xo-row"><span class="xo-tws">${t} kts</span><div class="xo-track xo-tu">${zones}${overlaps}</div></div>`;
   }).join("");
   const inv = (m.inventory || []).map((s) => `<span class="sail sail-${esc(s)}">${esc(s)}</span>`).join(" ");
   return `<div class="card boatmodel">
@@ -1382,8 +1505,8 @@ function boatModelCard(m) {
       <span id="bmSaveMsg" class="muted" style="font-size:11px">Saves jibs, Code 0 and reefs together.</span>
     </div>
     <h4>Best sail by wind angle and speed</h4>
-    <div class="muted" style="font-size:11px;margin-bottom:4px">From the ORC certificate. <b>Hatched ≈</b> = toss-up, either sail works.
-      ${qhelp("The certificate rates one jib. The J1/J2/J3 split comes from your wind settings above. Hatched means two sails are within 1.5% of each other.")}</div>
+    <div class="muted" style="font-size:11px;margin-bottom:4px">From the ORC certificate. <b>Striped strip</b> under a band = toss-up, either sail works.
+      ${qhelp("The certificate rates one jib. The J1/J2/J3 split comes from your wind settings above. Striped means two sails are within 1.5% of each other.")}</div>
     <div class="xo-axis"><span>0°</span><span>45°</span><span>90°</span><span>135°</span><span>180°</span></div>
     <div class="xo">${bands}</div>
     ${renderPolarGrid()}
@@ -1554,9 +1677,12 @@ function renderPolarGrid() {
     const v = g.grid[String(t)][String(a)];
     return `<td>${v == null ? "" : v.toFixed(1)}</td>`;
   }).join("")}</tr>`).join("");
-  return `<h4>Target boat speed (kn) by wind speed and angle</h4>
+  // folded by default: the full table pushed the Learnings tab's own cards far down (#101 G34)
+  return `<details class="pg-fold" ${Opt.polarGridOpen ? "open" : ""} ontoggle="Opt.polarGridOpen=this.open">
+    <summary><h4>Target boat speed (kn) by wind speed and angle</h4></summary>
     <div class="pg-wrap"><table class="pg">${head}${rows}</table></div>
-    <div class="muted" style="font-size:11px;margin-top:4px">${g.n_points} points. The ORC speeds the route uses.</div>`;
+    <div class="muted" style="font-size:11px;margin-top:4px">${g.n_points} points. The ORC speeds the route uses.</div>
+  </details>`;
 }
 
 async function optPickRace(id, rerender = true) {
@@ -2096,7 +2222,7 @@ async function renderDeploy() {
     catch (e) { view.innerHTML = '<div class="placeholder">Failed to load.</div>'; return; }
   }
   if (!Dep.raceId) Dep.raceId = Lab.sel || (Dep.races[0] && Dep.races[0].race_id) || null;
-  if (!Dep.raceId) { view.innerHTML = '<div class="placeholder">No race yet. Add one in the Races tab.</div>'; return; }
+  if (!Dep.raceId) { view.innerHTML = noRaceYet(); return; }
   try { Dep.ready = await (await apiGet("/api/deploy?race_id=" + encodeURIComponent(Dep.raceId))).json(); }
   catch (e) { view.innerHTML = '<div class="placeholder">Couldn\'t load the deploy page.</div>'; return; }
   if (stale("deploy")) return;
@@ -2202,6 +2328,9 @@ function paintDeploy() {
   const pbOpt = (b) => `<option value="${esc(b.id)}" ${b.id === Dep.sel ? "selected" : ""}>${
     esc((b.degraded ? "⚠ " : "") + (b.signed ? "🔒 " : "draft ") + (b.headline || b.id).slice(0, 60))} · ${b.n_variants} options · ${esc(fmtDate(b.generated_at))}</option>`;
   const selPb = pbs.find((b) => b.id === Dep.sel) || {};
+  // the selection IS the lock (and the file wasn't re-signed since): nothing to re-lock (#98 G70)
+  const isLocked = !!lock && Dep.sel === lock.playbook_id && !r.lock_problem
+    && !((selPb.signed_at || 0) > (lock.locked_at || 0));
 
   document.getElementById("view").innerHTML = `<div class="opt">
     <div class="card">
@@ -2227,7 +2356,7 @@ function paintDeploy() {
       ${pbReady ? `
         <div class="opt-controls">
           <label>Playbook <select id="depPb" onchange="Dep.sel=this.value; paintDeploy()" style="min-width:340px">${pbs.map(pbOpt).join("")}</select></label>
-          <button id="depLock" onclick="depLockIn()" ${Dep.busy ? "disabled" : ""}>${lock ? "Re-lock selected" : "🔒 Lock in selected playbook"}</button>
+          <button id="depLock" class="${lock ? "mini" : ""}" onclick="depLockIn()" ${Dep.busy || isLocked ? "disabled" : ""}>${isLocked ? "✓ Locked in" : lock ? "Re-lock selected" : "🔒 Lock in selected playbook"}</button>
         </div>
         ${pbWarnings(selPb)}` : `<div class="muted">No frozen playbook yet. Build one in <a href="#gameplan">Gameplan</a> and freeze it. Then lock it in here.</div>`}
       ${lock ? `<div class="banner ok" style="margin-top:10px">🔒 Locked in: <code>${esc(lock.playbook_id)}</code>${lock.signed ? ` · signature <code>${esc(lock.signature)}…</code>` : " · <b>unsigned</b>"} · ${esc(fmtDate(lock.locked_at))}</div>` : ""}
@@ -2364,12 +2493,29 @@ function deployPanel(lock, t) {
     <div class="muted" style="font-size:12px;margin-bottom:8px">Sends course, fleet, checklist, watch plan and playbook to the boat. Replaces what's there. If the boat is offline, use the downloads below.</div>
     <div class="dep-actions">
       <button id="depPush" onclick="depPush()" ${Dep.busy || (Dep.ready || {}).lock_problem ? "disabled" : ""}>🚀 Push to boat</button>
-      <button onclick="downloadPlaybook('${esc(pid)}')">⬇ Playbook file</button>
-      <button onclick="downloadHomework('${esc(rid)}')">⬇ Race prep file (Pi)</button>
+      <button class="mini" onclick="downloadPlaybook('${esc(pid)}')">⬇ Playbook file</button>
+      <button class="mini" onclick="downloadHomework('${esc(rid)}')">⬇ Race prep file (Pi)</button>
     </div>
     ${resHtml}
-    <pre class="dep-cmds">${esc(cmds)}</pre>
+    <div class="dep-cmds-h"><span class="muted">Boat offline? Run these by hand.</span>
+      <button class="mini" onclick="depCopyCmds(this)">Copy</button></div>
+    <pre class="dep-cmds" id="depCmds">${esc(cmds)}</pre>
   </div>`;
+}
+
+// Copy the hand-run commands (#98 G22). The clipboard API needs https; on plain http fall back to
+// selecting the block and the old copy command, and if that fails too, leave it selected.
+async function depCopyCmds(btn) {
+  const pre = document.getElementById("depCmds"); if (!pre) return;
+  let ok = false;
+  try { await navigator.clipboard.writeText(pre.textContent); ok = true; } catch (e) { /* http */ }
+  if (!ok) {
+    const sel = window.getSelection(), range = document.createRange();
+    range.selectNodeContents(pre); sel.removeAllRanges(); sel.addRange(range);
+    try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+  }
+  btn.textContent = ok ? "Copied" : "Selected. Copy it.";
+  setTimeout(() => { btn.textContent = "Copy"; }, 2500);
 }
 
 function pushDetail(s) {
@@ -2424,7 +2570,7 @@ async function renderFleet() {
     catch (e) { view.innerHTML = '<div class="placeholder">Failed to load.</div>'; return; }
   }
   if (!Lab.sel && Lab.races.length) Lab.sel = Lab.races[0].race_id;
-  if (!Lab.sel) { view.innerHTML = '<div class="placeholder">No race yet. Add one in the Races tab.</div>'; return; }
+  if (!Lab.sel) { view.innerHTML = noRaceYet(); return; }
   let fetched = false;
   if (!Lab.editDef || Lab.editDef.race_id !== Lab.sel) {
     view.innerHTML = '<div class="loading">Loading fleet…</div>';
@@ -2546,13 +2692,19 @@ function fleetGunsCard(roster, own) {
   const ds = Lab.editDef.division_starts || {};
   const tz = Lab.editDef.timezone || "";
   const set = divs.filter((d) => ds[d] != null).length;
-  const rows = divs.map((d) => `<label style="margin-right:14px">${esc(d)}${(own.division || "").trim() === d ? " ◆" : ""}
+  const rows = divs.map((d) => `<label style="margin-right:14px">${esc(d)}${(own.division || "").trim() === d ? " (us)" : ""}
     <input type="datetime-local" value="${epochToWall(ds[d], tz)}" onchange="fleetGunSet('${esc(d)}', this.value)"></label>`).join("");
+  const body = `<div class="muted" style="font-size:12px;margin-bottom:8px">Needed for full-race corrected standings on the boat. Times are ${tz ? "race local (" + esc(tz) + ")" : "this browser's time"}. Save in the bar below.
+      ${qhelp("From the sailing instructions, on race morning. Without these the boat uses the ⏺ LOG start, which is rough when divisions start at different times.")}</div>
+    <div class="opt-controls">${rows}</div>`;
+  // all set: fold the inputs away so the roster isn't pushed below the fold (#99 G25)
+  if (set === divs.length) return `<details class="card" ${Lab.fleetGunsOpen ? "open" : ""} ontoggle="Lab.fleetGunsOpen=this.open">
+    <summary><b>Start times by division</b> <span class="muted" style="font-weight:400">— all ${set} set</span></summary>
+    <div style="margin-top:8px">${body}</div>
+  </details>`;
   return `<div class="card">
     <h3>Start times by division <span class="muted" style="font-weight:400">— ${set}/${divs.length} set</span></h3>
-    <div class="muted" style="font-size:12px;margin-bottom:8px">Needed for full-race corrected standings on the boat. Times are ${tz ? "race local (" + esc(tz) + ")" : "this browser's time"}. Save in the bar below.
-      ${qhelp("From the sailing instructions, on race morning. Without these the boat uses the ⏺ LOG start, which is rough when divisions start at different times.")}</div>
-    <div class="opt-controls">${rows}</div>
+    ${body}
   </div>`;
 }
 
@@ -2634,7 +2786,7 @@ function fleetGlance(roster) {
     const cand = (Lab.fleetCand && Lab.fleetCand.i === i) ? `<tr><td colspan="6" style="padding:4px 8px 8px">${
       Lab.fleetCand.list.length ? Lab.fleetCand.list.map((c, ci) =>
         `<button class="mini" style="margin:2px" onclick="fleetApplyCand(${i},${ci})" title="match ${c.score}">` +
-        `${esc(c.yacht || "?")} · ${esc(c.sail || "")} · ${esc(c.cls || "")} · GPH ${c.orc_gph ?? "—"}${c.rating != null ? " · " + c.rating : ""} (${esc(c.country)})</button>`).join("")
+        `${esc(c.yacht || "?")} · ${esc(c.sail || "")} · ${esc(c.cls || "")} · GPH ${c.orc_gph ?? "—"}${c.rating != null ? " · ToT " + c.rating : ""} (${esc(c.country)})</button>`).join("")
       : '<span class="muted">no ORC match. Enter the handicap by hand.</span>'
     }</td></tr>` : "";
     return `<tr>
@@ -2645,8 +2797,8 @@ function fleetGlance(roster) {
     <td>${e.rating != null ? esc(e.rating) : '<span class="conf bad" title="No ORC handicap. Enter it.">—</span>' + findBtn}</td>
     <td class="muted">${e.orc_gph != null ? esc(e.orc_gph) : ""}</td></tr>` + cand;
   };
-  return `<div class="muted" style="font-size:12px;margin-bottom:6px"><b>${roster.length}</b> boat${roster.length === 1 ? "" : "s"} · <b>${rated}</b> with an ORC handicap${rated < roster.length ? ` · <b class="conf bad">${roster.length - rated} missing a rating</b>` : ""} · by division: ${divSummary}</div>
-    <table class="fleet-tbl"><thead><tr><th>Boat</th><th>Sail #</th><th>Class</th><th>Div</th><th>Rating</th><th>GPH</th></tr></thead>
+  return `<div class="muted" style="font-size:12px;margin-bottom:6px"><b>${roster.length}</b> boat${roster.length === 1 ? "" : "s"} · <b>${rated}</b> with an ORC handicap${rated < roster.length ? ` · <b class="conf bad">${roster.length - rated} missing a handicap</b>` : ""} · by division: ${divSummary}</div>
+    <table class="fleet-tbl"><thead><tr><th>Boat</th><th>Sail #</th><th>Class</th><th>Div</th><th>ToT</th><th>GPH (s/nm)</th></tr></thead>
     <tbody>${sorted.map(li).join("")}</tbody></table>`;
 }
 
@@ -2661,7 +2813,7 @@ function paintFleet() {
     <td>${inp(e.cls, "class", `fleetSet(${i},'cls',this.value)`, 64)}</td>
     <td>${inp(e.owner, "owner", `fleetSet(${i},'owner',this.value)`, 110)}</td>
     <td>${inp(e.orc_gph, "GPH", `fleetSet(${i},'orc_gph',this.value)`, 56)}</td>
-    <td>${inp(e.rating, "rating", `fleetSet(${i},'rating',this.value)`, 56)}</td>
+    <td>${inp(e.rating, "ToT", `fleetSet(${i},'rating',this.value)`, 56)}</td>
     <td>${inp(e.mmsi, "MMSI", `fleetSet(${i},'mmsi',this.value)`, 90)}</td>
     <td><button class="mini" onclick="fleetRemove(${i})" title="remove">✕</button></td></tr>`;
   const permitted = !!rp.tracker_permitted;
@@ -2683,17 +2835,23 @@ function paintFleet() {
       <div class="opt-controls">
         <label>Boat ${inp(own.boat, "SR33 \"C4\"", "fleetOwnSet('boat',this.value)", 150)}</label>
         <label>Division ${inp(own.division, "div", "fleetOwnSet('division',this.value)", 70)}</label>
-        <label>ORC GPH ${inp(own.orc_gph, "GPH", "fleetOwnSet('orc_gph',this.value)", 70)}</label>
-        <label>Rating ${inp(own.rating, "rating", "fleetOwnSet('rating',this.value)", 80)}</label>
+        <label>ORC GPH (s/nm) ${inp(own.orc_gph, "GPH", "fleetOwnSet('orc_gph',this.value)", 70)}</label>
+        <label>ORC ToT coefficient ${inp(own.rating, "ToT", "fleetOwnSet('rating',this.value)", 80)}</label>
         <label>MMSI ${inp(own.mmsi, "MMSI", "fleetOwnSet('mmsi',this.value)", 100)}</label>
       </div>
+      <div class="muted" style="font-size:12px;margin-top:6px">Race scoring: <b>${esc(sc.method || "not set")}</b>. Set it in <a href="#rules">Rules</a>.</div>
     </div>
 
     ${fleetGunsCard(roster, own)}
 
-    <div class="card">
+    ${Lab.fleetMsg ? `<div class="banner ${Lab.fleetMsgErr ? "warn" : "ok"}" style="margin-bottom:8px">${esc(Lab.fleetMsg)}</div>` : ""}
+    ${roster.length
+      ? `<details class="card" ${Lab.fleetImportOpen ? "open" : ""} ontoggle="Lab.fleetImportOpen=this.open">
+      <summary><b>Import the fleet</b> <span class="muted" style="font-weight:400">— replaces the list</span></summary>
+      <div style="margin-top:8px">`
+      : `<div class="card">
       <h3>Import the fleet</h3>
-      ${Lab.fleetMsg ? `<div class="banner ${Lab.fleetMsgErr ? "warn" : "ok"}" style="margin-bottom:8px">${esc(Lab.fleetMsg)}</div>` : ""}
+      <div>`}
       <div class="muted" style="font-size:12px;margin-bottom:8px">Gets boats from the YB tracker and handicaps from ORC. Check the list, then Save. ${ybCfg ? "" : '<b>No YB tracker set for this race.</b> Use the website import below, or add ORC handicaps to the current list.'}
         ${qhelp("YB gives boat, sail number, owner and class. ORC matches each boat by sail number or name and adds GPH and rating. Both are public.")}</div>
       <div class="opt-controls">
@@ -2716,7 +2874,8 @@ function paintFleet() {
       </div>
       <div class="muted" style="font-size:11px;margin-top:6px">Import replaces the list (it asks first). Boats with no ORC match keep their name. Enter their handicap by hand.
         ${qhelp("ORC matches by sail number, so check it on unmatched boats. MMSIs you typed in are kept on a re-import. The MMSI is how a boat on AIS is matched to this list.")}</div>
-    </div>
+      </div>
+    ${roster.length ? "</details>" : "</div>"}
 
     <div class="card">
       <h3>Roster
@@ -2725,7 +2884,7 @@ function paintFleet() {
       <details ${Lab.fleetEdit ? "open" : ""} style="margin-top:10px" ontoggle="Lab.fleetEdit=this.open">
         <summary style="cursor:pointer;font-size:13px">Edit roster ${roster.length ? `(${roster.length})` : "(add boats)"}</summary>
         ${roster.length ? `<table class="fleet-tbl" style="margin-top:8px"><thead><tr>
-          <th>Boat</th><th>Sail #</th><th>Div</th><th>Class</th><th>Owner</th><th>ORC GPH</th><th>Rating</th><th>MMSI</th><th></th>
+          <th>Boat</th><th>Sail #</th><th>Div</th><th>Class</th><th>Owner</th><th>GPH (s/nm)</th><th>ToT</th><th>MMSI</th><th></th>
           </tr></thead><tbody>${roster.map(row).join("")}</tbody></table>` : ""}
         <div style="margin-top:8px"><button class="mini" onclick="fleetAddRow()">+ Add boat</button></div>
       </details>
@@ -2748,7 +2907,7 @@ async function renderRules() {
     catch (e) { view.innerHTML = '<div class="placeholder">Failed to load.</div>'; return; }
   }
   if (!Lab.sel && Lab.races.length) Lab.sel = Lab.races[0].race_id;
-  if (!Lab.sel) { view.innerHTML = '<div class="placeholder">No race yet. Add one in the Races tab.</div>'; return; }
+  if (!Lab.sel) { view.innerHTML = noRaceYet(); return; }
   let fetched = false;
   if (!Lab.editDef || Lab.editDef.race_id !== Lab.sel) {
     view.innerHTML = '<div class="loading">Loading checklist…</div>';
@@ -2772,16 +2931,29 @@ async function rulesPickRace(id) {
   Lab.sel = id; Lab.editDef = null; renderRules();
 }
 function modAdd() { Lab.editDef.rules_profile.modifications.push({ ref: "", rule: "", summary: "" }); paintRules(); }
-function modRemove(i) { Lab.editDef.rules_profile.modifications.splice(i, 1); paintRules(); }
+function modRemove(i) { rulesRemove(Lab.editDef.rules_profile.modifications, i, "rule change"); }
 function reqAdd() {
   const ids = new Set(Lab.editDef.requirements.map((r) => r.id));
+  if (rulesUndoHeld && rulesUndoHeld.id) ids.add(rulesUndoHeld.id);   // an Undo may still bring it back
   let n = Lab.editDef.requirements.length + 1, id = "req-" + n;
   while (ids.has(id)) { n++; id = "req-" + n; }
   Lab.editDef.requirements.push({ id, category: "safety", phase: "pre_start", text: "",
     trigger_type: "none", trigger_detail: "", deliver_to_ipad: false, critical: false, source: "" });
   paintRules();
 }
-function reqRemove(i) { Lab.editDef.requirements.splice(i, 1); paintRules(); }
+function reqRemove(i) { rulesRemove(Lab.editDef.requirements, i, "checklist item"); }
+let rulesUndoHeld = null;   // the last removed row, while its Undo may still restore it
+function rulesRemove(list, i, what) {
+  const def = Lab.editDef, [gone] = list.splice(i, 1);
+  rulesUndoHeld = gone;
+  paintRules();
+  undoToast(`Removed ${what}.`, () => {
+    if (Lab.editDef !== def || activeSec !== "rules") return;   // another race or tab now
+    if (gone.id && list.some((r) => r.id === gone.id)) return;   // never two rows with one id
+    list.splice(i, 0, gone);
+    paintRules();
+  });
+}
 
 async function checkToggle(id, on) {
   // one save at a time, so a failed save can be undone exactly (nothing else saved meanwhile)
@@ -2859,6 +3031,13 @@ function paintRules() {
     </div>
 
     <div class="card">
+      <h3>Checklist <span class="muted" style="font-weight:400">— ${reqs.length} items · ${ipadN} to iPad · ${critN} critical · ${doneN}/${reqs.length} checked</span></h3>
+      <div class="muted" style="font-size:12px;margin-bottom:8px">The team's prep list. <b>To iPad</b> items pop up on the boat at the right time.</div>
+      ${checklistHtml || '<div class="muted">No items yet.</div>'}
+      <div style="margin-top:10px"><button class="mini" onclick="reqAdd()">+ Add item</button></div>
+    </div>
+
+    <div class="card">
       <h3>Race rules <span class="muted" style="font-weight:400">— outside help, scoring, rule changes</span></h3>
       <div class="opt-controls">
         <label>Rules edition ${ein("rules_profile.rrs_edition", rp.rrs_edition, "2025-2028")}</label>
@@ -2871,7 +3050,7 @@ function paintRules() {
       </div>
       <div class="opt-controls" style="margin-top:8px">
         <label>Scoring system ${ein("rules_profile.scoring.system", sc.system, "ORC")}</label>
-        <label>Method ${ein("rules_profile.scoring.method", sc.method, "Single-Number ToT")}</label>
+        <label>Method ${ein("rules_profile.scoring.method", sc.method, "Single-Number ToT", "wide")}</label>
         <label>Ref ${ein("rules_profile.scoring.ref", sc.ref, "NOR §13")}</label>
       </div>
       <div style="margin-top:10px"><b style="font-size:12px">Rule changes</b>
@@ -2887,17 +3066,11 @@ function paintRules() {
       </div>
     </div>
 
-    <div class="card">
-      <h3>Checklist <span class="muted" style="font-weight:400">— ${reqs.length} items · ${ipadN} to iPad · ${critN} critical · ${doneN}/${reqs.length} checked</span></h3>
-      <div class="muted" style="font-size:12px;margin-bottom:8px">The team's prep list. <b>To iPad</b> items pop up on the boat at the right time.</div>
-      ${checklistHtml || '<div class="muted">No items yet.</div>'}
-      <div style="margin-top:10px"><button class="mini" onclick="reqAdd()">+ Add item</button></div>
-    </div>
-
     <div class="dactions"><button onclick="rulesSave()">Save rules &amp; checklist</button>
       <span id="rulesMsg" class="muted" style="font-size:12px"></span>
       <span class="muted" style="font-size:11px">(ticks save by themselves)</span></div>
   </div>`;
+  growAllTa();
   syncDirty();
 }
 
@@ -2913,7 +3086,7 @@ async function renderMonitor() {
     catch (e) { view.innerHTML = '<div class="placeholder">Failed to load.</div>'; return; }
   }
   if (!Mon.raceId) Mon.raceId = Lab.sel || (Lab.races[0] && Lab.races[0].race_id) || null;
-  if (!Mon.raceId) { view.innerHTML = '<div class="placeholder">No race yet. Add one in the Races tab.</div>'; return; }
+  if (!Mon.raceId) { view.innerHTML = '<div class="placeholder">No race yet. <a href="#races">Add one in Races</a>.</div>'; return; }
   await monFetch();
   if (stale("monitor")) return;
   paintMonitor();
@@ -2943,13 +3116,19 @@ function paintMonitor() {
   const fl = data.fleet || { fixes: [], reason: data.error || "no data" };
   const own = data.own || { available: false, reason: data.error || "no data" };
   const fixes = fl.fixes || [];
-  const ageMin = (t) => t ? Math.max(0, Math.round((Date.now() / 1000 - t) / 60)) : null;
+  const fmtAge = MonGeo.fmtAge;
+  const fixAge = (t) => t ? Math.max(0, Date.now() / 1000 - t) : null;
+  const staleAfter = fl.fresh_max_s || 3600;
+  // COG (true, same as the fleet column) first; heading says which compass it came from. Both
+  // dim when the boat is barely moving (COG is noise then; heading is still the compass).
+  const sym = MonGeo.ownSymbol(own);
+  const slow = !(own.sog != null && own.sog >= MonGeo.SLOW_KN);
+  const dimIf = (on, t) => on ? `<span class="muted">${t}</span>` : t;
   const ownLine = own.available
-    ? `<span class="pill ok">● live</span> ${own.lat.toFixed(3)}, ${own.lon.toFixed(3)} · SOG ${own.sog != null ? own.sog.toFixed(1) : "?"} kts · HDG ${own.heading != null ? Math.round(own.heading) : "?"}°${own.tws != null ? " · TWS " + own.tws.toFixed(0) + " kts" : ""} · ${own.age_s != null ? Math.round(own.age_s) + "s ago" : ""}${own.stale ? " <span class=\"pill warn\">stale</span>" : ""}`
+    ? `<span class="pill ok">● live</span> ${own.lat.toFixed(3)}, ${own.lon.toFixed(3)} · SOG ${own.sog != null ? own.sog.toFixed(1) : "?"} kts · ${dimIf(slow || sym.cog == null, `COG ${own.cog != null ? Math.round(own.cog) + "°T" : "?"}`)} · ${dimIf(slow || !sym.headingFresh, esc(MonGeo.headingText(own)))}${own.tws != null ? " · TWS " + own.tws.toFixed(0) + " kts" : ""} · ${own.age_s != null ? Math.round(own.age_s) + "s ago" : ""}${own.stale ? " <span class=\"pill warn\">stale</span>" : ""}`
     : `<span class="pill warn">○ no live boat</span> <span class="muted">${esc(own.reason || "unavailable")}</span>`;
   // Pill colour and age come from the NEWEST fix's measured age (backend `freshness`), not the
   // tracker's configured delay — a dead feed still "promises" ~15 min.
-  const fmtAge = (s) => s < 3600 ? Math.round(s / 60) + " min" : s < 172800 ? (s / 3600).toFixed(s < 36000 ? 1 : 0) + " h" : Math.round(s / 86400) + " days";
   const flCls = { fresh: "ok", stale: "warn", very_stale: "bad" }[fl.freshness] || "warn";
   const flAge = fl.newest_age_s != null
     ? ` · latest position ${fmtAge(fl.newest_age_s)} old${fl.freshness === "fresh" ? "" : fl.freshness === "stale" ? " <span class=\"pill warn\">stale</span>" : " <span class=\"pill bad\">not live</span>"}`
@@ -2958,7 +3137,9 @@ function paintMonitor() {
     ? `<span class="pill ${flCls}">${fixes.length} boats</span> via ${esc(fl.provider || "tracker")}${flAge}${fl.delay_min ? ` <span class="muted">(tracker runs ~${fl.delay_min} min behind)</span>` : ""}${fl.demo || fl.provider === "sample" ? " <span class=\"pill warn\">demo</span>" : ""}`
     : `<span class="pill warn">no fleet</span> <span class="muted">${esc(fl.reason || "unavailable")}</span>`;
   const rivals = monRivals(fixes, own);
-  const permNote = fl.onboard_permitted ? "allowed on board" : "shore only (not allowed on board)";
+  const permNote = fl.onboard_permitted === true ? "race rules: tracker data allowed aboard"
+    : fl.onboard_permitted === false ? "race rules: tracker data not allowed aboard"
+      : "race rules: tracker use aboard not set";
 
   document.getElementById("view").innerHTML = `<div class="opt">
     <div class="card">
@@ -2979,12 +3160,12 @@ function paintMonitor() {
     </div>
     <section class="cockpit-map"><div id="monMap" class="routemap routemap-hero"></div></section>
     ${fixes.length ? `<div class="card"><h3>Fleet positions <span class="muted" style="font-weight:400">— from the public tracker</span></h3>
-      <div class="muted" style="font-size:12px;margin-bottom:4px">Tap a row to find that boat on the map. ★ us · ● nearest rivals.</div>
-      <table class="fleet-tbl mon-tbl"><thead><tr><th>Boat</th><th>SOG</th><th>COG</th><th>DTF</th><th>Age</th></tr></thead><tbody>
-      ${fixes.map((f, i) => ({ f, i })).sort((a, b) => (b.f.own ? 1 : 0) - (a.f.own ? 1 : 0) || (a.f.dtf_nm ?? 1e9) - (b.f.dtf_nm ?? 1e9)).map(({ f, i }) => `<tr class="mon-row${f.own ? " own" : rivals.idx.has(i) ? " rival" : ""}" onclick="monFocus(${i})" title="Show on the map">
+      <div class="muted" style="font-size:12px;margin-bottom:4px">Tap a row to find that boat on the map. ★ us · ● nearest rivals · grey = position over ${fmtAge(staleAfter)} old.</div>
+      <table class="fleet-tbl mon-tbl"><thead><tr><th>Boat</th><th>SOG</th><th>COG °T</th><th>DTF</th><th>Age</th></tr></thead><tbody>
+      ${fixes.map((f, i) => ({ f, i })).sort((a, b) => (b.f.own ? 1 : 0) - (a.f.own ? 1 : 0) || (a.f.dtf_nm ?? 1e9) - (b.f.dtf_nm ?? 1e9)).map(({ f, i }) => `<tr class="mon-row${f.own ? " own" : rivals.idx.has(i) ? " rival" : ""}${fixAge(f.time) != null && fixAge(f.time) > staleAfter ? " old" : ""}" onclick="monFocus(${i})" title="Show on the map">
         <td>${f.own ? "★ " : rivals.idx.has(i) ? "● " : ""}${esc(f.name || "?")}${f.own ? ' <span class="pill warn">us</span>' : ""}</td><td>${f.sog != null ? f.sog.toFixed(1) + " kts" : ""}</td>
         <td>${f.cog != null ? Math.round(f.cog) + "°" : ""}</td><td>${f.dtf_nm != null ? f.dtf_nm.toFixed(1) + " nm" : ""}</td>
-        <td>${ageMin(f.time) != null ? ageMin(f.time) + " min" : ""}</td></tr>`).join("")}
+        <td>${fmtAge(fixAge(f.time))}</td></tr>`).join("")}
       </tbody></table></div>` : ""}
   </div>`;
   initMonitorMap();
@@ -3025,7 +3206,16 @@ function initMonitorMap() {
   const data = Mon.data || {}, fl = data.fleet || {}, fixes = fl.fixes || [], own = data.own || {};
   const ownName = fl.own_name || "Our boat";
   const riv = Mon.rivals = monRivals(fixes, own);
-  const pts = [];
+  // Fit to the course marks + our boat + fixes near the course; a fix far off is drawn faint.
+  const fit = MonGeo.fitView(data.marks, fixes, own);
+  Mon.far = fit.far;
+  // the course, faint, under everything: legs per course in sailing order, marks with their names
+  const marks = (data.marks || []).filter((m) => m && m.lat != null && m.lon != null);
+  const byCourse = {};
+  marks.forEach((m) => { (byCourse[m.course] = byCourse[m.course] || []).push([m.lat, m.lon]); });
+  Object.values(byCourse).forEach((ll) => { if (ll.length > 1) L.polyline(ll, { color: "#cdd2da", weight: 1.5, opacity: 0.5, dashArray: "4 6", interactive: false }).addTo(map); });
+  marks.forEach((m) => L.circleMarker([m.lat, m.lon], { radius: 4, color: "#cdd2da", weight: 1.5, fillColor: "#0b0b0e", fillOpacity: 0.8 })
+    .bindTooltip(esc(m.name || "mark"), MON_TIP).addTo(map));
   Mon.markers = [];
   // plain fleet first, rivals over them, our boat on top (canvas draws in insertion order)
   const order = fixes.map((f, i) => i).sort((a, b) =>
@@ -3036,22 +3226,38 @@ function initMonitorMap() {
       ? { radius: 7, color: MON_GOLD, weight: 3, fillColor: "#0b0b0e", fillOpacity: 0.9 }
       : rival ? { radius: 6, color: "#ffffff", weight: 1.5, fillColor: MON_BLUE, fillOpacity: 0.95 }
         : { radius: 4, color: MON_BLUE, weight: 1, fillColor: MON_BLUE, fillOpacity: 0.55 };
+    if (fit.far.has(i)) Object.assign(style, { opacity: 0.35, fillOpacity: 0.2 });
     Mon.markers[i] = L.circleMarker([f.lat, f.lon], style)
-      .bindTooltip(`${esc(f.name || "?")}${f.own ? " (us, tracker)" : ""}${f.sog != null ? " · " + f.sog.toFixed(1) + " kts" : ""}`, MON_TIP).addTo(map);
-    pts.push([f.lat, f.lon]);
+      .bindTooltip(`${esc(f.name || "?")}${f.own ? " (us, tracker)" : ""}${f.sog != null ? " · " + f.sog.toFixed(1) + " kts" : ""}${fit.far.has(i) ? " · far off the course" : ""}`, MON_TIP).addTo(map);
   });
-  if (own.available) {
-    L.circleMarker([own.lat, own.lon], { radius: 16, color: MON_GOLD, weight: 1, fillColor: MON_GOLD, fillOpacity: 0.18, interactive: false }).addTo(map);
-    Mon.ownMarker = L.circleMarker([own.lat, own.lon], { radius: 8, color: "#0b0b0e", fillColor: MON_GOLD, fillOpacity: 1, weight: 2 })
-      .bindTooltip(`${esc(ownName)} (us, live)${own.sog != null ? " · " + own.sog.toFixed(1) + " kts" : ""}`, MON_TIP).addTo(map);
-    pts.push([own.lat, own.lon]);
-  } else Mon.ownMarker = null;
+  if (own.available) monDrawOwn(map, own, ownName);
+  else Mon.ownMarker = null;
   Mon.labelLayer = L.layerGroup().addTo(map);
   monLegend(map, fixes, own, riv, ownName);
   map.on("zoomend moveend", monPlaceLabels);
-  if (pts.length) map.fitBounds(pts, { padding: [30, 30], maxZoom: 11 });
+  if (fit.pts.length) map.fitBounds(fit.pts, { padding: [30, 30], maxZoom: 11 });
   else map.setView([44.2, -82.5], 7);   // Lake Huron default
   monPlaceLabels();
+}
+
+// Our live boat (#240): a hull along heading only when MonGeo.ownSymbol says the heading is fresh
+// and true; COG as its own line, dimmed when slow; otherwise the plain gold dot.
+function monDrawOwn(map, own, ownName) {
+  const sym = MonGeo.ownSymbol(own);
+  const tip = `${esc(ownName)} (us, live)${own.sog != null ? " · " + own.sog.toFixed(1) + " kts" : ""}`;
+  L.circleMarker([own.lat, own.lon], { radius: 16, color: MON_GOLD, weight: 1, fillColor: MON_GOLD, fillOpacity: 0.18, interactive: false }).addTo(map);
+  if (sym.cog != null) {
+    L.marker([own.lat, own.lon], { interactive: false, keyboard: false, icon: L.divIcon({ className: "mon-vec-wrap", iconSize: [96, 96], iconAnchor: [48, 48],
+      html: `<svg class="mon-cog${sym.cogDim ? " dim" : ""}" width="96" height="96" viewBox="-48 -48 96 96" style="transform:rotate(${sym.cog}deg)"><line x1="0" y1="0" x2="0" y2="-44"/><path d="M-5 -36 L0 -46 L5 -36"/></svg>` }) }).addTo(map);
+  }
+  if (sym.hull != null) {
+    Mon.ownMarker = L.marker([own.lat, own.lon], { keyboard: false, icon: L.divIcon({ className: "mon-vec-wrap", iconSize: [28, 28], iconAnchor: [14, 14],
+      html: `<svg class="mon-hull" width="28" height="28" viewBox="-14 -14 28 28" style="transform:rotate(${sym.hull}deg)"><path d="M0 -13 C6 -5 6 6 4 12 L-4 12 C-6 6 -6 -5 0 -13 Z"/></svg>` }) })
+      .bindTooltip(tip, MON_TIP).addTo(map);
+  } else {
+    Mon.ownMarker = L.circleMarker([own.lat, own.lon], { radius: 8, color: "#0b0b0e", fillColor: MON_GOLD, fillOpacity: 1, weight: 2 })
+      .bindTooltip(tip, MON_TIP).addTo(map);
+  }
 }
 
 function monLegend(map, fixes, own, riv, ownName) {
@@ -3062,6 +3268,13 @@ function monLegend(map, fixes, own, riv, ownName) {
   if (fixes.some((f) => f.own)) rows.push(`${sw(`background:#0b0b0e;border:3px solid ${MON_GOLD}`)} ${esc(ownName)} — tracker`);
   if (riv.idx.size) rows.push(`${sw(`background:${MON_BLUE};border:1.5px solid #fff`)} ${riv.idx.size} nearest rivals${riv.ref === "live" ? " (to our live position)" : ""}`);
   if (fixes.filter((f) => !f.own).length > riv.idx.size) rows.push(`${sw(`background:${MON_BLUE};opacity:.6;width:8px;height:8px`)} rest of the fleet — zoom in for names`);
+  if (own.available) {
+    const sym = MonGeo.ownSymbol(own);
+    if (sym.cog != null) rows.push(`<span class="mon-sw mon-sw-line${sym.cogDim ? " dim" : ""}"></span> our course over ground${sym.cogDim ? " (barely moving)" : ""}`);
+    if (sym.hull == null) rows.push(`<span class="mon-sw" style="background:none;border:none"></span> <span class="muted">${sym.headingFresh && sym.headingRef === "magnetic" ? "heading is magnetic: not drawn" : "no fresh heading: plain dot"}</span>`);
+  }
+  if (((Mon.data || {}).marks || []).length) rows.push(`<span class="mon-sw" style="background:#0b0b0e;border:1.5px solid #cdd2da;width:9px;height:9px"></span> course marks`);
+  if (Mon.far && Mon.far.size) rows.push(`${sw(`background:${MON_BLUE};opacity:.25;width:8px;height:8px`)} ${Mon.far.size} far off the course (faint, not in view)`);
   if (!rows.length) return;
   ctl.onAdd = () => {
     const d = L.DomUtil.create("div", "mon-legend");
@@ -3138,26 +3351,52 @@ async function renderDebrief() {
     catch (e) { view.innerHTML = '<div class="placeholder">Failed to load.</div>'; return; }
   }
   if (!Deb.raceId) Deb.raceId = Lab.sel || (Lab.races[0] && Lab.races[0].race_id) || null;
-  if (!Deb.raceId) { view.innerHTML = '<div class="placeholder">No race yet. Add one in the Races tab.</div>'; return; }
-  try { Deb.playbooks = ((await (await apiGet("/api/playbooks")).json()).playbooks || []).filter((b) => b.race_id === Deb.raceId); }
-  catch (e) { Deb.playbooks = []; }
-  if (stale("debrief")) return;
+  if (!Deb.raceId) {
+    // Fleet retro needs no race of ours, so it still shows (G66)
+    await retroLoad();
+    if (stale("debrief")) return;
+    return paintDebrief();
+  }
+  const race = Deb.raceId, left = () => stale("debrief") || Deb.raceId !== race;
+  let pbs;
+  try { pbs = ((await (await apiGet("/api/playbooks")).json()).playbooks || []).filter((b) => b.race_id === race); }
+  catch (e) { pbs = []; }
+  if (left()) return;     // a newer render for the race now picked owns the page
+  Deb.playbooks = pbs;
   if (!Deb.playbookId || !Deb.playbooks.some((b) => b.id === Deb.playbookId)) Deb.playbookId = (Deb.playbooks[0] || {}).id || null;
-  try { Deb.track = await (await apiGet("/api/debrief/track?race_id=" + encodeURIComponent(Deb.raceId))).json(); }
-  catch (e) { Deb.track = null; }
   await debLoadRecordings();
-  if (stale("debrief")) return;
+  if (left()) return;
   try { Deb.job = await (await apiGet("/api/debrief/run/status")).json(); }
   catch (e) { Deb.job = null; }
   if (Deb.job && Deb.job.state === "running" && !Deb.poll) Deb.poll = setInterval(debPoll, 4000);
+  await retroLoad();
+  if (left()) return;
+  paintDebrief();
+  // G65: open the newest archived debrief so the tab never lands on nothing
+  const latest = debLatestId();
+  if (latest != null && !Deb.report && Deb.viewing == null && (Deb.job || {}).state !== "running") debOpenDebrief(latest);
+}
+
+async function retroLoad() {
   await retroRefresh();
   try {
     Retro.job = await (await apiGet("/api/retro/run/status")).json();
     if (Retro.job.state === "running" && !Retro.poll) Retro.poll = setInterval(retroPoll, 8000);
   } catch (e) { /* card renders without job state */ }
-  if (stale("debrief")) return;
-  paintDebrief();
 }
+
+// The newest archived debrief for this race, or null. Taken from the race's whole archive, so a
+// debrief whose recording or track is gone still opens.
+function debLatestId() {
+  let best = null;
+  (Deb.debriefs || []).concat((Deb.recordings || []).map((x) => x.debrief)).forEach((d) => {
+    if (d && d.id != null && (!best || (d.created_at || 0) > (best.created_at || 0))) best = d;
+  });
+  return best ? best.id : null;
+}
+
+// Dates as YYYY-MM-DD, like the recording times beside them (G64).
+function isoDate(ts) { return new Date(ts * 1000).toISOString().slice(0, 10); }
 
 // Boat-track card: upload a GPX or fetch our YB track, then "Run debrief" scores helm vs optimal.
 // Tracks that DON'T come off the boat's own log — a GPX export or the public YB feed. The boat's
@@ -3193,12 +3432,17 @@ function debWinRange(w) {
 
 // ---- the recordings surface: what the boat sailed, and what has been debriefed ----------------
 async function debLoadRecordings() {
+  // answers for a race the user has since left are dropped, never stored under the new one
+  const race = Deb.raceId;
+  let recs, agent, track, debs;
   try {
-    const r = await (await apiGet("/api/debrief/recordings?race_id=" + encodeURIComponent(Deb.raceId))).json();
-    Deb.recordings = r.recordings || []; Deb.agent = r.agent || null;
-  } catch (e) { Deb.recordings = []; Deb.agent = { available: false, note: "the Lab could not list recordings" }; }
-  try { Deb.track = await (await apiGet("/api/debrief/track?race_id=" + encodeURIComponent(Deb.raceId))).json(); }
-  catch (e) { Deb.track = null; }
+    const r = await (await apiGet("/api/debrief/recordings?race_id=" + encodeURIComponent(race))).json();
+    recs = r.recordings || []; agent = r.agent || null; debs = r.debriefs || [];
+  } catch (e) { debs = []; recs = []; agent = { available: false, note: "the Lab could not list recordings" }; }
+  try { track = await (await apiGet("/api/debrief/track?race_id=" + encodeURIComponent(race))).json(); }
+  catch (e) { track = null; }
+  if (Deb.raceId !== race) return;
+  Deb.recordings = recs; Deb.agent = agent; Deb.track = track; Deb.debriefs = debs;
 }
 
 // One button per recording: the job fetches the boat log for that session (if it isn't loaded
@@ -3206,6 +3450,12 @@ async function debLoadRecordings() {
 async function debRunRecording(i) {
   const x = (Deb.recordings || [])[i];
   if (!x) return;
+  if (x.debrief) {
+    const go = await askModal("Run this debrief again?",
+      "This adds a new run. The old one stays in the archive. To see it again, tap <b>Open</b>.",
+      [{ c: "no", label: "Cancel", cls: "ghost" }, { c: "yes", label: "Run again", cls: "primary" }], "no", "no");
+    if (go !== "yes") return;
+  }
   Deb.msg = ""; Deb.report = null; Deb.viewing = null;
   const body = { race_id: Deb.raceId, playbook_id: Deb.playbookId || undefined,
                  recording: x.recording };
@@ -3236,14 +3486,21 @@ async function debPoll() {
 // way to see it again.
 async function debOpenDebrief(id) {
   Deb.msg = ""; Deb.viewing = id; Deb.report = null; paintDebrief();
+  const race = Deb.raceId;
+  // an answer for a race, debrief or run the user has since moved off is dropped, not shown
+  const moved = () => Deb.raceId !== race || Deb.viewing !== id;
   try {
     const d = await (await apiGet("/api/learning/debriefs/" + id)).json();
+    if (moved()) return;
     const rep = d.report || {};
     Deb.report = Object.assign({ available: true, race_name: d.race_name, archived_id: d.id,
                                  archived_at: d.created_at }, rep);
     if (Deb.report.actual_track && d.perf_bins) Deb.report.actual_track.n_bins = d.perf_bins.length;
-  } catch (e) { Deb.msg = "could not open that debrief"; Deb.viewing = null; }
-  paintDebrief();
+  } catch (e) {
+    if (moved()) return;
+    Deb.msg = "could not open that debrief"; Deb.viewing = null;
+  }
+  if (!stale("debrief")) paintDebrief();
 }
 
 function debRecordingsCard() {
@@ -3257,18 +3514,20 @@ function debRecordingsCard() {
     const d = x.debrief;
     const when = x.start_ts ? new Date(x.start_ts * 1000).toISOString().slice(0, 16).replace("T", " ") + "Z" : "—";
     const grew = x.marker_hours != null && x.hours != null && x.hours - x.marker_hours > 0.05
-      ? ` <span class="muted" title="The ⏺ LOG button stopped early. The recording runs longer.">(button said ${x.marker_hours} h)</span>` : "";
+      ? `<div class="muted" style="font-size:11px">LOG button stopped at ${x.marker_hours} h</div>` : "";
     const state = d
-      ? `<span class="pill ok">debriefed</span> <span class="muted">${new Date(d.created_at * 1000).toLocaleDateString()}${d.polar_pct != null ? " · " + d.polar_pct + "% of polar" : ""}${d.n_bins ? " · " + d.n_bins + " measured cells" : ""}${x.n_debriefs > 1 ? " · " + x.n_debriefs + " runs" : ""}</span>`
+      ? `<span class="pill ok">debriefed</span> <span class="muted">${isoDate(d.created_at)}${d.polar_pct != null ? " · " + d.polar_pct + "% of polar" : ""}${d.n_bins ? " · " + d.n_bins + " measured cells" : ""}${x.n_debriefs > 1 ? " · " + x.n_debriefs + " runs" : ""}</span>`
       : (x.track ? `<span class="pill">track loaded</span> <span class="muted">${x.track.n} fixes</span>`
                  : `<span class="muted">not debriefed yet</span>`);
     const isThis = running && j.recording != null && x.recording != null
       && Math.abs(j.recording - x.recording) < 1;
+    const onScreen = !running && d && Deb.viewing != null && Deb.viewing === d.id;
     const btns = running
       ? (isThis ? '<span class="muted">running…</span>' : "")
       : `<button class="mini" onclick="debRunRecording(${i})">${d ? "Re-run" : "Debrief"}</button>`
-        + (d ? ` <button class="mini" onclick="debOpenDebrief(${d.id})">Open</button>` : "");
-    return `<tr${isThis ? ' class="winrow"' : ""}>
+        + (d ? (onScreen ? ' <span class="pill ok" style="margin-left:8px">showing</span>'
+                         : ` <button class="mini" style="margin-left:8px" onclick="debOpenDebrief(${d.id})">Open</button>`) : "");
+    return `<tr${isThis || onScreen ? ' class="winrow"' : ""}>
       <td><b>${esc(x.name || "recording")}</b><div class="muted" style="font-size:11px">${when}${x.kind ? " · " + esc(x.kind) : ""}</div></td>
       <td>${x.hours != null ? x.hours + " h" : "—"}${grew}</td>
       <td>${state}</td>
@@ -3337,11 +3596,25 @@ async function debApply() {
   } catch (e) { if (msg) msg.textContent = "Failed: " + e.message; }
 }
 
+// Cut at a word near n characters and say so with an ellipsis (G62).
+function clipText(s, n) {
+  s = String(s || "");
+  if (s.length <= n) return s;
+  const cut = s.slice(0, n - 1), sp = cut.lastIndexOf(" ");
+  return (sp > n * 0.6 ? cut.slice(0, sp) : cut).replace(/[\s,;:·-]+$/, "") + "…";
+}
+
 function paintDebrief() {
   const r = Deb.report;
   const running = (Deb.job || {}).state === "running";
-  const pbOpts = (Deb.playbooks || []).map((b) => `<option value="${attr(b.id)}" ${b.id === Deb.playbookId ? "selected" : ""}>${esc((b.signed ? "🔒 " : "") + (b.headline || b.id).slice(0, 56))} · ${b.n_variants} var</option>`).join("");
+  const pbOpts = (Deb.playbooks || []).map((b) => `<option value="${attr(b.id)}" ${b.id === Deb.playbookId ? "selected" : ""}>${esc((b.signed ? "🔒 " : "") + clipText(b.headline || b.id, 90))} · ${b.n_variants} var</option>`).join("");
   let body = "";
+  if (!Deb.raceId) {
+    document.getElementById("view").innerHTML = `<div class="opt">
+      <div class="card"><div class="placeholder">No race yet. <a href="#races">Add one in Races</a>.</div></div>
+      ${retroCard()}</div>`;
+    return;
+  }
   if (r && r.available) body = debReport(r);
   else if (r && !r.available) body = `<div class="card"><div class="placeholder">${esc(r.note || "debrief unavailable")}</div></div>`;
 
@@ -3383,7 +3656,7 @@ function retroCard() {
     <h3>Fleet retro <span class="muted" style="font-weight:400">— how every boat sailed a past race</span></h3>
     <div style="margin:4px 0 8px">${archived}</div>
     <div class="opt-controls">
-      <label>YB race id <input id="retroYb" value="${attr(Retro.ybId)}" style="width:170px"></label>
+      <label>YB race id <input type="text" id="retroYb" value="${attr(Retro.ybId)}" style="width:170px"></label>
       <button class="mini" onclick="retroIngest()" ${Retro.busy ? "disabled" : ""}>1 · Get race</button>
       <button class="mini" onclick="retroPolars()" ${Retro.busy ? "disabled" : ""}>2 · Find ORC polars</button>
       <button class="mini" onclick="retroRun()" ${Retro.busy || running ? "disabled" : ""}>${running ? "Scoring…" : "3 · Score the fleet"}</button>
@@ -3656,12 +3929,12 @@ function learnProposalReview(p) {
   const s = p.summary || {};
   const pos = s.by_point_of_sail || {};
   const rows = (p.adjustments || []).map((a, i) => `<tr>
-    <td><input type="checkbox" data-adj="${i}" checked></td>
+    <td><label class="req-chk"><input type="checkbox" data-adj="${i}" checked></label></td>
     <td>${a.tws} kts</td><td>${a.twa}°</td><td>${esc(a.point_of_sail)}</td>
     <td><b class="conf ${a.mult < 1 ? "bad" : "ok"}">×${a.mult}</b></td>
     <td class="muted">${esc(a.basis || "")}</td></tr>`).join("");
   return `<div class="dep-grid" style="margin-bottom:8px">
-      <div class="dep-row"><b style="min-width:150px;display:inline-block">Overall</b> ${s.overall_pct}% of polar over ${s.n_samples} samples · ${s.recordings ? s.recordings.length + " recording(s) of " : ""}${(s.races || []).length} race(s)${s.excluded_forecast_bins ? ` · <span class="muted">${s.excluded_forecast_bins} from forecasts left out</span>` : ""}${s.thin_cells_skipped ? ` · <span class="muted">${s.thin_cells_skipped} cell(s) under ${s.min_cell_samples} samples skipped</span>` : ""}</div>
+      <div class="dep-row"><b style="min-width:150px;display:inline-block">Overall</b> ${s.overall_pct}% of polar over ${s.n_samples} samples · ${s.recordings ? s.recordings.length + " recording(s) of " : ""}${(s.races || []).length} race(s)${s.excluded_forecast_bins ? ` · <span class="muted">${s.excluded_forecast_bins} from forecasts left out</span>` : ""}${s.excluded_inferred_bins ? ` · <span class="muted">${s.excluded_inferred_bins} from GPS speed left out</span>` : ""}${s.excluded_mixed_bins ? ` · <span class="muted">${s.excluded_mixed_bins} partly measured left out</span>` : ""}${s.thin_cells_skipped ? ` · <span class="muted">${s.thin_cells_skipped} cell(s) under ${s.min_cell_samples} samples skipped</span>` : ""}</div>
       <div class="dep-row"><b style="min-width:150px;display:inline-block">Helm</b> ${p.helm_current} → <b>${p.helm_proposed}</b>${p.helm_proposed > 1 ? ' <span class="muted">(faster than the rating)</span>' : ""} <input id="learnHelmEdit" type="number" step="0.01" min="0.5" max="1.2" value="${p.helm_proposed}" style="width:70px;margin-left:8px"> <span class="muted">(you can edit)</span></div>
       ${Object.keys(pos).length ? `<div class="dep-row"><b style="min-width:150px;display:inline-block">By point of sail</b> ${Object.entries(pos).map(([k, v]) => `${k} ${v}%`).join(" · ")}</div>` : ""}
     </div>
@@ -3755,7 +4028,7 @@ function learnTrendCard() {
     return `<span class="tbar"><span class="tbar-fill ${cls}" style="width:${Math.round(f * 100)}%"></span></span>`;
   };
   const rows = s.map((d) => `<tr>
-    <td>${d.created_at ? new Date(d.created_at * 1000).toLocaleDateString() : ""}</td>
+    <td>${d.created_at ? isoDate(d.created_at) : ""}</td>
     <td>${esc(d.race_name || d.race_id || "")}</td>
     <td>${d.helm_pct != null ? d.helm_pct + "%" : "—"} ${bar(d.helm_pct, 70, 105, "ok")}</td>
     <td>${d.polar_pct != null ? d.polar_pct + "%" : "—"}</td>
@@ -3765,7 +4038,7 @@ function learnTrendCard() {
   const ms = (t.milestones || []).map((m) => {
     const a = m.applied || {};
     const what = a.wave_coeffs ? "wave model" : (a.helm_factor != null ? `helm ${a.helm_factor}` + ((a.polar_adjustments || []).length ? ` + ${a.polar_adjustments.length} polar cells` : "") : "refinement");
-    const when = m.decided_at ? new Date(m.decided_at * 1000).toLocaleDateString() : "";
+    const when = m.decided_at ? isoDate(m.decided_at) : "";
     return `<li>${when} — approved <b>${esc(what)}</b></li>`;
   }).join("");
   return `<div class="card">
@@ -3781,7 +4054,7 @@ function learnArchiveCard() {
   const dbs = (Lab.learning || {}).debriefs || [];
   if (!dbs.length) return `<div class="card"><h3>Performance archive</h3><div class="muted" style="font-size:12px">No debriefs yet. Run one in the <a href="#debrief">Debrief</a> tab.</div></div>`;
   const rows = dbs.map((d) => `<tr>
-    <td>${d.created_at ? new Date(d.created_at * 1000).toLocaleDateString() : ""}</td>
+    <td>${d.created_at ? isoDate(d.created_at) : ""}</td>
     <td>${esc(d.race_name || d.race_id || "")}${d.window_start ? `<div class="muted" style="font-size:11px">recording ${new Date(d.window_start * 1000).toISOString().slice(0, 16).replace("T", " ")}Z${d.elapsed_hours != null ? " · " + d.elapsed_hours + " h" : ""}</div>` : ""}</td>
     <td>${d.regret_min != null ? d.regret_min + " min" : "—"}</td>
     <td>${d.time_behind_min != null ? d.time_behind_min + " min" : "—"}</td>
@@ -3904,23 +4177,42 @@ function optObstacleNote(r) {
 const Pol = { data: null, tws: null, config: "all", race: "all", split: "config",
   busy: false, proposals: null, sources: null, use: null, msg: "", _maxV: null };
 
-// Fixed hue order — color follows the sail, never the filter (dataviz rule). Validated for CVD +
-// contrast on this app's panel surface (#141418), 7 slots, 2026-09-09. Unattributed = muted.
-const POL_ORDER = ["J1", "J1+J3", "A3", "A3+J1", "A3+SS", "S2", "S2+SS"];
-const POL_HUES = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9"];
+// Colour follows the sail, never the filter: each sail wears its SAIL_COLORS colour, the same one
+// as the crossover chart and its legend (#240). A two-sail set is drawn in its first sail's colour
+// with the second sail's colour dashed over it. Older sail logs call the kite "S2" (its cert id);
+// the server pools those under the crew name S1 (app/obspolar.py), so the tab only ever sees S1.
+const POL_ORDER = ["J1", "J1+J3", "A3", "A3+J1", "A3+SS", "S1", "S1+SS"];
+const POL_SS = "#f28cc4";             // the staysail's colour, until SAIL_COLORS carries SS (#259)
+const POL_SPARE = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9"];
+function polSailHex(t) {
+  if (typeof SAIL_COLORS !== "undefined" && SAIL_COLORS[t]) return SAIL_COLORS[t];
+  return t === "SS" ? POL_SS : null;
+}
 // Race instances are ORDERED (they happened in sequence), so they get a sequential ramp rather
 // than a categorical palette: oldest lightest, newest darkest. It encodes which race AND when,
 // and it can never be mistaken for the sail colors above — the two modes mean different things
 // and must not share a vocabulary.
 const POL_RACE_RAMP = ["#a5e0ef", "#6cc6e0", "#38a8cc", "#2a86ab", "#1f6485"];
 
-function polColor(cfg) {
-  if (!cfg) return "#9a9aa6";
-  const known = POL_ORDER.indexOf(cfg);
-  if (known >= 0) return POL_HUES[known];
-  // a config outside the known order gets a stable slot from the artifact's sorted config list
-  const extras = ((Pol.data || {}).configs || []).filter((c) => !POL_ORDER.includes(c));
-  return POL_HUES[(POL_ORDER.length + extras.indexOf(cfg)) % POL_HUES.length];
+// [first sail colour, second sail colour or null]. Reef tokens (R1…) carry no colour.
+function polColors(cfg) {
+  if (!cfg) return ["#9a9aa6", null];
+  const hex = String(cfg).split("+").map(polSailHex).filter(Boolean);
+  if (hex.length) return [hex[0], hex[1] && hex[1] !== hex[0] ? hex[1] : null];
+  // a sail with no colour of its own gets a stable spare slot from the sorted config list
+  const extras = ((Pol.data || {}).configs || []).filter((c) => !polSailHex(String(c).split("+")[0]));
+  return [POL_SPARE[Math.max(0, extras.indexOf(cfg)) % POL_SPARE.length], null];
+}
+function polColor(cfg) { return polColors(cfg)[0]; }
+// The legend/table swatch: one colour, or the two sails split diagonally.
+function polSwatch(cfg) {
+  const [a, b] = polColors(cfg);
+  const bg = b ? `linear-gradient(135deg, ${a} 50%, ${b} 50%)` : a;
+  return `<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${bg};margin-right:4px"></span>`;
+}
+// The logged configs in the crossover chart's order.
+function polConfigNames() {
+  return ((Pol.data || {}).configs || []).slice().sort((x, y) => (POL_ORDER.indexOf(x) + 1 || 99) - (POL_ORDER.indexOf(y) + 1 || 99) || x.localeCompare(y));
 }
 
 // the race instances that carry measured cells, oldest first (the ramp's order)
@@ -4035,11 +4327,14 @@ function polSeries() {
   }
   const cells = polCells(Pol.tws, Pol.config);
   const by = {};
-  cells.forEach((c) => (by[c.config || "—"] = by[c.config || "—"] || []).push(c));
+  cells.forEach((c) => { const k = c.config || "—"; (by[k] = by[k] || []).push(c); });
   return Object.keys(by)
     .sort((x, y) => (POL_ORDER.indexOf(x) + 1 || 99) - (POL_ORDER.indexOf(y) + 1 || 99) || x.localeCompare(y))
-    .map((name) => ({ key: name, label: name, color: polColor(name === "—" ? null : name),
-                      pts: by[name].slice().sort((m, n) => m.twa - n.twa) }));
+    .map((name) => {
+      const [color, color2] = polColors(name === "—" ? null : name);
+      const pts = by[name].slice().sort((m, n) => m.twa - n.twa);
+      return { key: name, label: name === "—" ? "unknown sails" : name, color, color2, pts };
+    });
 }
 
 function polCertCurve(tws) {
@@ -4057,7 +4352,7 @@ function polSvg() {
   const series = polSeries();
   const cert = polCertCurve(Pol.tws);
   const maxV = polMaxV();     // fixed across every TWS chip and every filter — see polMaxV()
-  const CX = 70, CY = 320, R = 268;
+  const CX = 70, CY = 320, R = 268;   // the plot is a half circle right of CX; the viewBox crops to it
   const rr = (v) => R * v / maxV;
   const XY = (twa, v) => [CX + rr(v) * Math.sin(twa * Math.PI / 180), CY - rr(v) * Math.cos(twa * Math.PI / 180)];
   let out = [];
@@ -4066,7 +4361,8 @@ function polSvg() {
   for (let v = 2; v <= maxV + 1e-9; v += 2) {
     const [x0, y0] = XY(0, v), [x1, y1] = XY(180, v);
     out.push(`<path d="M ${x0} ${y0} A ${rr(v)} ${rr(v)} 0 0 1 ${x1} ${y1}" fill="none" stroke="var(--line)" stroke-width="1"/>`);
-    out.push(`<text x="${CX + rr(v) + 3}" y="${CY - 4}" fill="var(--muted)" font-size="10">${v}</text>`);
+    // ring speeds sit left of the 0° spoke, clear of every angle label (G88)
+    out.push(`<text x="${CX - 4}" y="${CY - rr(v) + 4}" fill="var(--muted)" font-size="10" text-anchor="end">${v}</text>`);
   }
   for (let a = 0; a <= 180; a += 30) {
     const [x, y] = XY(a, maxV);
@@ -4085,21 +4381,20 @@ function polSvg() {
     if (sr.pts.length > 1) {
       const d = sr.pts.map((p, i) => (i ? "L" : "M") + XY(p.twa, p.stw).map((n) => n.toFixed(1)).join(" ")).join(" ");
       out.push(`<path d="${d}" fill="none" stroke="${sr.color}" stroke-width="2"/>`);
+      if (sr.color2) out.push(`<path d="${d}" fill="none" stroke="${sr.color2}" stroke-width="2" stroke-dasharray="7 7"/>`);
     }
     for (const p of sr.pts) {
       const [x, y] = XY(p.twa, p.stw);
-      const i = Pol._pts.push({ ...p, label: sr.label, mode: Pol.split }) - 1;
-      out.push(`<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4" fill="${sr.color}" stroke="var(--panel)" stroke-width="2"/>`);
-      out.push(`<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="11" fill="transparent" style="cursor:pointer"
-        onmousemove="polTip(event,${i})" onmouseleave="polTipHide()"/>`);
+      const i = Pol._pts.push({ ...p, label: sr.label, mode: Pol.split, x, y }) - 1;
+      out.push(`<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4" fill="${sr.color}" stroke="${sr.color2 || "var(--panel)"}" stroke-width="2"/>`);
+      // a finger-sized hit area; tap toggles the details, a mouse can also hover (G39)
+      out.push(`<circle class="pol-hit" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="22" fill="transparent" style="cursor:pointer"
+        onclick="polTipTap(event,${i})" onpointerenter="polTipHover(event,${i})" onpointerleave="polTipLeave(event)"/>`);
     }
-    // direct label at the curve's FASTEST point, pushed radially outward — curve ends converge
-    // in the deep sector and labels there collide (seen on the first render)
-    const top = sr.pts.reduce((a, b) => (b.stw > a.stw ? b : a));
-    const [ex, ey] = XY(top.twa, top.stw + 0.55);
-    out.push(`<text x="${ex}" y="${ey + 4}" fill="var(--ink)" font-size="11" font-weight="600" text-anchor="middle">${esc(sr.label)}</text>`);
+    // no label on the curve: they piled on each other and on the ring numbers; the legend names
+    // every line (G40)
   }
-  return `<svg viewBox="0 0 640 660" style="width:100%;max-width:620px" role="img"
+  return `<svg viewBox="30 16 350 600" style="width:100%;max-width:440px;max-height:80vh;display:block" role="img"
     aria-label="Observed polar, TWS ${Pol.tws} kn, by ${Pol.split === "race" ? "race instance" : "sail configuration"}">${out.join("")}</svg>`;
 }
 
@@ -4115,10 +4410,33 @@ function polTip(ev, i) {
     : (c.races ? `${c.races.length} race(s): ${esc(c.races.join(", "))}`
                : esc(polRaceName(c.recording)));
   tip.innerHTML = `<b>${esc(c.label)}</b> · TWS ${c.tws} · TWA ${c.twa}°<br>` +
-    `Speed <b>${c.stw}</b> kn (best held) · typical ${c.median_stw}<br>` +
+    `Speed <b>${kn2(c.stw)}</b> kn (best held) · typical ${kn2(c.median_stw)} kn<br>` +
     `${c.seconds != null ? c.seconds : c.samples} s of data (${c.samples} fixes) · ${src}`;
 }
-function polTipHide() { const t = document.getElementById("polTipEl"); if (t) t.remove(); }
+let polTipPinned = null;           // the point whose details were opened by a tap/click
+// Hit circles overlap where points sit close, so the tap goes to the NEAREST point, not to
+// whichever circle was drawn last.
+function polNearest(ev, i) {
+  const svg = ev.target && ev.target.ownerSVGElement, m = svg && svg.getScreenCTM && svg.getScreenCTM();
+  if (!m || typeof DOMPoint === "undefined") return i;
+  const q = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(m.inverse());
+  let best = i, bd = Infinity;
+  (Pol._pts || []).forEach((p, j) => { const d = (p.x - q.x) ** 2 + (p.y - q.y) ** 2; if (d < bd) { bd = d; best = j; } });
+  return best;
+}
+function polTipHover(ev, i) { if (ev.pointerType === "mouse" && polTipPinned == null) polTip(ev, polNearest(ev, i)); }
+function polTipLeave(ev) { if (ev.pointerType === "mouse" && polTipPinned == null) polTipHide(); }
+function polTipTap(ev, i) {
+  i = polNearest(ev, i);
+  if (polTipPinned === i) { polTipHide(); return; }
+  polTip(ev, i); polTipPinned = i;
+}
+function polTipHide() { polTipPinned = null; const t = document.getElementById("polTipEl"); if (t) t.remove(); }
+document.addEventListener("pointerdown", (e) => {
+  if (polTipPinned != null && !(e.target.closest && e.target.closest(".pol-hit"))) polTipHide();
+});
+// Boat speeds always with two decimals, so a column lines up (G91).
+function kn2(v) { return v == null || v === "" || isNaN(Number(v)) ? "—" : Number(v).toFixed(2); }
 
 function polUseKey(rec) { return rec == null ? "none" : String(Math.round(Number(rec))); }
 function polToggleUse(key, on) { Pol.use[key] = on; paintPolar(); }
@@ -4193,7 +4511,8 @@ function paintPolar() {
   const minS = Math.round((d.grid || {}).min_seconds || 60);
   const thin = polThin(Pol.tws, Pol.config);
   const allTws = d.tws_buckets || [];
-  const cfgs = ["all", ...((d.configs || [])), "—"];
+  polTipHide();                       // the chart is redrawn; an open tip would point at nothing
+  const cfgs = ["all", ...polConfigNames(), "—"];
   const races = polRaces();
   const byRace = Pol.split === "race";
   const chips = allTws.map((t) =>
@@ -4210,15 +4529,13 @@ function paintPolar() {
       onchange="Pol.split='${k}';paintPolar()"> ${k === "config" ? "sails" : "race"}</label>`).join("");
   const legend = byRace
     ? races.map((r) => `<span style="white-space:nowrap"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${polRaceColor(r.recording)};margin-right:4px"></span>${esc(r.name)}</span>`).join(" &nbsp; ")
-    : (d.configs || []).map((c) =>
-        `<span style="white-space:nowrap"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${polColor(c)};margin-right:4px"></span>${esc(c)}</span>`
-      ).join(" &nbsp; ") + ` &nbsp; <span style="white-space:nowrap"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#9a9aa6;margin-right:4px"></span>unknown sails</span>`;
+    : polConfigNames().map((c) => `<span style="white-space:nowrap">${polSwatch(c)}${esc(c)}</span>`).join(" &nbsp; ") + ` &nbsp; <span style="white-space:nowrap"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#9a9aa6;margin-right:4px"></span>unknown sails</span>`;
   const legendTail = ` &nbsp; <span style="white-space:nowrap;color:var(--muted)"><svg width="22" height="8"><line x1="0" y1="4" x2="22" y2="4" stroke="#9a9aa6" stroke-width="2" stroke-dasharray="5 4"/></svg> ORC rating (for reference)</span>`;
   const tbl = cells.length ? `<div class="pg-wrap"><table class="pg">
-    <tr><th>TWA</th><th>sails</th><th>best held</th><th>typical</th><th>data (s)</th><th>${Pol.race === "all" ? "races" : "race"}</th></tr>
+    <tr><th>TWA</th><th>sails</th><th>best held (kn)</th><th>typical (kn)</th><th>data (s)</th><th>${Pol.race === "all" ? "races" : "race"}</th></tr>
     ${cells.slice().sort((a, b) => a.twa - b.twa || String(a.config).localeCompare(String(b.config))).map((c) =>
-      `<tr><td>${c.twa}°</td><td><span style="color:${polColor(c.config)}">●</span> ${esc(c.config || "unknown")}</td>
-       <td><b>${c.stw}</b></td><td>${c.median_stw}</td><td>${c.seconds != null ? c.seconds : c.samples}</td><td>${esc(c.races ? c.races.join(", ") : polRaceName(c.recording))}</td></tr>`).join("")}
+      `<tr><td>${c.twa}°</td><td>${polSwatch(c.config)}${esc(c.config || "unknown")}</td>
+       <td><b>${kn2(c.stw)}</b></td><td>${kn2(c.median_stw)}</td><td>${c.seconds != null ? c.seconds : c.samples}</td><td>${esc(c.races ? c.races.join(", ") : polRaceName(c.recording))}</td></tr>`).join("")}
   </table></div>` : '<div class="placeholder">No measured cells at this TWS for this race.</div>';
   document.getElementById("view").innerHTML = `<div class="opt">
     ${polDangerBanner(d.races || [])}

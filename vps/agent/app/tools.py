@@ -10,6 +10,7 @@ import os
 from datetime import datetime, timezone
 
 from shared import n2k_sources
+from shared import polar as shared_polar
 from shared import units
 
 from .db import pool
@@ -24,6 +25,7 @@ from . import ais
 from . import alerts as _alerts
 from . import summarizer as _summarizer
 from . import polar_tool as _polar_tool
+from . import race_mode
 
 BOAT_ID = os.environ.get("BOAT_ID", "sr33")
 
@@ -124,37 +126,11 @@ def _choose_preferred(channel, readings, prio):
     return best, "no priority set — freshest available", False
 
 
-_ais_sources_cache = None
-
-
 def ais_bearing_sources():
     """Sources in `telemetry_raw` that carry AIS traffic — to be excluded from own-ship reads.
-
-    The cloud twin of `datasource_onboard.ais_sources()`, and it exists for the same reason:
-    Signal K's `subscribe=all` put every AIS target into the archive under the own-ship
-    `boat_id`, so `navigation.position/SOG/COG` from an AIS channel is somebody else's boat.
-    Identified from the data via `n2k_sources.AIS_MARKER_PATHS`, never by source name.
-
-    Memoised for the process: which sources are AIS receivers is a property of the boat's bus,
-    not of a request. Returns an empty set on any error — the callers must degrade to
-    unfiltered data rather than to no data."""
-    global _ais_sources_cache
-    if _ais_sources_cache is not None:
-        return _ais_sources_cache
-    try:
-        with pool.connection() as conn:
-            rows = conn.execute(
-                "SELECT DISTINCT source FROM telemetry_raw WHERE boat_id = %s AND path = ANY(%s)",
-                (BOAT_ID, list(n2k_sources.AIS_MARKER_PATHS))).fetchall()
-        _ais_sources_cache = {r["source"] for r in rows}
-    except Exception as exc:
-        print(f"[tools] could not identify AIS-bearing sources ({exc}); not filtering",
-              flush=True)
-        _ais_sources_cache = set()
-    if _ais_sources_cache:
-        print(f"[tools] AIS-bearing source(s) excluded from own-ship reads: "
-              f"{sorted(_ais_sources_cache)}", flush=True)
-    return _ais_sources_cache
+    One probe for the whole cloud agent: `datasource.ais_bearing_sources` (the CloudSource reads
+    filter on it too, #45.2b). An empty or failed probe is retried, not memoised (#44.5)."""
+    return datasource.ais_bearing_sources()
 
 
 def _age(ts):
@@ -164,14 +140,17 @@ def _age(ts):
 
 
 def _latest_per_source(paths, max_age_min):
-    """Latest numeric value per (path, source) within the window."""
+    """Latest numeric value per (path, source) within the window, AIS-bearing sources left out
+    (an AIS receiver's lat/lon is another boat's, #45.2b) — as the onboard read does."""
+    ais = sorted(ais_bearing_sources())
     with pool.connection() as conn:
         return conn.execute(
             "SELECT DISTINCT ON (path, source) path, source, value, time "
             "FROM telemetry_raw WHERE boat_id = %s AND path = ANY(%s) "
             "AND time > now() - %s::interval AND value IS NOT NULL "
-            "ORDER BY path, source, time DESC",
-            (BOAT_ID, list(paths), f"{int(max_age_min)} minutes"),
+            + ("AND NOT (source = ANY(%s)) " if ais else "")
+            + "ORDER BY path, source, time DESC",
+            (BOAT_ID, list(paths), f"{int(max_age_min)} minutes") + ((ais,) if ais else ()),
         ).fetchall()
 
 
@@ -227,21 +206,35 @@ def get_strip():
         return c["preferred"]["value"]   # priority-ranked lead source (with failover)
 
     ages = [c["freshest_age_s"] for c in ch.values()]
-    heading = best("heading_true")
+    # True heading wins; a magnetic one is only a stand-in and says so (#183-8): on Lake Huron
+    # variation is ~7-9°, so a bare "heading" that is really magnetic points the bow wrong.
+    heading, heading_ref = best("heading_true"), "true"
     if heading is None:
-        heading = best("heading_mag")
-    fi = fatigue.compute_fatigue_index()
+        heading, heading_ref = best("heading_mag"), "magnetic"
+    if heading is None:
+        heading_ref = None
+    # Fatigue is performance advice: the cloud withholds it while racing (DESIGN.md, ADR-0001;
+    # /fatigue is 403 then, and this ungated strip used to hand out the same number, #48.2).
+    # The Pi's own tile is not affected — that is `onboard_conditions.get_strip`.
+    racing = race_mode.racing()
+    fi = {} if racing else fatigue.compute_fatigue_index()
     return {
         "available": True, "as_of": cc["as_of"],
         "data_age_seconds": min(ages) if ages else None,
         "stale": (min(ages) if ages else 999) > 30,
+        # Age of each value shown (the lead source's sample), per channel (#45.3). The two
+        # fields above are the FRESHEST channel's age, so a fresh bank voltage keeps them near 0
+        # while wind is minutes old; read the channel you use from here.
+        "ages": {name: c["preferred"]["age_s"] for name, c in ch.items()},
         "stw": best("stw"), "sog": best("sog"), "tws": best("tws"), "twa": best("twa"),
         "twd": best("twd"), "aws": best("aws"), "awa": best("awa"), "heading": heading,
+        "heading_ref": heading_ref,
         "heel": best("heel"), "depth": best("depth"),
         "cog": best("cog"), "lat": best("lat"), "lon": best("lon"),
         # Helm fatigue index (0–100) for the strip; null while warming up / unavailable.
         "fatigue": fi.get("index"),
         "fatigue_level": fi.get("level"),
+        **({"fatigue_withheld": True} if racing else {}),
     }
 
 
@@ -330,17 +323,6 @@ def get_history(channel: str, window_minutes: int, aggregation: str = "avg", sou
             "samples": row["n"]}
 
 
-def _latest_value(path):
-    """Freshest single value (any source) for a path, converted to display units."""
-    with pool.connection() as conn:
-        r = conn.execute(
-            "SELECT value, time FROM telemetry_raw WHERE boat_id=%s AND path=%s "
-            "AND value IS NOT NULL ORDER BY time DESC LIMIT 1", (BOAT_ID, path),
-        ).fetchone()
-    if not r:
-        return None
-    conv = PRESENT.get(path, (None, None, _id))[2]
-    return conv(r["value"])
 
 
 def _haversine_nm(a, b, c, d):
@@ -359,12 +341,21 @@ def _bearing(a, b, c, d):
 
 
 def get_polar_target(tws: float, twa: float):
-    row = datasource.active().polar_nearest(tws, twa)
-    if not row:
+    """Polar target at (tws, twa), interpolated on the grid (`shared.polar.target`, the matcher's
+    and fatigue's read), not the nearest bucket by |dTWS kn| + |dTWA deg| (#67): 11 kn / 90° read
+    the 10 or 12 kn row. Pinching above the beat angle grades against the beat speed; inside 30°
+    there is no target (None)."""
+    table = [r for r in datasource.active().polars_stw() if r[2] is not None]
+    if not table:
         return {"available": False, "note": "no polar data loaded"}
+    stw = shared_polar.target(table, tws, twa)
+    if not stw:
+        return {"available": True, "query": {"tws": tws, "twa": twa}, "target_stw": None,
+                "target_vmg": None, "note": "no polar target this close to the wind"}
+    a = abs(((float(twa) + 180.0) % 360.0) - 180.0)
     return {"available": True, "query": {"tws": tws, "twa": twa},
-            "nearest_bucket": {"tws": row["tws"], "twa": row["twa"]},
-            "target_stw": row["target_stw"], "target_vmg": row["target_vmg"]}
+            "target_stw": round(stw, 2),
+            "target_vmg": round(stw * abs(math.cos(math.radians(a))), 2)}
 
 
 def get_ais_targets(max_range_nm: float = 12):
@@ -395,7 +386,15 @@ def get_polar_analysis(hours: float = None, min_samples: int = None, point_of_sa
 
 
 def get_route_status(route: str = "default"):
-    lat, lon = _latest_value("navigation.position.latitude"), _latest_value("navigation.position.longitude")
+    # The engine's own read (#45.1/#45.2b): the priority-preferred publisher with AIS sources left
+    # out, and the fix's time kept so the answer can say how old the position is. The old
+    # "newest row, any source" read could take an AIS target's position, and gave no age.
+    src = datasource.active()
+    la = src.latest_sample("navigation.position.latitude")
+    lo = src.latest_sample("navigation.position.longitude")
+    lat, lon = (la[0] if la else None), (lo[0] if lo else None)
+    fix_age_s = (round(max(0.0, datetime.now(timezone.utc).timestamp() - min(la[1], lo[1])), 1)
+                 if la and lo else None)
     with pool.connection() as conn:
         marks = conn.execute(
             "SELECT seq, name, lat, lon FROM waypoints WHERE route=%s ORDER BY seq", (route,),
@@ -410,7 +409,7 @@ def get_route_status(route: str = "default"):
         legs.append({"seq": m["seq"], "name": m["name"], "distance_nm": round(dist, 2),
                      "bearing_deg": round(_bearing(lat, lon, m["lat"], m["lon"]), 1)})
     return {"available": True, "route": route, "next_mark": legs[0],
-            "finish": legs[-1], "legs": legs}
+            "finish": legs[-1], "legs": legs, "fix_age_s": fix_age_s}
 
 
 def fetch_forecast(lat: float = None, lon: float = None, hours: int = 12):
@@ -463,5 +462,12 @@ DISPATCH = {
 def dispatch(name: str, args: dict):
     fn = DISPATCH.get(name)
     if fn is None:
-        return {"error": f"unknown tool '{name}'"}
-    return fn(**(args or {}))
+        return {"error": f"unknown tool '{name}'", "tool_failed": True}
+    # One failing tool must not abort the whole chat turn (#183-9): the model gets an error result
+    # for that call (agent.py marks it is_error) and can answer from the rest. The detail stays in
+    # the server log; the model sees only the tool name and error type.
+    try:
+        return fn(**(args or {}))
+    except Exception as exc:
+        print(f"[tools] {name} failed: {exc!r}", flush=True)
+        return {"error": f"{name} failed ({type(exc).__name__})", "tool_failed": True}

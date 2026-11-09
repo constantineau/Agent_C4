@@ -287,14 +287,10 @@ don't replace. In `/etc/sr33/copilot.env` on the bench Orin set
 `COPILOT_BENCH_ALLOW_FROM=<bench-host-tailscale-ip>` (`tailscale ip -4` on the bench host), then
 restart the unit. The boat defaults stay in force; leave both unset on the boat.
 
-**Code redeploy** (no rsync on the Orin — push with tar over ssh, then restart):
-
-```bash
-# from the repo on the dev VM:
-tar czf - --exclude=__pycache__ -C pi/orin copilot \
-  | ssh agent-c4@100.70.110.72 'tar xzf - -C ~/Agent_C4/pi/orin'
-ssh agent-c4@100.70.110.72 'sudo systemctl restart sr33-orin-copilot'
-```
+**Code redeploy:** the Orin's clone is fast-forwarded to `main` (old HEAD tagged
+`pre-deploy-<stamp>` for rollback), then the units restart and the deploy is recorded in
+`~/DEPLOYED`. The steps are in `docs/REMOTE_OPS.md` (rule 2). Don't copy files into the clone:
+a rollback to the tag would not undo them.
 
 **Rollback to the stdlib dashboard runner:** `sudo systemctl disable --now sr33-orin-copilot &&
 sudo systemctl enable --now sr33-orin-copilot-dashboard` (both bind :8300, so only one at a time).

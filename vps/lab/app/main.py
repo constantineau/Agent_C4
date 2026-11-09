@@ -891,7 +891,11 @@ def _recordings(race_id=None):
     debriefs = learning.list_debriefs(bid, race_id) if race_id else []
 
     def near(a, b):
-        return a is not None and b is not None and abs(float(a) - float(b)) < 1.0
+        # two missing keys are the same recording: a GPX/YB track has no window, and neither
+        # does its archived debrief (#50)
+        if a is None or b is None:
+            return a is None and b is None
+        return abs(float(a) - float(b)) < 1.0
 
     def latest_debrief(rec):
         hit = [d for d in debriefs if near(d.get("window_start"), rec)]
@@ -902,7 +906,11 @@ def _recordings(race_id=None):
         if race_id and ses.get("race_id") != race_id:
             continue
         w = ses.get("window") or {}
-        rec = ses.get("start_ts")
+        marker = ses.get("start_ts")
+        # Tracks and the archive key on the DERIVED window start, which is what a debrief of this
+        # session stores under (`load_log_track`). Joining on the marker missed the later session
+        # of a stitched pair and showed its real track as an orphan row (#50).
+        rec = w.get("start_ts") if w.get("start_ts") is not None else marker
         # a session needs an END to be debriefable — the button's, or the one the record derives
         if not (ses.get("end_ts") or w.get("end_ts")):
             continue
@@ -910,7 +918,7 @@ def _recordings(race_id=None):
         trk = next((t for t in tracks if near(t.get("recording"), rec)), None)
         out.append({"recording": rec, "session_id": ses.get("id"), "name": ses.get("name"),
                     "kind": ses.get("kind"), "race_id": ses.get("race_id"),
-                    "start_ts": rec, "end_ts": ses.get("end_ts"), "window": w,
+                    "start_ts": marker, "end_ts": ses.get("end_ts"), "window": w,
                     "hours": w.get("hours"), "marker_hours": w.get("marker_hours"),
                     "track": trk, "debrief": latest_debrief(rec),
                     "n_debriefs": len([d for d in debriefs if near(d.get("window_start"), rec)])})
@@ -1237,8 +1245,10 @@ async def learning_calibrate_waves(body: dict = None):
 @app.get("/api/learning/config-polars")
 def learning_config_polars(boat_id: str = None):
     """Observed polars BY SAIL CONFIGURATION (the sails-bar log attributed to every fix) —
-    curves for combinations the crossover chart doesn't rate accumulate here over time."""
-    return learning.config_polars(boat_id)
+    curves for combinations the crossover chart doesn't rate accumulate here over time.
+    Defaults to the active boat like the other learning routes: the page sends no boat_id, and
+    reading `boat_id IS NULL` always came back empty (#49)."""
+    return learning.config_polars(boat_id or (boats.active_boat() or {}).get("boat_id"))
 
 
 @app.get("/api/learning/trend")

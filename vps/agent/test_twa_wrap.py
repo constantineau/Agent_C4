@@ -65,14 +65,18 @@ a, b = sails.get_sail_advice(12, 210, "S1"), sails.get_sail_advice(12, 150, "S1"
 check("port run 210° gets the same recommendation as 150°",
       a["recommendation"] == b["recommendation"])
 
-print("polar nearest bucket (onboard) folds the angle")
+print("polar target (onboard table) folds the angle")
+# The nearest-bucket helper is gone (#67); the polar target is the shared interpolation.
+from shared import polar as shared_polar   # noqa: E402
 src = OnboardSource.__new__(OnboardSource)    # just the polar table — no archive, no live feed
 src._polars = _load_polars()
 check("onboard polar table loaded", len(src._polars) > 0)
-n36, n324, nm36 = src.polar_nearest(12, 36), src.polar_nearest(12, 324), src.polar_nearest(12, -36)
-check("12 kn / 324° reads the same bucket as 36°", n324 == n36)
-check("12 kn / −36° reads the same bucket as 36°", nm36 == n36)
-check("…and that bucket is a beat, not a run", n36 and n36["twa"] < 90)
+tab = [r for r in src.polars_stw() if r[2] is not None]
+n36, n324, nm36 = (shared_polar.target(tab, 12, a) for a in (36, 324, -36))
+check("12 kn / 324° reads the same target as 36°", n36 > 0 and near(n324, n36))
+check("12 kn / −36° reads the same target as 36°", near(nm36, n36))
+check("…and that target is a beat speed, not a run's",
+      n36 < shared_polar.target(tab, 12, 150))
 
 print("source disagreement on TWA is the shortest arc (signed TWA at a dead run)")
 check("179° vs −179° spread is 2°", near(units.channel_spread("twa", [179, -179]), 2))

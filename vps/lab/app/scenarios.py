@@ -226,13 +226,19 @@ def apply(scenario, wf):
     return wf, None
 
 
+# legs carry beat/reach/run (optimizer._point_of_sail); the upwind/reaching/downwind names are
+# accepted too so either vocabulary buckets correctly
+_POS_BUCKET = {"beat": "upwind", "upwind": "upwind", "reach": "reaching", "reaching": "reaching",
+               "run": "downwind", "downwind": "downwind"}
+
+
 def pos_profile(nominal_result):
     """Fraction of the nominal route's time spent upwind / reaching / downwind (from its legs)."""
     tot, acc = 0.0, {"upwind": 0.0, "reaching": 0.0, "downwind": 0.0}
     for leg in (nominal_result or {}).get("legs") or []:
         m = float(leg.get("leg_minutes") or 0)
         pos = str(leg.get("point_of_sail") or "reaching")
-        acc[pos if pos in acc else "reaching"] += m
+        acc[_POS_BUCKET.get(pos, "reaching")] += m
         tot += m
     if not tot:
         return {"upwind": 0.34, "reaching": 0.33, "downwind": 0.33}

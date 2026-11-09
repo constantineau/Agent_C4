@@ -1,10 +1,13 @@
-# pi/deploy — putting the data path on the boat
+# pi/deploy — putting code on the boat
 
 The Pi runs its own clone of the repo on `main`. A `git pull` there would change what every
 service runs, so a Pi deploy copies single files after diffing them, and rebuilds only the
-services those files belong to (CLAUDE.md, Deploys). `deploy-data-path.sh` does exactly that for
-the full-res archiver (plus the `shared/` modules it imports, and the uplink only if its own
-files changed).
+services those files belong to. This is the one deploy method for the Pi; `docs/REMOTE_OPS.md`
+and CLAUDE.md point here. `deploy-data-path.sh` does exactly that for the full-res archiver
+(plus the `shared/` modules it imports, and the uplink only if its own files changed). Other
+services follow the same steps by hand: see "Any other Pi service" below.
+
+Every deploy ends by recording what landed with `record-deployed.sh` (see "What's on the box").
 
 **Deploying it restarts full-res recording on the boat.** That is Cole's decision. Nobody
 passes `--apply` without his go.
@@ -32,7 +35,8 @@ passes `--apply` without his go.
 5. **Rebuild and restart only** the archiver (and the uplink if its files changed):
    `docker compose -f compose.pi.yml build archiver && … up -d --no-deps archiver`.
    Signal K, the console and n2kout are not touched. The engine is not rebuilt, but it is
-   restarted after a rotation (step 6).
+   restarted after a rotation (step 6). Then it runs `record-deployed.sh` for the copied files
+   and the rebuilt services; a mismatch is printed loudly but does not undo the deploy.
 6. **Verify.** Waits (up to 60 min; checking a 24 GB file on the SD card is slow) for the
    archiver to open its archive and write. Then it lists the volume, checks `archive.db` grows
    over 60 s, prints `archiver-status.json` and the retention now in effect, and checks the
@@ -78,6 +82,44 @@ restores the files and the previous archiver image, then restarts the engine (no
 checks `/health`. Rollback does not move the corrupt archive back. The old code would then record into the fresh `archive.db`
 with no disk guard, so if the point of rolling back is to stop recording, stop the archiver
 instead: `cd ~/Agent_C4 && docker compose -f compose.pi.yml stop archiver`.
+
+## Any other Pi service
+
+The engine, console and n2kout have no script. Deploy them with the same steps, by hand, from a
+checkout of the commit to deploy (`STAMP=$(date -u +%Y%m%dT%H%M%SZ)`, a short name per deploy):
+
+1. **Diff** the files to ship against the Pi's copies (`sha256sum` both sides). Stop if the Pi
+   has local edits you didn't expect.
+2. **Back up** to `~/deploy-backups/<name>-$STAMP/` on the Pi: a tar of the files about to be
+   overwritten, `new-files.txt` listing the new ones, and each service's current image tagged
+   `sr33-pi-<svc>:pre-$STAMP`.
+3. **Copy** the files into `~/Agent_C4` (`tar -cf - <files> | ssh … 'cd ~/Agent_C4 && tar -xf -'`).
+4. **Rebuild and restart only** those services:
+   `docker compose -f compose.pi.yml build <svc…> && docker compose -f compose.pi.yml up -d --no-deps <svc…>`.
+   Never `compose down` remotely.
+5. **Record** what landed: `pi/deploy/record-deployed.sh <pi> $STAMP <name> <files…> -- <svc…>`.
+6. **Verify**: `/health` and the endpoints the change touches answer, restart count stays 0.
+
+Rollback: in `~/Agent_C4` untar the backup, delete the files in `new-files.txt`, retag
+`sr33-pi-<svc>:pre-$STAMP` as `sr33-pi-<svc>`, `up -d --no-deps --no-build <svc…>`, and add a
+line to `~/DEPLOYED` saying which deploy was undone.
+
+## What's on the box
+
+`record-deployed.sh` keeps a record on the box itself, because the Pi's git can't say: its clone
+sits on an old commit with copied files on top.
+
+```bash
+pi/deploy/record-deployed.sh HOST STAMP NAME [FILE ...] [-- SERVICE ...]
+```
+
+On the box it writes `~/deploy-backups/NAME-STAMP/DEPLOYED` and appends the same block to
+`~/DEPLOYED` (newest last): the commit deployed from, the sha256 of each file as it sits on the
+box, and for each service the image it was built as and the image its container runs. Here it
+checks each hash against your checkout and exits 1 on a difference, a missing file, or a
+container still on an older image. `cat ~/DEPLOYED` on the box answers "what's deployed". The
+Orin uses it too, with files only (its copilot is a systemd unit, not an image): see
+`docs/REMOTE_OPS.md`.
 
 ## Why session 3 is closed first, and why 7 days
 

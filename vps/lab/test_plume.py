@@ -176,6 +176,27 @@ check("an explicit point target wins", sp["basis"] == "point" and sp["path"][0][
 P.set_target(None)
 check("clearing the target falls back to the boat's push", P.resolve_target(NOW)["basis"] == "route")
 
+# #182-6: a re-freeze under the same id must neither mix histories nor pass for the boat's plan
+SIGNED = dict(BUNDLE, signature={"alg": "sha256", "value": "aa" * 32})
+pbstore.get = lambda pid: SIGNED if pid == "r1__100" else None
+labstate.set("deploy_push:last_ok", {"race_id": "r1", "playbook_id": "r1__100", "ok": True,
+                                     "signature": "aa" * 8})
+sp = P.resolve_target(NOW)
+check("the pushed bundle: route, store key carries its signature",
+      sp["basis"] == "route" and sp["key"] == "r1__r1__100-aaaaaaaa")
+REFROZEN = dict(BUNDLE, signature={"alg": "sha256", "value": "bb" * 32})
+pbstore.get = lambda pid: REFROZEN if pid == "r1__100" else None
+sp = P.resolve_target(NOW)
+check("re-frozen since the push → not followed as the boat's route, holds at the start",
+      sp["basis"] == "point" and sp["path"][0]["lat"] == 43.0 and sp["course_id"] == "c1")
+P.set_target("r1", playbook_id="r1__100")
+sp = P.resolve_target(NOW)
+check("pinned to the re-frozen bundle → its own history, not the old one's",
+      sp["basis"] == "route" and sp["key"] == "r1__r1__100-bbbbbbbb")
+P.set_target(None)
+labstate.set("deploy_push:last_ok", {"race_id": "r1", "playbook_id": "r1__100", "ok": True})
+pbstore.get = lambda pid: BUNDLE if pid == "r1__100" else None
+
 # ---- push to the boat -----------------------------------------------------------------------
 print("push to the boat:")
 rec = P.push(pl, post=lambda *a, **k: (True, {"loaded": True}), now=NOW)
