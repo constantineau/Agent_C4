@@ -4,7 +4,8 @@
 // "not checked", never "All checks pass" / "Safe to use", and never hides a known warning; #56 two
 // quick sail taps keep both sails; #184-4 a reading is stamped when asked for, a wake poll is never
 // swallowed, a held wind is not logged again; #184-5 the course map follows a new course and
-// survives a stale mark index; #40 the selector's `settling` is on screen; #95 G14/G52/G53/G55/G56.
+// survives a stale mark index; #40 the selector's `settling` is on screen; #95 G14/G52/G53/G55/G56;
+// #185-4 a sensor missing from the N2K bus is on the DATA tile; FLEET claims no lead without a ranking.
 //
 // dashboard.js is a browser IIFE. It is loaded here in a vm with a do-nothing DOM and a scripted
 // fetch; it hands its parts to `window.__C4DashTest` (a hook nothing on the iPad defines).
@@ -408,6 +409,46 @@ test("#95 G56 crew energy reads as a percent", () => {
   const T = load();
   const t = T.D.BUILD.charge({ fatigue: { available: true, index: 23, level: "fresh" }, watch: null });
   ok(/^77%/.test(t.value), "value: " + t.value);
+});
+
+/* ---------------- #185-4 N2K address drift in the DATA tile ---------------- */
+test("#185-4 a sensor missing from the bus (its address re-claimed) shows on the DATA tile", () => {
+  const reason = "GPS24xd-NMEA2000 not found, n2k-socketcan.3 is now GST10";
+  const t = dataTile({ available: true, status: "warn", flags: [reason], notes: [], reason: reason,
+    provenance: { checks: { n2k_addresses: { status: "warn", reason: reason } }, channels: {} } });
+  ok(t.status === "watch", "status " + t.status);
+  ok(/sensor missing/.test(t.sub), "sub: " + t.sub);
+  ok(t.why.indexOf(reason) >= 0, "why: " + t.why);
+});
+test("#185-4 a sensor that moved and was followed is a note, not a warning", () => {
+  const note = "GPS24xd-NMEA2000 moved to n2k-socketcan.20, still used";
+  const t = dataTile({ available: true, status: "ok", flags: [], notes: [note], reason: "instruments agree",
+    provenance: { checks: { n2k_addresses: { status: "ok", note: note } }, channels: {} } });
+  ok(t.status === "ok" && !/sensor missing/.test(t.sub), "status " + t.status + " sub " + t.sub);
+  ok(t.why.indexOf(note) >= 0, "why: " + t.why);
+});
+
+/* ---------------- FLEET: no lead claimed without a ranking ---------------- */
+function fleetTile(fl) { return load().D.BUILD.ais({ fleet: Object.assign({ available: true }, fl) }); }
+test("FLEET: us unranked (no own rating, #271) shows the gap note, never 'Leading'", () => {
+  const t = fleetTile({ gaps: ["own rating missing, no corrected gaps"],
+    own_rank: { overall: null, of: 0, division: null, division_of: 1, unranked: 2 },
+    standings: [{ boat: "Rival", dtf_nm: 4 }, { boat: "US", source: "own", dtf_nm: 5 }] });
+  ok(!/Leading/.test(t.consider), "consider: " + t.consider);
+  ok(/own rating missing/.test(t.consider) && /own rating missing/.test(t.sub), "consider: " + t.consider + " / sub: " + t.sub);
+  ok(t.value === "—", "value: " + t.value);
+});
+test("FLEET: only us ranked (no SOG, no rival gaps) is not a lead and not '1st of 1'", () => {
+  const t = fleetTile({ own_rank: { overall: 1, of: 1, division: 1, division_of: 1, unranked: 3 },
+    standings: [{ boat: "US", source: "own", rank: 1, corrected_delta_s: 0 }, { boat: "Rival", dtf_nm: 4 }] });
+  ok(!/Leading/.test(t.consider), "consider: " + t.consider);
+  ok(t.value === "—", "value: " + t.value);
+});
+test("FLEET: a real lead still says so", () => {
+  const t = fleetTile({ own_rank: { overall: 1, of: 2, division: 1, division_of: 2, unranked: 0 },
+    standings: [{ boat: "US", source: "own", rank: 1, corrected_delta_s: 0 },
+                { boat: "Rival", rank: 2, corrected_delta_s: 600 }] });
+  ok(/Leading on corrected/.test(t.consider), "consider: " + t.consider);
 });
 
 (async () => {

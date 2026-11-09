@@ -878,14 +878,14 @@
       // face: our division standing (fall back to overall), rivals around us as the subtitle
       const value = orank.division != null && orank.division_of > 1
         ? ordinal(orank.division) + " of " + orank.division_of + " (div)"
-        : orank.overall != null ? ordinal(orank.overall) + " of " + orank.of : "—";
+        : orank.overall != null && orank.of > 1 ? ordinal(orank.overall) + " of " + orank.of : "—";
       const ahead = meIdx > 0 ? ranked[meIdx - 1] : null;
       const behind = meIdx >= 0 && meIdx < ranked.length - 1 ? ranked[meIdx + 1] : null;
       const subBits = [];
       if (ahead) subBits.push("▲ " + boatName(ahead) + " " + fmtD(ahead.corrected_delta_s));
       if (behind) subBits.push("▽ " + boatName(behind) + " " + fmtD(behind.corrected_delta_s));
       const basisTag = fl.corrected_basis === "full" ? "" : " · rest of race";
-      const sub = (subBits.join(" · ") || "est. standings") + basisTag;
+      const sub = noRankSub(fl, ranked, meIdx, orank) || ((subBits.join(" · ") || "est. standings") + basisTag);
       // tight racing on either side = watch (informational — there is no safety state here)
       const near = [ahead, behind].some((b) => b && Math.abs(b.corrected_delta_s) <= 120);
       const status = near ? "watch" : "ok";
@@ -906,7 +906,16 @@
         nAis + " on AIS, " + nTrk + " from the tracker (delayed" + (nDr ? ", " + nDr + " estimated forward" : "") + ")" +
         (unranked ? ", " + unranked + " with no position" : "") + ". ◆ = our division" +
         (fl.own_division ? " (" + fl.own_division + ")" : "") + ".";
-      const consider = near
+      // A lead needs a ranking: us ranked AND at least one other boat ranked. With no own rating
+      // or an unsupported scoring the engine leaves us unranked (#271); with no SOG or no rival
+      // positions only we are ranked. Either way "1st" is not a lead: say why instead.
+      const gapNote = (fl.gaps || []).find((g) => /no corrected gaps/.test(g)) || null;
+      const noRank = meIdx < 0 || orank.overall == null;
+      const alone = !noRank && ranked.length < 2;
+      const consider = noRank
+        ? "Not ranked: " + (gapNote || "no corrected time for us") + "."
+        : alone ? "No other boat ranked yet. No lead to call."
+        : near
         ? "Close with " + boatName(Math.abs((ahead || {}).corrected_delta_s || 9e9) <= Math.abs((behind || {}).corrected_delta_s || 9e9) ? ahead : behind) + " on corrected. Cover at the crossings."
         : ahead ? "Chase " + boatName(ahead) + ". Stay ahead of " + (behind ? boatName(behind) : "the boats behind") + "."
         : "Leading on corrected. Cover, no flyers.";
@@ -1365,6 +1374,12 @@
     }
     return bits.length ? "from: " + bits.join(" · ") : null;
   }
+  /* FLEET sub when there is no ranking to show: the engine's gap note (#271), else why. */
+  function noRankSub(fl, ranked, meIdx, orank) {
+    if (meIdx >= 0 && orank.overall != null && ranked.length > 1) return null;
+    const gap = (fl.gaps || []).find((g) => /no corrected gaps/.test(g));
+    return gap || (meIdx < 0 || orank.overall == null ? "not ranked" : "no other boat ranked");
+  }
   /* Short labels for whatever the health checks are flagging — the DATA tile face has room for
      "⚑ aws, compass vs GPS", not for the engine's full sentence (which is in the detail). */
   function healthChips(h) {
@@ -1376,6 +1391,8 @@
     for (const f of (c.lead_source || {}).went_silent || []) out.push(f.channel);
     for (const f of (c.own_ship || {}).ais_leading || []) out.push("AIS in " + f.channel);
     if (((c.policy_binds || {}).unresolvable || []).length) out.push("priority unbound");
+    // #185-4: a mapped sensor is off the bus and another device now holds its N2K address
+    if ((c.n2k_addresses || {}).status === "warn") out.push("sensor missing");
     return out;
   }
   /* does any number on this tile come from a backup sensor? the tile head shows ⚑ if so */

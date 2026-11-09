@@ -69,9 +69,78 @@ AIS_MARKER_PATHS = ("sensors.ais.class", "atonType.id", "design.aisShipType.id",
                     "navigation.specialManeuver", "offPosition")
 
 
+# A live-verified map per boat, set by the onboard engine after it reads Signal K's sources
+# (`set_verified`). When present it wins over the static map, so source priority follows the
+# DEVICE when an N2K address is re-claimed. Nothing else sets it: the cloud and the replay keep
+# the static map.
+_VERIFIED = {}
+
+
 def devices_for(boat_id):
-    """The address→device map for a boat, or {} when we have none (label-only matching)."""
-    return DEVICES_BY_BOAT.get(boat_id, {})
+    """The address→device map for a boat, or {} when we have none (label-only matching).
+    The live-verified map when the engine has one (`set_verified`), else the static map."""
+    return _VERIFIED.get(boat_id) or DEVICES_BY_BOAT.get(boat_id, {})
+
+
+def set_verified(boat_id, devices):
+    """Install (or, with None/{}, clear) the live-verified map `devices_for` returns."""
+    if devices:
+        _VERIFIED[boat_id] = dict(devices)
+    else:
+        _VERIFIED.pop(boat_id, None)
+
+
+def same_device(a, b):
+    """Two device records name the same unit: same model, and the same serial when BOTH carry
+    one (a list without serials must not disprove an unchanged device)."""
+    a, b = a or {}, b or {}
+    if a.get("model") != b.get("model"):
+        return False
+    return not (a.get("serial") and b.get("serial")) or a["serial"] == b["serial"]
+
+
+def find(device, live, prefer=None):
+    """The address in `live` answering as `device` (`prefer` when it does), or None. Only at
+    `prefer` may a record without a serial match on model alone: elsewhere it takes serials on
+    both sides, or one serial-less GNX120 would 'be' all three displays."""
+    serial = (device or {}).get("serial")
+    hits = sorted(s for s, d in (live or {}).items() if same_device(d, device)
+                  and (s == prefer or (serial and d.get("serial"))))
+    if prefer in hits:
+        return prefer
+    return hits[0] if hits else None
+
+
+def verified(payload, devices):
+    """The address→device map priority should bind to, given a live sources payload.
+
+    Every address that answers with product info is taken as it answers NOW. A mapped address
+    that does not answer keeps its static entry (the device may just be off), unless its device
+    now answers at another address, in which case the stale address is dropped. A device is its
+    model plus serial: the GPSMAP 943 and its virtual input handler share a serial."""
+    live = build_from_signalk(payload)
+    out = {s: d for s, d in (devices or {}).items() if s not in live and find(d, live) is None}
+    out.update(live)
+    return out
+
+
+def moved(payload, devices):
+    """The `drift()` findings, explained: for each re-claimed address, which device the map
+    expected, which answers now, and where the expected device went (its new address, or None
+    when it is not on the bus). Also a mapped device that answers at a NEW address while its old
+    one is silent (`found` None): not drift, but still a move."""
+    live = build_from_signalk(payload)
+    out = []
+    for source, _want, _got in drift(payload, devices):
+        exp = devices[source]
+        out.append({"source": source, "expected": exp.get("model"),
+                    "found": live[source].get("model"), "now_at": find(exp, live)})
+    for source, exp in sorted((devices or {}).items()):
+        new = find(exp, live)
+        if source not in live and new and new != source:
+            out.append({"source": source, "expected": exp.get("model"), "found": None,
+                        "now_at": new})
+    return out
 
 
 def resolve(source, devices):
@@ -121,13 +190,19 @@ def unresolved(matchers, devices, labels=()):
 def drift(payload, devices):
     """[(source, expected_serial, found_serial)] where a live sources payload disagrees with
     the map — an N2K address that has been re-claimed by another device. Sources absent from
-    the payload are not reported (a device can simply be powered off)."""
+    the payload are not reported (a device can simply be powered off). A different MODEL counts
+    too, not only a different serial: the GPSMAP 943 and its virtual input handler share one."""
     live = build_from_signalk(payload)
     out = []
     for source, want in (devices or {}).items():
         got = live.get(source)
-        if got and got.get("serial") and want.get("serial") and got["serial"] != want["serial"]:
-            out.append((source, want["serial"], got["serial"]))
+        if not got:
+            continue
+        other_model = bool(want.get("model")) and got.get("model") != want.get("model")
+        other_serial = (bool(got.get("serial")) and bool(want.get("serial"))
+                        and got["serial"] != want["serial"])
+        if other_model or other_serial:
+            out.append((source, want.get("serial"), got.get("serial")))
     return sorted(out)
 
 
@@ -149,7 +224,12 @@ def build_from_signalk(payload):
         model = src.get("modelId")
         if not model:
             continue
-        out[label] = {"manufacturer": src.get("manufacturerCode"), "model": model,
+        # REST payloads can carry the numeric N2K manufacturer code; identity() joins strings,
+        # so never let a number through (a crash there takes every priority read down).
+        maker = src.get("manufacturerCode")
+        if maker is not None and not isinstance(maker, str):
+            maker = src.get("manufacturerName") or str(maker)
+        out[label] = {"manufacturer": maker, "model": str(model),
                       "serial": str(src.get("modelSerialCode") or "") or None}
     return out
 
