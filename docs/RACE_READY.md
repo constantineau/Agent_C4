@@ -33,8 +33,9 @@ The card (unbranded "ASTC") has corrupted the archive three times (Jul 18, Oct 2
 - **Do:** fit a high-endurance card or a USB SSD. Bring the Pi up per `pi/SETUP.md` (fresh clone,
   one `compose up`). Then bring it to the deployed state per `pi/deploy/README.md`, and check
   `cat ~/DEPLOYED` on the box.
-- **Pass:** all Pi services up (`docker ps`); `curl -s localhost:8200/health` ok; the hourly
-  archive check finishes clean at least once; the old card is kept as a spare.
+- **Pass:** all Pi services up (`docker ps`); `curl -s localhost:8200/health` ok; the archiver's
+  background `quick_check` (runs after startup, then every 5 days, only with no session open)
+  finishes clean at least once on the new card, seen in the archiver log; the old card is kept as a spare.
 - **Owner:** Cole (hands), agent (prep and verify).
 
 ### S2. Copy-off aboard and the gated prune (#181, #243)
@@ -136,7 +137,7 @@ Two races on the same course in one day (#41, #246, merged in #286).
 A long Starlink outage must lose nothing (#243, #283: no queue cap, paged replay).
 
 - **Do:** with everything on, unplug Starlink for 2 h (longer if the dock allows). Plug it back.
-- **Watch:** queue size on the Pi (`docker compose -f compose.pi.yml exec uplink ls /var/lib/sr33/queue | wc -l`);
+- **Watch:** queue size on the Pi (`docker compose -f compose.pi.yml exec uplink sh -c 'ls /var/lib/sr33/queue/*.json 2>/dev/null | wc -l'`);
   uplink log; on the VPS, rows per minute in `telemetry_raw` over the outage window.
 - **Pass:** the queue drains to zero; the cloud has 15 s rows across the whole outage, no gap;
   live data keeps its 15 s cadence while the backlog replays; nothing in `quarantine/`.
