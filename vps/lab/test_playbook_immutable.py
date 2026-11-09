@@ -165,6 +165,17 @@ with open(pbstore._path(p1), "w") as f:
     json.dump(dict(whole, signature=dict(whole["signature"], alg="broken")), f)
 freeze()
 check("so is a broken signature algorithm", synthesis.verify_bundle(pbstore.get(p1) or {}))
+ra = []
+for v, at in (("a", 10), ("b", 20)):
+    t = synthesis.sign_bundle({"race_id": "r1", "course_id": "rep", "variants": [{"id": v}]})
+    t["signature"]["signed_at"] = at
+    ra.append((pbstore.save(t), t))
+with open(pbstore._path(ra[0][0]), "w") as f:
+    json.dump(dict(ra[0][1], signature=dict(ra[0][1]["signature"], value="broken")), f)
+pbstore.save(synthesis.sign_bundle(dict(ra[0][1], signature=None)))    # re-frozen now
+revs = {b["id"]: b["rev"] for b in pbstore.list_bundles()}
+check("a repaired revision keeps its number", revs[ra[0][0]] == 1 and revs[ra[1][0]] == 2
+      and synthesis.verify_bundle(pbstore.get(ra[0][0])))
 
 print("ok" if ok else "FAILED")
 sys.exit(0 if ok else 1)

@@ -105,8 +105,18 @@ def save(bundle: dict) -> str:
                 or (_sig_value(bundle) == digest and _sig_value(old) != digest):
             # the file under this id is damaged (it no longer holds the content its id names, or
             # its signature no longer matches it while this one does):
-            # put the named content back, the one case a file is replaced
-            atomicio.write_bytes(_path(pid), data)
+            # put the named content back, the one case a file is replaced. It keeps its place in
+            # the revision order: the first freeze time (signed_at is outside the digest) and the
+            # file's write time
+            path, at = _path(pid), _mtime_ns(_path(pid))
+            old_at = ((old or {}).get("signature") or {}) if isinstance(old, dict) else {}
+            old_at = old_at.get("signed_at") if isinstance(old_at, dict) else None
+            if isinstance(old_at, (int, float)) and isinstance(bundle.get("signature"), dict):
+                bundle = dict(bundle, signature=dict(bundle["signature"], signed_at=old_at))
+                data = json.dumps(bundle, indent=2).encode("utf-8")
+            atomicio.write_bytes(path, data)
+            if at:
+                os.utime(path, ns=(at, at))
     return pid
 
 
