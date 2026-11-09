@@ -136,7 +136,10 @@ def _cell_dir(cache_dir: str) -> str:
 
 
 def _extract_dir(cache_dir: str) -> str:
-    return os.path.join(cache_dir, "extract")
+    """Versioned with the extraction rules: extracts made under older rules (before #242 a failed
+    ogr2ogr run could leave a partial file) are never read again; the next build extracts afresh
+    from the S-57 cells on disk (Codex on #287)."""
+    return os.path.join(cache_dir, f"extract-{DATA_VERSION}")
 
 
 def _ensure_cell_s57(cell: dict, cache_dir: str) -> str | None:
