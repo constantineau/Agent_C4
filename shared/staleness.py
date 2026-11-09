@@ -37,7 +37,7 @@ ONBOARD = {
 }
 _FAST_CLOUD = (45, 45, 120)
 CLOUD = {ch: _FAST_CLOUD for ch in ONBOARD}
-CLOUD.update({"water_temp": (60, 60, 300), "bank_voltage": (60, 60, 300)})
+CLOUD.update({"water_temp": (60, 45, 300), "bank_voltage": (60, 45, 300)})   # failover 45 s, as every cloud channel
 
 # A channel not in the table (a new path) gets the slow limits: never tighter than the data.
 _DEFAULT = {"onboard": (10, 10, 60), "cloud": (60, 60, 300)}

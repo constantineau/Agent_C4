@@ -144,6 +144,31 @@ t = tactics.get_tactics()
 check("60 s of wind in the 12-min window → no call yet (6 samples were enough before)",
       t.get("available") is False and "history" in t.get("note", ""))
 
+HDG_OLD = dict(FRESH, **{HDG: 20.0, COG: 20.0})
+
+
+class Veer(Stub):
+    """Wind veering 200° → 220° over the window: a lasting shift right."""
+
+    def series(self, path, minutes):
+        rows = super().series(path, minutes)
+        if path != TWD or not rows:
+            return rows
+        t0, n = rows[0][0], len(rows)
+        return [(t, (200 + 20 * i / n) * 3.14159265 / 180) for i, (t, _v) in enumerate(rows)]
+
+    def latest_sample(self, path):
+        smp = super().latest_sample(path)
+        return (220 * 3.14159265 / 180, smp[1]) if (smp and path == TWD) else smp
+
+
+st = Veer(HDG_OLD)
+datasource.active = lambda: st
+navigator.get_navigator = lambda route=None: {"available": False}
+t = tactics.get_tactics()
+check("lasting shift with heading and COG 20 s old → no favoured side (point of sail unknown)",
+      t.get("available") is True and t.get("favored_side") == "either")
+
 print("plan gap:")
 use(dict(FRESH, **{TWS: 20.0, TWD: 20.0}))
 check("20 s old wind aboard → no observed wind", plangap._observed_wind() == (None, None, 0))

@@ -111,7 +111,12 @@ def get_tactics(route: str = None):
         phase = wp.phase_on_tack(sign, tack, pos) if persistent else "even"
 
     # favored side — POINT-OF-SAIL aware (a right shift favours the right of a beat, the left of a run)
-    if persistent:
+    if persistent and hdg is None:
+        # No live heading or COG (both past their dead limit, #247): the point of sail is a
+        # guess, and a right shift favours opposite sides upwind and downwind. No side call.
+        favored = "either"
+        fav_reason = "lasting shift, but no live heading to tell which side"
+    elif persistent:
         favored = wp.favored_side(sign, pos) or "either"
         fav_reason = f"lasting shift {abs(round(slope, 1))}°/min"
     else:
