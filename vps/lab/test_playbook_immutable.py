@@ -151,6 +151,11 @@ with open(pbstore._path(p1), "w") as f:
     json.dump(dict(whole, signature={"alg": "sha256", "value": "broken"}), f)
 freeze()
 check("a broken signature alone is repaired too", synthesis.verify_bundle(pbstore.get(p1) or {}))
+whole = pbstore.get(p1)
+with open(pbstore._path(p1), "w") as f:
+    json.dump(dict(whole, signature=dict(whole["signature"], alg="broken")), f)
+freeze()
+check("so is a broken signature algorithm", synthesis.verify_bundle(pbstore.get(p1) or {}))
 
 print("ok" if ok else "FAILED")
 sys.exit(0 if ok else 1)

@@ -89,7 +89,7 @@ def _write_new(path: str, data: bytes) -> bool:
 
 def _sig_value(b):
     sig = b.get("signature")
-    return sig.get("value") if isinstance(sig, dict) else None
+    return sig.get("value") if isinstance(sig, dict) and sig.get("alg") == "sha256" else None
 
 
 def save(bundle: dict) -> str:
