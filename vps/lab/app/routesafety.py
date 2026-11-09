@@ -78,8 +78,11 @@ def set_override(definition, course_id, mark, by, why, now=None):
     course. Returns (definition, error). The mark must be one of the course's nav marks."""
     from shared import race_def
     courses = (definition or {}).get("courses") or []
-    course = next((c for c in courses if c.get("id") == course_id), None) or \
-        (courses[0] if courses else None)
+    course = next((c for c in courses if c.get("id") == course_id), None)
+    if course is None and course_id:
+        # a course named but not in the race (a stale Lab page): never another course's chart
+        return definition, "No such course."
+    course = course or (courses[0] if courses else None)
     if not course:
         return definition, "No course."
     names = [n for _s, n, _a, _o in race_def.course_to_marks(definition, course.get("id"))[0]]

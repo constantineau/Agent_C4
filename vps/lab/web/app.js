@@ -1787,7 +1787,7 @@ function renderOptResult(r) {
         <button id="shareBtn" onclick="shareGameplan(this)" title="A view-only link to the route player. No login needed.">🔗 Share player</button></div>
       ${r.start && r.start.note ? `<div class="opt-start-note">${esc(r.start.note)}</div>` : ""}
       ${optDegradedBanner(r)}
-      ${safetyPanel(r.safety, "route")}
+      ${safetyPanel(r.safety, "route", { race: Opt.raceId, course: r.course_id })}
       ${r.timed_out ? '<div class="pill warn">Routing ran out of time. The route may be incomplete.</div>' : ""}
       <details class="rail-sec" open><summary>Legs</summary>
         <div class="legs-head"><span class="muted" style="font-size:11px">Tap a leg to show it on the map.</span>
@@ -2033,6 +2033,7 @@ async function synthPlaybook() {
   const startEpoch = optStartEpoch();
   if (startEpoch != null) body.start_epoch = startEpoch;
   Pb.running = true; Pb.result = null; Pb.jobId = null;
+  Pb.ctx = { race: body.race_id, course: body.course_id };   // what this playbook is built on
   const b = document.getElementById("pbRun"); if (b) { b.disabled = true; b.textContent = "Building… (about 10 min)"; }
   out.innerHTML = '<div class="loading" style="margin-top:10px">Routing each forecast scenario and writing the playbook. About 10 min. You can keep working.</div>';
   try {
@@ -2056,7 +2057,7 @@ function renderPbResult(b) {
   const out = document.getElementById("pbOut"); if (!out) return;
   if (b.available === false || !b.variants) {
     out.innerHTML = `<div class="placeholder" style="margin-top:10px">No playbook: ${esc(b.note || b.detail || "unavailable")}</div>
-      ${safetyPanel(b.safety, "playbook")}`;
+      ${safetyPanel(b.safety, "playbook", pbCtx(b))}`;
     return;
   }
   const safe = !!(b.safety && b.safety.ok);
@@ -2074,7 +2075,7 @@ function renderPbResult(b) {
       </div>
       ${pbBoatModelNote(b)}
       ${pbWarnings(b)}
-      ${safetyPanel(b.safety || { ok: false, problems: [{ text: "Built before route checks. Build the playbook again." }] }, "playbook")}
+      ${safetyPanel(b.safety || { ok: false, problems: [{ text: "Built before route checks. Build the playbook again." }] }, "playbook", pbCtx(b))}
     </div>
     <div class="pb-variants">${b.variants.map((v) => pbVariantCard(v, v.id === b.recommended)).join("")}</div>
     ${pbPlaysSection(b)}
@@ -2131,23 +2132,32 @@ function pbPlayCard(p) {
 // #242: the route checks. A route that fails one can't be frozen, deployed or sent as GPX. A mark the
 // chart puts on land or shallow water can get a reviewed chart override (who + why), which opens the
 // chart at that mark only; then build again.
-function safetyPanel(s, what) {
+// The race + course a playbook result was built on: its own, else what the build asked for.
+function pbCtx(b) {
+  return { race: (b && b.race_id) || (Pb.ctx && Pb.ctx.race), course: (b && b.course_id) || (Pb.ctx && Pb.ctx.course) };
+}
+// `ctx` = {race, course}: the race and course THIS result was routed on. The override buttons carry
+// them, so a click never lands on whichever course is selected now (Codex on #287).
+function safetyPanel(s, what, ctx) {
   if (!s) return "";
+  const at = `data-race="${esc((ctx && ctx.race) || "")}" data-course="${esc((ctx && ctx.course) || "")}"`;
   const ov = (s.overrides || []).map((o) => `<li>${esc(o.mark)}: chart override by ${esc(o.by)}${o.at ? ", " + esc(fmtDate(o.at)) : ""}. ${esc(o.why)}
-      <button class="mini" data-mark="${esc(o.mark)}" onclick="chartOverride(this.dataset.mark, true)">Remove</button></li>`).join("");
+      <button class="mini" data-mark="${esc(o.mark)}" ${at} onclick="chartOverride(this.dataset.mark, true, this.dataset.race, this.dataset.course)">Remove</button></li>`).join("");
   // Cole on #242: no ENC depths (Canada) never fails a route; those legs are named here
   const notes = (s.notes || []).map((n) => `<div class="pill warn" style="display:block;margin-top:6px;text-align:left">
     ${esc(n.text || "No depth data: check the paper chart.")}${(n.legs || []).length ? `<br><span style="font-weight:400">${(n.legs || []).map(esc).join(", ")}</span>` : ""}</div>`).join("");
   if (s.ok) return (ov ? `<div class="muted" style="font-size:12px;margin-top:6px">Route checks passed.<ul style="margin:2px 0 0 16px;padding:0">${ov}</ul></div>` : "") + notes;
   const items = (s.problems || []).map((p) => `<li>${p.route ? esc(p.route) + ": " : ""}${esc(p.text || p.code)}
-      ${p.mark && (p.code === "blocked" || p.code === "unreached") ? `<button class="mini" data-mark="${esc(p.mark)}" onclick="chartOverride(this.dataset.mark)">Chart wrong here?</button>` : ""}</li>`).join("");
+      ${p.mark && (p.code === "blocked" || p.code === "unreached") ? `<button class="mini" data-mark="${esc(p.mark)}" ${at} onclick="chartOverride(this.dataset.mark, false, this.dataset.race, this.dataset.course)">Chart wrong here?</button>` : ""}</li>`).join("");
   return `<div class="pill bad" style="display:block;margin-top:8px;text-align:left">
     <b>⛔ Route checks failed. No freeze, Deploy or GPX${what === "route" ? " from this route" : ""}.</b>
     <ul style="margin:4px 0 0 16px;padding:0">${items}</ul>
     ${ov ? `<div style="font-weight:400;margin-top:4px">Chart overrides:<ul style="margin:2px 0 0 16px;padding:0">${ov}</ul></div>` : ""}</div>${notes}`;
 }
 
-async function chartOverride(mark, remove) {
+async function chartOverride(mark, remove, race, course) {
+  const rid = race || Opt.raceId, cid = course || null;   // the result's own race + course
+  if (!rid) return;
   let by = "", why = "";
   if (!remove) {
     by = (prompt(`Chart override at ${mark}: opens the chart there. Only for a chart error.\nYour name:`) || "").trim();
@@ -2155,12 +2165,11 @@ async function chartOverride(mark, remove) {
     why = (prompt("Why is the chart wrong here?") || "").trim();
     if (!why) return;
   } else if (!confirm(`Remove the chart override at ${mark}?`)) return;
-  const rid = Opt.raceId;
   try {
     // through the race-definition save queue, so it can't interleave with a tab's own save
     const r = await queueDef(async () => {
       const res = await apiPost("/api/races/" + encodeURIComponent(rid) + "/chart-override",
-        { course_id: Opt.courseId, mark, by, why });
+        { course_id: cid, mark, by, why });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(j.detail || "error " + res.status);
       return j;

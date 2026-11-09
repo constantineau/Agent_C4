@@ -490,6 +490,13 @@ check("override recorded with who/when/why",
                                                                     "why": "chart shows rock that isn't there"})
 check("override needs a name", RS.set_override(course("port"), "c", "W", "", "x")[1] is not None)
 check("override on an unknown mark refused", RS.set_override(course("port"), "c", "Nope", "C", "x")[1])
+d_two = course("port")
+d_two["courses"].append(dict(d_two["courses"][0], id="other"))
+d_two, err2 = RS.set_override(d_two, "deleted-course", "Finish", "C", "x")
+check("override on a course that isn't in the race refused, nothing recorded (Codex on #287)",
+      err2 == "No such course." and not any(c.get("chart_overrides") for c in d_two["courses"]))
+check("no course named: the race's first course, as the router picks",
+      RS.set_override(course("port"), None, "W", "C", "x")[1] is None)
 d_ov, _ = RS.set_override(d_ov, "c", "W", "", "")
 check("empty why removes it", "chart_overrides" not in d_ov["courses"][0])
 
