@@ -2,7 +2,8 @@
 push, no GPX; a reviewed chart override is recorded on the course (who, when, why).
 
 Pins (no network, temp dirs):
-  * freeze refuses a bundle whose route checks failed, and one built before the checks;
+  * freeze takes the server's own synthesis result (by job id), never a bundle sent back by the
+    browser, and refuses one whose route checks failed or that was built before the checks;
   * lock-in refuses such a frozen bundle; the Deploy check (`bundle_problem`, used by Push and by
     the readiness banner) refuses it;
   * the GPX export refuses it;
@@ -60,18 +61,36 @@ def bundle(safety, start=100):
 
 
 print("freeze:")
-r = client.post("/api/playbook/freeze", json={"bundle": bundle(BAD)})
+import time  # noqa: E402
+
+from app import jobs  # noqa: E402
+
+
+def built(jid, b):
+    """A finished synthesis run on the server, as the job store keeps it."""
+    jobs._DONE.setdefault("synthesis", {})[jid] = {"state": "done", "job_id": jid, "bundle": b,
+                                                 "finished_at": time.time()}
+
+
+built("j-bad", bundle(BAD))
+built("j-old", bundle(None))
+built("j-good", bundle(GOOD))
+built("j-forged", dict(bundle(GOOD, start=150), consensus={"safety": BAD}))
+r = client.post("/api/playbook/freeze", json={"job_id": "j-bad"})
 check("a failed route check: refused", r.status_code == 409 and not r.json().get("frozen"), r.text[:120])
 check("...and says why", "shallow water" in r.json().get("detail", ""))
-r = client.post("/api/playbook/freeze", json={"bundle": bundle(None)})
+r = client.post("/api/playbook/freeze", json={"job_id": "j-old"})
 check("a bundle built before the checks: refused", r.status_code == 409, r.text[:120])
+r = client.post("/api/playbook/freeze", json={"job_id": "j-forged"})
+check("a top-level ok over a failed route: refused", r.status_code == 409, r.text[:120])
 r = client.post("/api/playbook/freeze", json={"bundle": bundle(GOOD)})
+check("a bundle sent by the browser: refused (freeze what the server built)",
+      r.status_code == 409, r.text[:120])
+r = client.post("/api/playbook/freeze", json={"job_id": "nope"})
+check("an unknown run: refused", r.status_code == 409, r.text[:120])
+r = client.post("/api/playbook/freeze", json={"job_id": "j-good"})
 check("a bundle that passed: frozen", r.status_code == 200 and r.json().get("frozen"), r.text[:120])
 good_id = r.json().get("id")
-
-r = client.post("/api/playbook/freeze", json={"bundle": dict(bundle(GOOD, start=150),
-                                                       consensus={"safety": BAD})})
-check("a forged top-level ok over a failed route: refused", r.status_code == 409, r.text[:120])
 
 print("lock-in, Deploy, GPX:")
 bad_frozen = synthesis.sign_bundle(bundle(BAD, start=200))    # e.g. frozen before this check

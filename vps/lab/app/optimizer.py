@@ -908,6 +908,23 @@ def _rounding_corner(plat, plon, mlat, mlon, nlat, nlon, side, nm=None):
     return [_advance(mlat, mlon, (a0 + turn * k / n) % 360.0, nm) for k in range(1, n + 1)]
 
 
+def _corner_speed(wf, P, lat, lon, t, hdg, helm=1.0):
+    """Speed (kn) for one step round a mark on heading `hdg`: the polar at the wind there, or the
+    beat VMG made good along `hdg` when it points inside the no-go zone. None: no wind, no speed."""
+    w = wf.wind_at(lat, lon, t) or _nearby_wind(wf, lat, lon, t)
+    if not w:
+        return None
+    tws, twd = w
+    twa = abs(_wrap180(hdg - twd))
+    sp = _polar_speed(P, tws, twa)
+    if sp < 0.3:
+        beat = _vmg_twa(P, tws, "beat")
+        sp = (_polar_speed(P, tws, beat) * math.cos(math.radians(beat - twa))
+              if beat is not None and twa < beat else 0.0)
+    sp *= helm
+    return sp if sp >= 0.3 else None
+
+
 def _sweep(pts, mlat, mlon):
     """Signed angle (deg) the bearing from the mark to the boat turns through along `pts`
     [(lat, lon)]: negative = the boat went counter-clockwise round it (mark on its left)."""
@@ -1195,16 +1212,24 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
             if leg_obs is not None and any(leg_obs.crosses(*a, *b) for a, b in zip(pts, pts[1:])):
                 corner = []            # no clean way round at the standoff: the side check judges
             else:
-                hrs = max(1e-6, (leg["eta"] - t) / 3600.0)
-                kn = max(2.0, (leg.get("sailed_nm") or 0.0) / hrs)     # the leg's own pace
-                tt, extra = leg["eta"], 0.0
-                leg = dict(leg, path=list(leg["path"]))
+                # priced like any step: the polar at the wind there (forecast, or borrowed within
+                # the fill limit), helm included; a step inside the no-go zone is tacked through
+                # at the beat VMG. No wind or no speed: no corner, and the side check judges.
+                tt, extra, steps = leg["eta"], 0.0, []
                 for a, b in zip(pts, pts[1:]):
                     d = _hav_nm(*a, *b)
+                    kn = _corner_speed(wf, P, a[0], a[1], tt, _bearing(*a, *b), helm_factor)
+                    if kn is None:
+                        steps = None
+                        break
                     tt += d / kn * 3600.0
                     extra += d
-                    leg["path"].append({"lat": round(b[0], 5), "lon": round(b[1], 5), "t": tt})
-                leg["eta"], leg["sailed_nm"] = tt, round(leg["sailed_nm"] + extra, 2)
+                    steps.append({"lat": round(b[0], 5), "lon": round(b[1], 5), "t": tt})
+                if steps:
+                    leg = dict(leg, path=list(leg["path"]) + steps, eta=tt,
+                               sailed_nm=round(leg["sailed_nm"] + extra, 2))
+                else:
+                    corner = []
         # sample wind + confidence at the leg's midpoint and end (for the briefing)
         mid = leg["path"][len(leg["path"]) // 2] if leg["path"] else {"lat": dlat, "lon": dlon}
         det = wf.detail_at(mid["lat"], mid["lon"], (t + leg["eta"]) / 2.0)

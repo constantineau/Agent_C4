@@ -749,12 +749,27 @@ async def playbook_synthesize_status(job_id: str = ""):
 
 @app.post("/api/playbook/freeze")
 async def playbook_freeze(body: dict):
-    """Sign + persist a playbook bundle — the frozen-at-the-gun homework deployed onboard. Pass a
-    `bundle` already synthesized (the common path: review then freeze), or race params to synthesize
-    and freeze in one shot. Returns the id + signature; the file IS the onboard-loadable artifact."""
+    """Sign + persist a playbook bundle — the frozen-at-the-gun homework deployed onboard. Pass the
+    `job_id` of the synthesis run (the common path: review then freeze; the server freezes its own
+    result, never a bundle sent back by the browser, #242), or race params to synthesize and freeze
+    in one shot. Returns the id + signature; the file IS the onboard-loadable artifact."""
     from . import synthesis
     body = body or {}
-    bundle = body.get("bundle")
+    bundle = None
+    if body.get("job_id"):
+        # #242: freeze what the server built (the synthesis job's own result), never a bundle the
+        # browser sends back: its route verdicts would be the browser's word
+        from . import jobs
+        st = jobs.status("synthesis", job_id=str(body["job_id"]))
+        bundle = st.get("bundle") if st.get("state") == "done" else None
+        if not isinstance(bundle, dict) or not bundle.get("variants"):
+            return JSONResponse({"detail": "That playbook is gone. Build it again, then freeze.",
+                                 "frozen": False}, status_code=409)
+        import copy
+        bundle = copy.deepcopy(bundle)
+    elif body.get("bundle"):
+        return JSONResponse({"detail": "Freeze from the playbook you built. Build it again, then freeze.",
+                             "frozen": False}, status_code=409)
     if not bundle:
         d, course_id, start_epoch, model_names, ens = _playbook_params(body)
         if not d:

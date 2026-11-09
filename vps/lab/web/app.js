@@ -2016,7 +2016,7 @@ async function synthPlaybook() {
     fan_depth: (document.getElementById("pbFan") || {}).value || "standard" };
   const startEpoch = optStartEpoch();
   if (startEpoch != null) body.start_epoch = startEpoch;
-  Pb.running = true; Pb.result = null;
+  Pb.running = true; Pb.result = null; Pb.jobId = null;
   const b = document.getElementById("pbRun"); if (b) { b.disabled = true; b.textContent = "Building… (about 10 min)"; }
   out.innerHTML = '<div class="loading" style="margin-top:10px">Routing each forecast scenario and writing the playbook. About 10 min. You can keep working.</div>';
   try {
@@ -2026,7 +2026,7 @@ async function synthPlaybook() {
     while (true) {
       await new Promise((r) => setTimeout(r, 10000));
       const st = await (await apiGet("/api/playbook/synthesize/status?job_id=" + encodeURIComponent(start.job_id || ""))).json();
-      if (st.state === "done") { Pb.result = st.bundle; break; }
+      if (st.state === "done") { Pb.result = st.bundle; Pb.jobId = start.job_id; break; }
       if (st.state === "error") { Pb.result = { available: false, note: st.error }; break; }
       if (st.state === "idle") { Pb.result = { available: false, note: "the playbook job stopped. Run it again." }; break; }
     }
@@ -2242,7 +2242,8 @@ async function freezePlaybook() {
   Pb.freezing = true;
   const b = document.getElementById("pbFreeze"); if (b) { b.disabled = true; b.textContent = "Freezing…"; }
   try {
-    const res = await apiPost("/api/playbook/freeze", { bundle: Pb.result });
+    // #242: the server freezes the playbook it built (by job), not the copy in the browser
+    const res = await apiPost("/api/playbook/freeze", { job_id: Pb.jobId });
     const r = await res.json();
     if (r.frozen) { Pb.result = r.bundle; Pb.frozenId = r.id; }
     else if (r.detail) alert("Not frozen. " + r.detail);    // #242: refused, and why

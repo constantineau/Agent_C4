@@ -93,6 +93,18 @@ for side in ("port", "starboard"):
     check(f"{side}: no wrong-side problem in the verdict",
           not any(p["code"] == "side" for p in (r.get("safety") or {}).get("problems", [{"code": "side"}])))
 
+class NoWind(Steady):
+    def wind_at(self, lat, lon, t):
+        return None
+
+
+up = O._corner_speed(Steady(8.5, 0.0), P, LAT0, LON0, 0, 340.0)     # 20° off: inside the no-go
+reach = O._corner_speed(Steady(8.5, 0.0), P, LAT0, LON0, 0, 270.0)
+check("a corner step into the wind is tacked through at the beat VMG (slower than a reach)",
+      up is not None and reach is not None and 0.3 <= up < reach, f"{up} vs {reach}")
+check("a corner step with no wind anywhere near: no speed",
+      O._corner_speed(NoWind(8.5, 0.0), P, LAT0, LON0, 0, 270.0) is None)
+
 print("2) the string test on hand-made paths")
 M = (0.0, 0.0)
 
