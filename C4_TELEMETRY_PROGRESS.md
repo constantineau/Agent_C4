@@ -3,13 +3,20 @@
 Goal (Cole): **lose no telemetry**, and **copy all telemetry off the Pi to the VPS**.
 Deletion from the boat is allowed only *after* an off-boat copy is sha256-verified.
 
+## ⏸ PICK UP HERE — 2026-11-09 LATE (session root-f0; main @ 0bf15ec, DEPLOYED)
+
+**#290 Race over (#241) merged (Cole "merge 290") + deployed:** main 0bf15ec. Pi engine + console (stamp 20261109T210753Z, `~/deploy-backups/raceover-20261109T210753Z`, images `:pre-20261109T210753Z`), record-deployed 8 files / 2 images, all endpoints 200, console serves `?v=ro1109a`, 0 restarts. VPS agent rollback `:pre-20261109e`.
+**Cole "all recommended" on #287 + #289:** #287 = check ENC depth where charts exist, flag the rest "No depth data: check the paper chart" (CHS = later ticket); Orin keeps its boat gap but uses only the Lab's signed overrides at marks. #289 = GPS 10 s / wind-heading-depth-speed 15 s onboard; "—" after 30 min; per-channel alert; backup failover 5 s aboard, cloud collision watch 60 s; results split repo doc + private /root/c4-ops/race-ready-2027/. Agents finishing both in worktrees optimizer-safe and drafts-247-250 (+ stale-limit code batch). Then Cole merges; #287 needs Lab rebuild + Bayview Finish override + re-freeze.
+**Next wave after:** #245 re-score, #248 shed order, #66 (needs Cole's tack target).
+
 ## ⏸ PICK UP HERE — 2026-11-09 EVENING (session root-f0; dev = main @ edbd10e, DEPLOYED)
 
 **Merged (Cole) + deployed ~18:57Z:** #281 Orin cache-cap doc, #282 regret on sailed current+waves (#244; follow-up #285), #283 telemetry no-loss (#243), #284 immutable playbooks + Deploy "Activate" (#249), #286 navigator runs: Start/Undo/mark pick, two-fix advance, tack names (#41 #64 #183 #246).
 - VPS Lab + agent recreated, rollback `:pre-20261109c` (Lab-only `:pre-20261109b` after #282). Both 200.
 - Pi (stamp 20261109T185612Z, `~/deploy-backups/w8-20261109T185612Z`): 5 files, all matched a91e0c9 first; engine + console + uplink rebuilt, images `:pre-20261109T185612Z`. All endpoints 200 incl /navigator, recording true, uplink sending, undated 0, 0 restarts. record-deployed: 5 files, 3 images.
 - Orin: git ff to edbd10e (doc only, no restart).
-**Open:** #242 optimizer-safe agent still running (worktree optimizer-safe). nav-start-line agent running (Cole OK: boat must cross the start line, not come within 110 m). #283 left for spring: archiver 7-day prune of non-session data needs ARCHIVE_OFFBOAT_LEDGER + copy-off aboard (archiver deploy). #286: stale limits 30 s onboard / 120 s cloud for position/wind are a proposal for Cole (decision 7 table). Matcher: DEFERRED (Cole will evaluate the tuning in detail).
+**#288 merged + deployed ~19:40Z** (main 34cc94e): leave the start only by crossing the line (90 m past the perpendicular through the start point; no pin in race defs). Pi engine (backup ~/deploy-backups/startline-*, image :pre-*), VPS agent rollback :pre-20261109d.
+**Open:** #242 optimizer-safe agent still running. race-over agent (#241) and drafts agent (#247 table, #250 checklist) running. #283 left for spring: archiver 7-day prune of non-session data needs ARCHIVE_OFFBOAT_LEDGER + copy-off aboard (archiver deploy). #286: stale limits 30 s onboard / 120 s cloud for position/wind are a proposal for Cole (decision 7 table). Matcher: DEFERRED (Cole will evaluate the tuning in detail).
 **Next wave:** #241 Race over (console now free), #247 stale table draft, #250 race-ready checklist draft, #245 re-score, #248 shed order.
 
 ## ⏸ PICK UP HERE — 2026-11-09 (session root-f0; dev = main @ a91e0c9)

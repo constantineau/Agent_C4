@@ -334,9 +334,9 @@ mid-race.
 ## 8. Frozen at the gun — what each path does while racing (2026-11-01)
 
 The bright line (§5, §6) is enforced in code, not by habit. The boat is the authority: its own race
-log (the crew taps race start at the gun, race end at the finish) says whether it is racing. One
-helper, `vps/agent/app/racegate.py`, decides for every load: a running session of kind `race` is
-racing; a race log that can't be read is racing (fail closed); the check and the write happen under
+log says whether it is racing. One helper, `vps/agent/app/racegate.py`, decides for every load: the
+race log's racing state is on → racing; a racing state that can't be read is racing (fail closed);
+the check and the write happen under
 the race log's session lock, so a session can't start in between. A refusal is
 `{"loaded": false, "detail": "Racing now. Not loaded."}`.
 
@@ -344,7 +344,7 @@ the race log's session lock, so a session can't start in between. A refusal is
 
 | Endpoint | Sender | While racing | Why |
 |---|---|---|---|
-| POST /course/load | Lab Deploy | **Refused** | Shore homework. A course shortened mid-race: the crew uses the practice course (POST /course/practice), or ends the race session first. |
+| POST /course/load | Lab Deploy | **Refused** | Shore homework. A course shortened mid-race: the crew uses the practice course (POST /course/practice), or taps Race over first. |
 | POST /fleet/load | Lab Deploy | **Refused** | Shore homework (roster, scoring, own rating). |
 | POST /playbook/load | Lab Deploy | **Refused** | Shore-computed strategy: the core of the rule. When taken, the engine forwards the bundle to the Orin copilot (COPILOT_URL, over the cable) while it still holds the session lock, and reports the Orin's answer under `copilot`. |
 | POST /checklist/load | Lab Deploy | **Refused** | Shore homework. |
@@ -421,10 +421,23 @@ session lock: an end carries the id the iPad shows and closes only that id ("Alr
 another session is running now), and a start closes only the session it replaces. The engine's playbook has no file way in (the old
 `PLAYBOOK_PATH` fallback is gone): only `/playbook/load`, through the gate.
 
-**Race log auto-close (`vps/agent/app/racelog.py`)**: the gate is only as good as the race session.
-Auto-close closes a forgotten session at its last under-way moment; it now re-checks under the
-session lock that the same session is still open and closes only that id, so a race the crew
-started during its (slow) check is never ended, and the gate never reopens mid-race.
+**Racing and recording are separate (#241, decided 2026-11-09)**: a session (LOG) is recording,
+"keep this window". Racing is "RRS 41 applies, no shore loading", persisted in the engine store
+(kv `race_state`), so an engine restart mid-race keeps it. Starting a RACE session (the gun tap)
+starts racing. Only the crew ends it, with **Race over** on the iPad (two taps; it sends the race
+start it shows, so a newer race is never ended). That covers an abandoned race too. Ending the LOG,
+or the recording auto-close, never ends racing, and a practice LOG start doesn't either. After 1 h
+of unbroken stopped readings the iPad asks "Race over?" (a suggestion only). After 24 h of unbroken
+stopped readings the boat ends racing itself, so a forgotten tap can't block next week's homework
+forever. Holes in the record never count toward either: the stopped stretch must run up to now with
+no gap longer than 5 min, so a powered-down boat or a dead bus stays racing until the crew taps.
+A boat upgraded with a race session open reads that session as racing once and writes it down.
+
+**Race log auto-close (`vps/agent/app/racelog.py`)**: this is retention housekeeping for the
+recording session only; it no longer touches the gate. It closes a forgotten session at its last
+under-way moment, only after an unbroken stretch of stopped readings (no hole longer than 5 min)
+covering the idle window. It re-checks under the session lock that the same session is still open
+and closes only that id.
 
 ---
 

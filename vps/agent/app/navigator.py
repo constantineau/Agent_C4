@@ -110,8 +110,9 @@ def _adiff(a, b):
 # Advance is now a PLANE crossing: you have passed a mark once you are beyond the plane through
 # it normal to the leg you are sailing — the OUTBOUND leg for the start line, the INBOUND leg for
 # a rounding. That is monotone on a normal course, so it is correct with no stored state at all,
-# which also keeps it replayable at an arbitrary moment. Close aboard (<= ROUND_NM) still counts,
-# so windward-leeward buoy racing behaves exactly as before. The kv latch is a ratchet layered on
+# which also keeps it replayable at an arbitrary moment. Close aboard (<= ROUND_NM) still counts
+# for a rounding, so windward-leeward buoy racing behaves exactly as before; it does NOT count for
+# the start, which is left only by crossing it (see _is_start). The kv latch is a ratchet layered on
 # top for the cases plane-crossing alone cannot see: drifting back over the line pre-start, or a
 # course that doubles back on itself.
 PASS_NM = 0.05             # distance beyond a mark's plane that counts as passed (~90 m)
@@ -169,11 +170,24 @@ def _plane_axis(marks, i):
     return None
 
 
+def _is_start(marks, i):
+    """Is marks[i] the start? The course's first mark when it is named Start (course_to_marks
+    names it so). The start is left by CROSSING it, never by being close to it: a boat milling
+    near the start mark before the gun is close aboard but has not started (#246 follow-up).
+
+    The race definition gives the start as ONE point (the committee boat stands in for the line;
+    there are no pin/committee ends to build a segment from), so "crossed the line" is the plane
+    through that point normal to the leg out to the first mark, PASS_NM beyond it, confirmed on
+    PROGRESS_CONFIRM distinct fixes like every other advance."""
+    return i == 0 and str(marks[0].get("name", "")).strip().lower() == "start"
+
+
 def _passed(marks, i, lat, lon):
     """Has the boat passed marks[i]? Pure — no I/O and no stored state, so it is unit-testable
-    and gives the same answer for a moment however you arrive at it."""
+    and gives the same answer for a moment however you arrive at it. Close aboard counts as a
+    rounding for every mark but the start, which only counts once it is crossed."""
     m = marks[i]
-    if _hav_nm(lat, lon, m["lat"], m["lon"]) <= ROUND_NM:
+    if not _is_start(marks, i) and _hav_nm(lat, lon, m["lat"], m["lon"]) <= ROUND_NM:
         return True                                                   # close aboard: a rounding
     axis = _plane_axis(marks, i)
     if axis is None:

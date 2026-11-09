@@ -525,6 +525,13 @@ body {
 .rec-pick[hidden] { display:none; }
 .ctl.rp { min-height:48px; min-width:110px; padding:10px 18px; font-size:17px; font-weight:700; }
 .ctl.rp.pre { background:var(--act); border-color:var(--act); color:#fff; }
+/* RACE OVER (#241): only while racing; amber when the boat asks "Race over?"; solid when armed */
+.ctl.raceover { min-height:48px; min-width:130px; padding:10px 18px; font-size:17px; font-weight:700; }
+.ctl.raceover[hidden] { display:none; }
+.ctl.raceover.ask { color:var(--watch); border-color:var(--watch); }
+.ctl.raceover.ask b { color:var(--watch); }
+.ctl.raceover.confirm { background:var(--act); border-color:var(--act); color:#fff; }
+.ctl.raceover.confirm b { color:#fff; }
 .st-plays-head { display: flex; justify-content: space-between; align-items: center;
   font-size: 11px; letter-spacing: 1px; opacity: 0.75; margin-bottom: 3px; }
 .st-gearbox { letter-spacing: 0; }
