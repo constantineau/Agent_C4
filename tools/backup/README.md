@@ -18,7 +18,7 @@ from the original file. Every script prints what it verified.
 | `archive_bench_to_gcs.sh` | the bench Signal K volume: hash → gzip → decompress → re-hash → upload |
 | `archive_pull_to_gcs.sh` | the 2026-08-30 boat pull, per file, + `MANIFEST-sha256.txt`; the ~6,300 small files go as one tarball verified with `tar --diff` against the live tree |
 | `verify_restore.sh` | **restores every object from Coldline** and hashes the stream against the manifest. Run this before deleting anything |
-| `delete_archived.sh` | deletes named files only after re-hashing the local copy against the manifest AND confirming the GCS object exists. Skips loudly, never guesses |
+| `delete_archived.sh` | deletes named files only after BOTH proofs, at delete time: the local copy still hashes to the manifest, AND the GCS object, read back in full and decompressed, hashes to the same sha256 (#243; an object merely existing is not enough). Skips loudly, exits 1 if anything was kept, never guesses |
 | `cut_jul15_race.sh` | lifts the Jul 15 race out of the 8.5 G delivery salvage at full resolution so the salvage could be deleted without losing the race |
 
 ## What is deliberately still on disk

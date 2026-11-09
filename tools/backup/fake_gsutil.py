@@ -60,7 +60,8 @@ def main(argv):
         sys.stderr.write(f"CommandException: No URLs matched: {url}\n")
         return 1
     if cmd == "cat":
-        sys.stdout.write(open(local(url)).read())
+        with open(local(url), "rb") as f:   # bytes: archived objects are compressed
+            sys.stdout.buffer.write(f.read())
     elif cmd == "stat":
         if "-q" in argv:                    # like the real gsutil: -q stat prints nothing
             return 0

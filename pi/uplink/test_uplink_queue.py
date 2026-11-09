@@ -368,3 +368,49 @@ def test_queued_batches_are_retried_on_a_quiet_bus(q):
     asyncio.run(go())
     assert [b["readings"][0]["value"] for b in posted] == [8]
     assert _names(q) == []
+
+
+def test_replay_is_paged_so_a_backlog_never_holds_up_the_live_window(q):
+    """#184-8: the queue has no cap, so after a long outage it can hold ~170k batches. Replaying
+    them all in one pass blocks the flusher for hours, and meanwhile the window keeps only the
+    latest value per reading: hours of windows would fold into one. A pass stops after its time
+    budget; the rest stays queued, in order, for the next pass."""
+    up = _load_uplink(q)
+    for k in range(50):
+        _write(q, f"20261106T12{k:04d}Z.json", _batch("2026-11-06T12:00:00Z", k))
+    now = [0.0]
+    up._clock = lambda: now[0]
+    up.REPLAY_BUDGET_S = 5.0
+    posted = []
+
+    def post(batch):                                  # each POST takes one "second"
+        now[0] += 1.0
+        posted.append(batch["readings"][0]["value"])
+    up._post = post
+    up._flush_queue()
+    assert posted == [0, 1, 2, 3, 4]
+    assert len(_names(q)) == 45                       # the rest is still queued, not dropped
+    for _ in range(20):
+        up._flush_queue()
+    assert posted == list(range(50)) and _names(q) == []
+
+
+def test_a_long_outage_keeps_every_batch_no_cap(q):
+    """Cole on #243: no cap on the queue, nothing evicted. A link down for a long stretch keeps
+    every batch on disk, and every one goes out, oldest first, when it comes back."""
+    up = _load_uplink(q)
+    up.CLOCK = _Clock(True)
+
+    def down(batch):
+        raise urllib.error.URLError("no route")
+    up._post = down
+    for k in range(3000):                             # one batch a minute, ~2 days
+        up.send([{"time": f"2026-10-{1 + k // 1440:02d}T{k % 1440 // 60:02d}:{k % 60:02d}:00Z",
+                  "source": "s", "path": "p", "value": k}])
+    assert len(_names(q)) == 3000
+    posted = []
+    up._post = lambda b: posted.append(b["readings"][0]["value"])
+    up.REPLAY_BUDGET_S = 1e9
+    up._flush_queue()
+    assert posted == list(range(3000))
+    assert _names(q) == [] and _names(q / "quarantine") == []

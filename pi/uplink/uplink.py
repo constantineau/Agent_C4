@@ -11,6 +11,13 @@ Per aggregation window it sends the latest value seen for each (source, path). O
 values (position {lat,lon}, attitude {roll,pitch,yaw}) are flattened into dotted numeric
 paths. A disk-backed queue replays batches if the cloud link (Starlink) drops.
 
+The queue has NO size cap and never evicts (Cole, #243; ADR-0004): a batch leaves it only when
+the VPS has accepted it, or into quarantine (kept on disk) when the VPS rejects it for good. In a
+very long outage the archiver's disk guard is the backstop, not a drop-oldest rule here. Replay
+is paged by time (UPLINK_REPLAY_BUDGET_S per pass) so a big backlog never holds up the live
+window: while a send runs, the window only keeps the latest value per reading, so an hour-long
+replay in one go would fold an hour of windows into one (#184-8).
+
 Identical on bench and boat; the only difference is CAN_IFACE (vcan0 vs can0), upstream of
 Signal K.
 """
@@ -59,6 +66,11 @@ _SEND_LOCK = threading.Lock()
 # Batches kept in RAM after a failed hand-off (disk full / I/O error) before the flusher stops
 # cutting new ones: 240 x 15 s = an hour.
 RETRY_MAX = int(os.environ.get("UPLINK_RETRY_MAX", "240"))
+# Longest one pass may spend replaying the queue before handing back to the flusher. Under the
+# aggregation window, so the next live window is cut on time; what is left stays queued, in order,
+# for the next pass.
+REPLAY_BUDGET_S = float(os.environ.get("UPLINK_REPLAY_BUDGET_S", str(AGG_SECONDS * 0.6)))
+_clock = time.monotonic
 CLOCK = clock_trust.ClockTrust(QUEUE_DIR / "clock-trusted") if clock_trust else None
 
 
@@ -249,10 +261,19 @@ def _flush_queue():
     rejects the payload as malformed) will fail identically on every future pass. A
     permanent failure has to be moved aside or it blocks every newer batch behind it
     forever.
+
+    Paged by time: after REPLAY_BUDGET_S it stops (at least one batch is always tried) and the
+    rest waits, still queued and in order, for the next pass (#184-8).
     """
     if not QUEUE_DIR.exists():
         return
-    for f in sorted(QUEUE_DIR.glob("*.json")):
+    queued = sorted(QUEUE_DIR.glob("*.json"))
+    deadline = _clock() + REPLAY_BUDGET_S
+    for i, f in enumerate(queued):
+        if i and _clock() >= deadline:
+            print(f"[uplink] replayed {i} queued batch(es), {len(queued) - i} still queued",
+                  flush=True)
+            return
         try:
             batch = json.loads(f.read_text())
         except (OSError, ValueError) as exc:
