@@ -291,8 +291,9 @@ check(f"…and so does the live read, though the Orca wrote last (got {live})", 
 print("cloud source: two publishers on ONE rank — window and live read pick the same one:")
 rows = cloud_rows()
 rows = [r for r in rows if r[1] != TWD]
-rows += [("derived-a", TWD, T - 100 + i, math.radians(200.0)) for i in range(100)]   # last T-1
-rows += [("derived-b", TWD, T - 10 + i, math.radians(210.0)) for i in range(11)]     # last T
+# both cover the window: tactics needs half of its 12 min filled before it calls a shift (#247)
+rows += [("derived-a", TWD, T - 720 + i, math.radians(200.0)) for i in range(720)]   # last T-1
+rows += [("derived-b", TWD, T - 720 + i, math.radians(210.0)) for i in range(721)]   # last T
 for prio_name, prio in (("same rank", SEEDED), ("unranked", dict(SEEDED, twd=[]))):
     cloud = run_cloud(rows, prio)
     win = {round(math.degrees(v), 3) for _, v in cloud.series(TWD, 12)}

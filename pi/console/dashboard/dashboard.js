@@ -752,10 +752,25 @@
   /* ============================ tile builders (live) ============================ */
   const BUILD = {
     wind(p) {
+      // #247: wind past its dead limit (15 s) is not "now". Its last number stays with a red
+      // age; no trend call is made from it.
+      const wDead = rawDead(p.conditions, ["tws", "twd"]);
+      if (wDead != null) {
+        const raw = p.conditions.raw, tws = (raw.tws || {}).value, twd = (raw.twd || {}).value;
+        return { status: "watch",
+          value: (tws != null && twd != null ? arrowKts(twd, tws) : "—") + " " + deadAge(wDead),
+          sub: "no fresh wind", why: "No wind reading for " + fmtAge(wDead * 1000) + ". Showing the last one.",
+          consider: "Wind sensor not sending. Check the masthead unit.", clears: "wind readings come back",
+          based: ["boat wind, " + fmtAge(wDead * 1000) + " old"], conf: "engine" };
+      }
       const pts = [["Now", 0], ["−60 min", 3600], ["−120 min", 7200]];
       const samples = pts.map(([lbl, ago]) => [lbl, observedAt(ago)]);
-      const nowS = samples[0][1] || (p.conditions && p.conditions.available ? { tws: p.conditions.tws, twd: p.conditions.twd } : null);
-      if (!nowS) return NA("collecting wind history…");
+      // only a REAL current reading: past 30 min the engine drops dead wind from `raw` too, and a
+      // null tws/twd is "no wind", not a steady breeze (#247)
+      const live = p.conditions && p.conditions.available && p.conditions.tws != null && p.conditions.twd != null
+        ? { tws: p.conditions.tws, twd: p.conditions.twd } : null;
+      const nowS = samples[0][1] || live;
+      if (!nowS) return NA(p.conditions && p.conditions.available ? "no live wind" : "collecting wind history…");
       if (!samples[0][1]) samples[0][1] = nowS;
       const rows = samples.map(([lbl, s], i) => ({ label: lbl, emph: i === 0, cols: [s ? arrowKts(s.twd, s.tws) : "—"] }));
       let oldest = null;
@@ -1023,7 +1038,14 @@
       const c = p.conditions, src = p.sources, h = currentHealth();
       const count = src && src.count != null ? src.count : 0;
       const anyStale = src && src.sources && src.sources.some((s) => s.last_seen_s > 45);
-      const linkSt = !c || !c.available ? "act" : (c.stale || anyStale) ? "watch" : "ok";
+      // #247: the stale alert per sensor group. A dead depth or GPS alone turns the tile, even
+      // while every other sensor is fresh (the engine's `dead_groups`: watch at the dead limit,
+      // act past 60 s).
+      const deadG = (c && c.available && c.dead_groups) || [];
+      const deadSt = deadG.some((g) => g.severity === "danger") ? "act" : deadG.length ? "watch" : "ok";
+      const linkSt0 = !c || !c.available ? "act" : (c.stale || anyStale) ? "watch" : "ok";
+      const linkSt = SEV[deadSt] > SEV[linkSt0] ? deadSt : linkSt0;
+      const deadTxt = deadG.map((g) => g.label + ": no reading for " + fmtAge(g.age_s * 1000)).join(". ");
       const noHealth = !h || !h.available || h.status === "unknown";
       const hSt = noHealth ? "na" : h.status === "danger" ? "act"
         : h.status === "warn" ? "watch" : "ok";
@@ -1039,7 +1061,7 @@
       // The face stays the live-source count — that is what the tile has always meant, and a
       // bare "1" for one flag reads like one sensor. The chips say what is wrong; the status
       // colour and word say how much it matters.
-      const chips = healthChips(h);
+      const chips = deadG.map((g) => g.label.toLowerCase() + " " + fmtAge(g.age_s * 1000) + " old").concat(healthChips(h));
       const face = String(count);
       const sub = chips.length
         ? "⚑ " + chips.slice(0, 2).join(", ") + (chips.length > 2 ? " +" + (chips.length - 2) : "")
@@ -1054,15 +1076,17 @@
         why: (!c || !c.available ? "No live data from the boat. " :
               count + " sensor group" + (count === 1 ? "" : "s") + " reporting"
               + (anyStale ? ", one stale. " : ". "))
+          + (deadTxt ? deadTxt + ". " : "")
           + (!h || !h.available ? "Sensor checks offline. Not checked."
              : flags.length ? "Check failed: " + flags.join("; ") + "."
              : noHealth ? "Sensors not checked yet."
              : "All sensor checks pass.")
           + (notes.length ? " Note: " + notes.join("; ") + "." : ""),
-        consider: flags.length ? "Don't trust the flagged reading. Check another instrument first."
+        consider: deadG.length ? "Don't trust " + deadG.map((g) => g.label.toLowerCase()).join(", ") + ". Sensor not sending."
+          : flags.length ? "Don't trust the flagged reading. Check another instrument first."
           : st === "ok" ? "Instruments agree. Safe to use."
           : "Check a second instrument before trusting one reading.",
-        clears: flags.length ? "the check passes again" : st === "ok" ? "—"
+        clears: deadG.length ? "the sensor sends again" : flags.length ? "the check passes again" : st === "ok" ? "—"
           : noHealth && linkSt === "ok" ? "the sensor checks run" : "all sources fresh",
         based: [count + " sources",
                 !h || !h.available ? "checks: offline" : noHealth ? "checks: not run" : "checks: " + h.reason]
@@ -1075,6 +1099,14 @@
     bank(p) {
       const b = currentPower();
       if (!b || b.available === false) return NA(b && b.note ? b.note : "no bank voltage");
+      if (b.stale) {
+        // #247: past 60 s with no reading the engine withdraws the verdict; the last volts stay
+        // with a red age, grey (not checked), never green
+        return { status: "na", value: (b.volts_last != null ? Number(b.volts_last).toFixed(2) : "—") + " V " + deadAge(b.age_s || 0),
+          sub: "no fresh reading", why: "No bank reading for " + fmtAge((b.age_s || 0) * 1000) + ". Showing the last one.",
+          consider: "Check the Orca Core is sharing the bank voltage.", clears: "bank readings come back",
+          based: ["bank voltage, " + fmtAge((b.age_s || 0) * 1000) + " old"], conf: "engine" };
+      }
       const st = b.status === "danger" ? "act" : b.status === "warn" ? "watch" : "ok";
       const trend = b.trend_v_per_h;
       // two bits at most on the face — the projection is what you act on, the window minimum is
@@ -2172,6 +2204,14 @@
     return worst;
   }
   const fmtAge = (ms) => (ms < 60000 ? Math.round(ms / 1000) + "s" : Math.round(ms / 60000) + "m");
+  /* #247: a reading past its channel's dead limit keeps its number with a RED age; the engine
+     says which (`raw[ch].state` on /conditions). Past 30 min the engine drops it: "—". */
+  const deadAge = (sec) => '<span class="age-dead">' + fmtAge(Math.max(0, sec) * 1000) + " old</span>";
+  function rawDead(cond, chans) {
+    const raw = (cond && cond.available && cond.raw) || {};
+    const d = chans.map((k) => raw[k]).filter((r) => r && r.state === "dead");
+    return d.length ? Math.max.apply(null, d.map((r) => r.age_s || 0)) : null;
+  }
 
   function commitStatus(key, raw) {
     const d = App.dwell[key] || (App.dwell[key] = { committed: raw, cand: raw, n: 0 });
@@ -2498,9 +2538,20 @@
     const dp = k === "lat" || k === "lon" ? 4 : u === "V" ? 2 : u === "°" ? 0 : 1;
     return v.toFixed(dp) + (u ? (u.charAt(0) === "°" ? "" : " ") + esc2(u) : "");
   }
+  /* display unit per channel, for rows the health read no longer has (#247) */
+  const RAW_UNIT = { tws: "kn", aws: "kn", stw: "kn", sog: "kn", twd: "°", twa: "°", awa: "°",
+    cog: "°", heading_true: "°", heading_mag: "°", heel: "°", pitch: "°", rudder_angle: "°",
+    rate_of_turn: "°/s", depth: "m", water_temp: "°C", bank_voltage: "V" };
   function provenanceTableHtml() {
     const p = (currentHealth() || {}).provenance || {};
-    const chans = p.channels || {};
+    const chans = Object.assign({}, p.channels || {});
+    // The health read looks back 5 min; a reading stays on screen for 30 (#247). Channels it has
+    // dropped come from /conditions `raw`, with their red age, until the engine drops them too.
+    const raw = (App.cond && App.cond.available && App.cond.raw) || {};
+    for (const k of Object.keys(raw)) {
+      if (!chans[k] && raw[k] && raw[k].value != null)
+        chans[k] = { value: raw[k].value, unit: RAW_UNIT[k] || "", age_s: raw[k].age_s, device: "last reading" };
+    }
     const keys = Object.keys(chans);
     if (!keys.length) return "";
     const order = ["tws", "twd", "twa", "aws", "awa", "stw", "sog", "cog", "heading_true",
@@ -2519,7 +2570,8 @@
         '<span class="rc">' + provValue(k, e.value, e.unit) + '</span>' +
         '<span class="rc">' + esc2(e.device || e.source || "?") +
         (e.rank ? " #" + e.rank : "") + marks + '</span>' +
-        '<span class="rc">' + (e.age_s == null ? "—" : Math.max(0, Math.round(e.age_s)) + "s") +
+        '<span class="rc' + (rawDead(App.cond, [k]) != null ? " age-dead" : "") + '">' +
+        (e.age_s == null ? "—" : Math.max(0, Math.round(e.age_s)) + "s") +
         (e.sources > 1 ? " /" + e.sources : "") + '</span></div>';
     }
     out += '</div><div class="dc-legend">⚑ backup sensor · ƒ computed · ≠ sources disagree · ' +
@@ -2534,9 +2586,10 @@
       return '<div class="dc-foot">No bank voltage' + (b && b.note ? " (" + esc2(b.note) + ")" : "") +
         '. Check the Orca Core is sharing it.</div>';
     }
-    const st = b.status === "danger" ? "act" : b.status === "warn" ? "watch" : "ok";
+    const st = b.stale ? "na" : b.status === "danger" ? "act" : b.status === "warn" ? "watch" : "ok";
     const rows = [
-      ["now", b.volts != null ? b.volts.toFixed(2) + " V" : "—", "5-min smoothed"],
+      b.stale ? ["last reading", (b.volts_last != null ? Number(b.volts_last).toFixed(2) + " V " : "— ") + deadAge(b.age_s || 0), "no fresh reading"]
+        : ["now", b.volts != null ? b.volts.toFixed(2) + " V" : "—", "5-min smoothed"],
       ["status uses", b.volts_decided != null ? b.volts_decided.toFixed(2) + " V" : "—",
        r0(b.sustain_min) + "-min smoothed"],
       ["last sample", b.volts_last != null ? b.volts_last + " V" : "—", "raw"],
@@ -2857,6 +2910,7 @@
       if (App.lastPollOk) App.lastOkAt = Math.max.apply(null, at.filter((t, i) => res[i] != null));
       const p = {}; keys.forEach((k, i) => (p[k] = hold(k, res[i], now, at[i])));
       App.watch = p.watch;               // the CREW detail panel + quick actions read it
+      App.cond = p.conditions;           // the provenance table colours dead ages from it (#247)
       App.nav = p.navigator;             // the eta-detail course map reads position live
       // the wind history takes only a reading THIS poll got, at the time it is from: a held value
       // is the old reading again, not a new one (#184-4)
@@ -3033,7 +3087,7 @@
       provenanceTableHtml: provenanceTableHtml, twsTrendTile: twsTrendTile, fetchSailState: fetchSailState,
       fetchCourse: fetchCourse, fetchSelector: fetchSelector, navControlsHtml: navControlsHtml,
       navAction: navAction, fetchDeviation: fetchDeviation,
-      deviationHtml: deviationHtml, currentData: currentData });
+      deviationHtml: deviationHtml, currentData: currentData, rawDead: rawDead });
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
   else init();
 })();

@@ -3,6 +3,12 @@
 Goal (Cole): **lose no telemetry**, and **copy all telemetry off the Pi to the VPS**.
 Deletion from the boat is allowed only *after* an off-boat copy is sha256-verified.
 
+## ⏸ PICK UP HERE — 2026-11-09 LATE (session root-f0; main @ 0bf15ec, DEPLOYED)
+
+**#290 Race over (#241) merged (Cole "merge 290") + deployed:** main 0bf15ec. Pi engine + console (stamp 20261109T210753Z, `~/deploy-backups/raceover-20261109T210753Z`, images `:pre-20261109T210753Z`), record-deployed 8 files / 2 images, all endpoints 200, console serves `?v=ro1109a`, 0 restarts. VPS agent rollback `:pre-20261109e`.
+**Cole "all recommended" on #287 + #289:** #287 = check ENC depth where charts exist, flag the rest "No depth data: check the paper chart" (CHS = later ticket); Orin keeps its boat gap but uses only the Lab's signed overrides at marks. #289 = GPS 10 s / wind-heading-depth-speed 15 s onboard; "—" after 30 min; per-channel alert; backup failover 5 s aboard, cloud collision watch 60 s; results split repo doc + private /root/c4-ops/race-ready-2027/. Agents finishing both in worktrees optimizer-safe and drafts-247-250 (+ stale-limit code batch). Then Cole merges; #287 needs Lab rebuild + Bayview Finish override + re-freeze.
+**Next wave after:** #245 re-score, #248 shed order, #66 (needs Cole's tack target).
+
 ## ⏸ PICK UP HERE — 2026-11-09 EVENING (session root-f0; dev = main @ edbd10e, DEPLOYED)
 
 **Merged (Cole) + deployed ~18:57Z:** #281 Orin cache-cap doc, #282 regret on sailed current+waves (#244; follow-up #285), #283 telemetry no-loss (#243), #284 immutable playbooks + Deploy "Activate" (#249), #286 navigator runs: Start/Undo/mark pick, two-fix advance, tack names (#41 #64 #183 #246).

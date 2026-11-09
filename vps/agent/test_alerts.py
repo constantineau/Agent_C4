@@ -85,6 +85,16 @@ check("no live data → danger", c.get("stale_telemetry", {}).get("severity") ==
 check("90 s old → warn", fire(get_strip=strip(data_age_seconds=90))["stale_telemetry"]["severity"] == "warn")
 check("200 s old → danger", fire(get_strip=strip(data_age_seconds=200))["stale_telemetry"]["severity"] == "danger")
 check("30 s old → nothing", "stale_telemetry" not in fire(get_strip=strip(data_age_seconds=30)))
+# #247: per sensor group. A dead depth with a fresh GPS raised nothing before (freshest-of-all).
+DEAD_DEPTH = [{"group": "depth", "label": "Depth", "channels": ["depth"], "age_s": 150,
+               "severity": "warn"}]
+c = fire(get_strip=strip(data_age_seconds=1, depth=None, dead_groups=DEAD_DEPTH))
+check("#247 dead depth, fresh GPS → 'stale:depth' warn, safety kind",
+      c.get("stale:depth", {}).get("severity") == "warn" and c["stale:depth"]["kind"] == "stale_telemetry"
+      and c["stale:depth"]["message"] == "Depth: no reading for 2 min.")
+check("#247 …and no whole-boat alert", "stale_telemetry" not in c)
+c = fire(get_strip=strip(data_age_seconds=200, dead_groups=DEAD_DEPTH))
+check("#247 whole boat quiet → only the whole-boat alert", set(c) == {"stale_telemetry"})
 
 print("depth:")
 check("6 m → warn", fire(get_strip=strip(depth=6.0))["depth_shoaling"]["severity"] == "warn")

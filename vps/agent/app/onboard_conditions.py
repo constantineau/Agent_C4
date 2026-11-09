@@ -15,6 +15,7 @@ import os
 from shared import n2k_sources
 from shared import units
 from shared import source_policy
+from shared import staleness
 
 from . import datasource
 from . import fatigue
@@ -74,7 +75,7 @@ def _choose_preferred(channel, readings):
     for i, m in enumerate(matchers):
         fresh = [r for r in readings
                  if n2k_sources.matches(r["source"], m, devices)
-                 and r["age_s"] <= source_policy.FAILOVER_AGE_S]
+                 and r["age_s"] <= staleness.failover_s(channel)]
         if fresh:
             return min(fresh, key=lambda r: r["age_s"]), f"priority rank {i+1} ({m})", i > 0
     best = min(readings, key=lambda r: r["age_s"])
@@ -124,16 +125,61 @@ def get_current_conditions(max_age_minutes: int = 5):
     }
 
 
+def _older_readings(have):
+    """Channels absent from the 5-min conditions, from each path's last sample (two
+    index-bounded queries per path). Returns ({channel: {"preferred", "freshest_age_s"}} for
+    those at most RAW_CAP_S old, which stay on screen, and {channel: age} for alert-group key
+    channels at most ALERT_HOLD_S old, so a dead sensor's alert outlives its number)."""
+    raw, alert = {}, {}
+    src = datasource.active()
+    sample = getattr(src, "latest_sample", None)
+    if sample is None:
+        return raw, alert
+    keys = set(staleness.alert_channels())
+    for path, (name, _unit, conv) in PRESENT.items():
+        if name in have:
+            continue
+        try:
+            smp = sample(path)
+        except Exception:
+            continue
+        if not smp or smp[0] is None or smp[1] is None:
+            continue
+        age = _age(float(smp[1]))
+        if name in keys and age <= staleness.ALERT_HOLD_S:
+            alert[name] = age
+        if age <= staleness.RAW_CAP_S:
+            raw[name] = {"preferred": {"source": None, "value": round(conv(smp[0]), 3),
+                                       "age_s": age},
+                         "freshest_age_s": age}
+    return raw, alert
+
+
 def get_strip():
     """Compact best-value-per-channel for the iPad instrument strip (freshest source wins)."""
+    # Raw readings stay up to RAW_CAP_S (30 min) with their age; past each channel's DEAD limit
+    # the value fields below go null, so nothing built on the strip (the sail call, the depth
+    # alarm, the copilot's "Now:" line) uses it (#247). The raw number and its state are in `raw`
+    # for the screens.
     cc = get_current_conditions(max_age_minutes=5)
-    if not cc.get("available"):
+    ch = dict(cc.get("channels") or {}) if cc.get("available") else {}
+    # A channel silent for over 5 min: its last sample from `latest_sample` (two index-bounded
+    # queries per path) rather than widening the window to 30 min, which would aggregate 30 min
+    # of 10 Hz archive rows on the Pi whenever the live cache misses a path.
+    older, alert_ages = _older_readings(set(ch))
+    ch.update(older)
+    if not ch:
         return {"available": False}
-    ch = cc["channels"]
+    if not cc.get("available"):
+        from datetime import datetime, timezone
+        cc = {"as_of": datetime.now(timezone.utc).isoformat()}
+    ages_by_ch = {name: c["preferred"]["age_s"] for name, c in ch.items()}
 
     def best(name):
         c = ch.get(name)
-        return c["preferred"]["value"] if c else None
+        if not c or staleness.is_dead(name, c["preferred"]["age_s"]):
+            return None
+        return c["preferred"]["value"]
 
     ages = [c["freshest_age_s"] for c in ch.values()]
     # True heading wins; a magnetic one is only a stand-in and says so (#183-8): on Lake Huron
@@ -150,7 +196,16 @@ def get_strip():
         "stale": (min(ages) if ages else 999) > 30,
         # Age of each value shown (the lead source's sample), per channel (#45.3): the two
         # fields above are the FRESHEST channel's, which the 0.7 Hz bank voltage keeps near 0.
-        "ages": {name: c["preferred"]["age_s"] for name, c in ch.items()},
+        "ages": ages_by_ch,
+        # Per channel (#247): the lead's raw value, its age and ok/late/dead against that
+        # channel's limits. A dead value is still shown (red age); past 30 min it is gone.
+        "raw": {name: {"value": c["preferred"]["value"], "age_s": c["preferred"]["age_s"],
+                       "state": staleness.state(name, c["preferred"]["age_s"])}
+                for name, c in ch.items()},
+        "dead": sorted(n for n, a in ages_by_ch.items() if staleness.is_dead(n, a)),
+        # The per-channel stale alert (#247): one entry per sensor group whose key channel is dead.
+        # (a channel gone from the screen after 30 min keeps its alert up to ALERT_HOLD_S)
+        "dead_groups": staleness.dead_groups({**alert_ages, **ages_by_ch}),
         "stw": best("stw"), "sog": best("sog"), "tws": best("tws"), "twa": best("twa"),
         "twd": best("twd"), "aws": best("aws"), "awa": best("awa"), "heading": heading,
         "heading_ref": heading_ref,
