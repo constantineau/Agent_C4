@@ -53,6 +53,11 @@ wall off its meridian). The Lab still routes every leg on one course-wide mask (
    Re-route not run." The polar is the deployed boat's own (#304), carried with the profile;
    `polar` in the result names it (boat, source `files`/`cert`, version, and `from`: `deploy`, or
    `orin` for the profile's own files in this checkout, with "Boat polar not from Deploy.").
+   A Pi from #320 on names the boat being sailed (`assets.session_boat`: the LOG session's boat,
+   which may not be this Orin's `REROUTE_BOAT`) and sends that boat's profile + polar, from the
+   Deploy push or its boat library (`from`: `deploy` | `library`). The Orin then routes on exactly
+   those and never on its own files; no profile or polar (an "Other boat") → "No polar for this
+   boat. Re-route not run."
 5. `routerun.run_course` routes it (Lab defaults; no Opus briefing, no map grids, no venue model
    skill, current and sea state off unless enabled and online).
 6. The result goes to `last_result.json`. The Pi fetches it once, stores it, and serves it to the

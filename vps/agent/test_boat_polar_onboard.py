@@ -63,8 +63,8 @@ print("1) nothing deployed → no polar, plainly")
 check("no polar block", orinassets.boat_polar() is None)
 check("engine polar table empty", DSO._polar_rows() == [])
 adv = sails.get_sail_advice(12, 45, "J1")
-check("sail dial: 'No boat polar loaded.'", adv["available"] is False
-      and adv["note"] == BP.NO_POLAR_ABOARD)
+check("sail dial: 'No polar for this boat.' (#320: the boat being sailed has none)",
+      adv["available"] is False and adv["note"] == BP.NO_POLAR)
 check("the image has no polar file the engine could fall back on",
       DSO.POLARS_FILE is None)
 
@@ -122,8 +122,11 @@ body = {"schema": orinassets.SCHEMA, "race_id": "r", "course_id": "c", "chart": 
 orinassets._write(json.dumps({"received_at": 2, "assets": body}))
 check("an older push without the key: Bravo's cert from the profile",
       orinassets.boat_polar()["source"] == "cert" and orinassets.boat_polar()["boat_id"] == "bravo")
-check("…and the Orin request carries no polar key (it may use the profile's own)",
-      "polar" not in orinassets.for_run({"race_id": "r"}, "c"))
+_rq = orinassets.for_run({"race_id": "r"}, "c")
+check("…and the Orin request carries that same cert, naming the boat (#320: no Orin fallback)",
+      (_rq.get("polar") or {}).get("source") == "cert"
+      and _rq["polar"]["version"] == orinassets.boat_polar()["version"]
+      and _rq["session_boat"]["boat_id"] == "bravo")
 check("sr33 profile without its block → no polar (no files aboard)",
       deploy(SR33, None) == (True, "") and orinassets.boat_polar() is None)
 

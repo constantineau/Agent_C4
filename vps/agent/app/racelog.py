@@ -127,6 +127,7 @@ def autoclose(now=None, force=False):
                     or end_ts <= float(now_cur["start_ts"]):
                 return {"closed": False, "note": "a new session started; not closing"}
             s.session_end(end_ts, session_id=cur["id"])
+            _bump()
         print(f"[racelog] auto-closed '{cur['name']}' (id {cur['id']}) at "
               f"{datetime.fromtimestamp(end_ts, tz=timezone.utc):%Y-%m-%dT%H:%M:%SZ} — the last "
               f"moment the boat was under way; stopped for "
@@ -160,12 +161,16 @@ def _settle_race_state(s):
         race_state(s)
 
 
-def start(name=None, race_id=None, kind=None):
+def start(name=None, race_id=None, kind=None, boat_id=None, boat_name=None):
     """Start a session. Everything is optional: race_id defaults to the loaded playbook's (if
     any), name to '<Race|Sail> <UTC date HH:MM>'. kind is race|practice; with no kind it is a
     RACE (fails closed: a race session is what makes the boat refuse shore homework). The iPad
     always sends the kind the crew picked. Kind and race id are resolved under SESSION_LOCK, with
-    the start itself."""
+    the start itself.
+
+    The boat SAILED (#320): `boat_id` from the boat library, or `boat_name` alone for an "Other
+    boat" (no polar). Nothing picked → the last boat used. Never refused over the boat: a boat
+    the library doesn't know is recorded by its name."""
     s = _src()
     if s is None:
         return {"ok": False, "note": "race log is onboard-only"}
@@ -181,6 +186,8 @@ def start(name=None, race_id=None, kind=None):
         if not name:
             stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
             name = f"{'Race' if kind == 'race' else 'Sail'} {stamp}Z"
+        from . import boatlib
+        boat_id, boat_name = boatlib.resolve_pick(boat_id, boat_name)
         _settle_race_state(s)          # session_start closes the open one
         ts = time.time()
         if kind == "race" and hasattr(s, "save_race_state"):
@@ -188,7 +195,8 @@ def start(name=None, race_id=None, kind=None):
             # (fails closed), never the other way round
             s.save_race_state({"racing": True, "since": ts, "name": str(name),
                                "race_id": race_id})
-        cur = s.session_start(str(name), race_id, kind, ts)
+        cur = s.session_start(str(name), race_id, kind, ts, boat_id=boat_id, boat_name=boat_name)
+        boatlib.bump()                 # the engine's polar follows the session's boat at once
     return {"ok": True, "active": cur}
 
 
@@ -211,7 +219,16 @@ def end(session_id=None):
         if session_id is not None and str(session_id) != str(cur.get("id")):
             return {"ok": False, "note": ALREADY_ENDED}
         s.session_end(time.time(), session_id=cur["id"])
+        _bump()
     return {"ok": True, "ended": cur}
+
+
+def _bump():
+    try:
+        from . import boatlib
+        boatlib.bump()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 # ---- RACING (RRS 41): its own state, ended by the crew --------------------------------------

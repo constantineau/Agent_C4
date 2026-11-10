@@ -37,7 +37,7 @@ from shared import archiver_status, n2k_sources
 from app import (navigator, tactics, routing, weather, sails, fatigue, onboard_conditions,
                  datasource, ais, fleet, deviation, drift, selector, reoptimize, strategy,
                  matcher, buoys, racelog, watches, trend, plangap, gpsout, checklist,
-                 power, sensor_health, plume, orinroute, orinassets, racegate)
+                 power, sensor_health, plume, orinroute, orinassets, racegate, boatlib)
 
 app = FastAPI(title="Agent_C4 Onboard Engine", version="0.1.0")
 # The iPad reaches the Pi directly over boat-local Wi-Fi in race mode; allow cross-origin so a
@@ -889,17 +889,36 @@ def session_status():
     nothing by itself)."""
     out = racelog.status()
     out["archiver"] = archiver_status.read()
+    # the LOG picker (#320): the boat library, the boat being sailed, the playbook's boat
+    try:
+        out["boats"] = boatlib.view()
+    except Exception as exc:  # noqa: BLE001 — the LOG button must work without it
+        out["boats"] = {"boats": [], "current": None, "note": f"boats unreadable ({type(exc).__name__})"}
     return out
+
+
+@app.get("/boats")
+def boats_get():
+    """The boat library aboard (synced from the Lab whenever the Pi has internet, #320), the boat
+    being sailed now (the session's, else the last one used) and the polar it gets."""
+    return boatlib.view()
+
+
+@app.on_event("startup")
+def _start_boat_library_sync():
+    boatlib.start_sync()
 
 
 @app.post("/session/start")
 def session_start(body: dict = None):
-    """Start a session: {name?, race_id?, kind?: race|practice}. The iPad always sends the kind
-    the crew picked. With no kind (old clients) it is a RACE: a race session is what closes the
-    homework gate, so the default fails closed."""
+    """Start a session: {name?, race_id?, kind?: race|practice, boat_id?, boat_name?}. The iPad
+    always sends the kind the crew picked. With no kind (old clients) it is a RACE: a race session
+    is what closes the homework gate, so the default fails closed. The boat sailed (#320): a
+    library boat's id, or a name alone for an "Other boat"; none → the last boat used."""
     body = body or {}
     return racelog.start(name=body.get("name"), race_id=body.get("race_id"),
-                         kind=body.get("kind"))
+                         kind=body.get("kind"), boat_id=body.get("boat_id"),
+                         boat_name=body.get("boat_name"))
 
 
 @app.post("/session/end")

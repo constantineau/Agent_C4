@@ -336,6 +336,12 @@ class OnboardSource:
         conn.execute("CREATE TABLE IF NOT EXISTS sessions ("
                      "id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, race_id TEXT, "
                      "kind TEXT NOT NULL, start_ts REAL NOT NULL, end_ts REAL)")
+        # the boat SAILED in a session (#320): a library boat's id, or only a typed name for an
+        # "Other boat". Recorded rows stay tagged by this kit's BOAT_ID; the session names the boat.
+        have = {r[1] for r in conn.execute("PRAGMA table_info(sessions)")}
+        for col in ("boat_id", "boat_name"):
+            if col not in have:
+                conn.execute(f"ALTER TABLE sessions ADD COLUMN {col} TEXT")
         conn.commit()
         return conn
 
@@ -837,15 +843,16 @@ class OnboardSource:
                  json.dumps(blob.get("out_of_service") or [])))
 
     # --- race sessions (onboard-only capability, like sail_log) -------------
-    def session_start(self, name, race_id, kind, start_ts):
+    def session_start(self, name, race_id, kind, start_ts, boat_id=None, boat_name=None):
         # held across the close + open, so no other thread's session call lands in between
         with self._store() as db:
             cur = self.session_current()
             if cur:                                   # only one open window at a time
                 self.session_end(start_ts, session_id=cur["id"])
             db.execute(
-                "INSERT INTO sessions (name, race_id, kind, start_ts) VALUES (?, ?, ?, ?)",
-                (name, race_id, kind, float(start_ts)))
+                "INSERT INTO sessions (name, race_id, kind, start_ts, boat_id, boat_name) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (name, race_id, kind, float(start_ts), boat_id, boat_name))
             return self.session_current()
 
     def session_end(self, end_ts, session_id):
@@ -856,21 +863,39 @@ class OnboardSource:
                 "UPDATE sessions SET end_ts = ? WHERE end_ts IS NULL AND id = ?",
                 (float(end_ts), int(session_id)))
 
+    _SES_COLS = "id, name, race_id, kind, start_ts, end_ts, boat_id, boat_name"
+
+    @staticmethod
+    def _ses(r):
+        return {"id": r[0], "name": r[1], "race_id": r[2], "kind": r[3], "start_ts": r[4],
+                "end_ts": r[5], "boat_id": r[6], "boat_name": r[7]}
+
     def session_current(self):
         with self._store() as db:
             r = db.execute(
-                "SELECT id, name, race_id, kind, start_ts FROM sessions "
+                f"SELECT {self._SES_COLS} FROM sessions "
                 "WHERE end_ts IS NULL ORDER BY id DESC LIMIT 1").fetchone()
-            return ({"id": r[0], "name": r[1], "race_id": r[2], "kind": r[3], "start_ts": r[4]}
-                    if r else None)
+            if not r:
+                return None
+            d = self._ses(r)
+            d.pop("end_ts")
+            return d
 
     def sessions_list(self, limit=20):
         with self._store() as db:
             rows = db.execute(
-                "SELECT id, name, race_id, kind, start_ts, end_ts FROM sessions "
+                f"SELECT {self._SES_COLS} FROM sessions "
                 "ORDER BY start_ts DESC LIMIT ?", (int(limit),)).fetchall()
-            return [{"id": r[0], "name": r[1], "race_id": r[2], "kind": r[3],
-                     "start_ts": r[4], "end_ts": r[5]} for r in rows]
+            return [self._ses(r) for r in rows]
+
+    def last_session_boat(self):
+        """The newest session that names a boat: {boat_id, boat_name, start_ts}, or None (#320)."""
+        with self._store() as db:
+            r = db.execute(
+                "SELECT boat_id, boat_name, start_ts FROM sessions "
+                "WHERE boat_id IS NOT NULL OR boat_name IS NOT NULL "
+                "ORDER BY start_ts DESC, id DESC LIMIT 1").fetchone()
+            return {"boat_id": r[0], "boat_name": r[1], "start_ts": r[2]} if r else None
 
     # --- racing (RRS 41), kept apart from the recording sessions above ------
     def race_state(self):

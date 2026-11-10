@@ -51,7 +51,7 @@ async def gate(request: Request, call_next):
         return await call_next(request)
     header = request.headers.get("authorization", "")
     tok = header[7:] if header.lower().startswith("bearer ") else None
-    if not auth.verify_token(tok):
+    if not (auth.verify_token(tok) or (request.method == "GET" and auth.machine_ok(p, tok))):
         return JSONResponse({"detail": "unauthorized"}, status_code=401)
     return await call_next(request)
 
@@ -574,6 +574,13 @@ def save_boat(body: dict):
     return {"boat": saved, "summary": boat_profile.summary(saved), "warnings": warns}
 
 
+@app.get("/api/boats/library")       # declared before /api/boats/{bid} so 'library' isn't an id
+def boat_library():
+    """Read-only: every boat profile with its polar block (#320). The Pi engine pulls this by
+    itself whenever it has internet (its ingest token opens this path alone; see auth.py)."""
+    return boats.library()
+
+
 @app.get("/api/boats/active")        # declared before /api/boats/{bid} so 'active' isn't read as an id
 def get_active_boat():
     b = boats.active_boat()
@@ -906,11 +913,16 @@ async def debrief_run(body: dict):
 
     Body: {race_id, playbook_id?, recording?, session_id?/start_ts?/use_marker?}. Naming a session
     makes this ONE button: the job fetches that recording off the boat log, then judges it."""
-    from . import jobs
+    from . import jobs, sessionboat
     b = body or {}
     race_id = b.get("race_id")
     if not race_id:
         return JSONResponse({"detail": "race_id required"}, status_code=400)
+    # the boat the session was SAILED on (#320): the Lab's edit, else the session's own pick;
+    # an "Other boat" with no profile can't be scored (no polar) and is refused, plainly
+    boat_id, why = sessionboat.for_debrief(b)
+    if why:
+        return {"ok": False, "note": why}
 
     def _work(progress):
         rec = b.get("recording")
@@ -923,7 +935,8 @@ async def debrief_run(body: dict):
             rec = (res.get("window") or {}).get("start_ts")
             progress(f"{res.get('n')} fixes over {(res.get('window') or {}).get('hours')} h"
                      f" · {res.get('sail_changes')} sail change(s)")
-        return judge.run_judge(race_id, b.get("playbook_id"), on_progress=progress, recording=rec)
+        return judge.run_judge(race_id, b.get("playbook_id"), on_progress=progress, recording=rec,
+                               boat_id=boat_id)
 
     return jobs.start("debrief", _work, result_key="report",
                       meta={"race_id": race_id, "recording": b.get("recording"),
@@ -955,8 +968,11 @@ def _recordings(race_id=None):
     except Exception as exc:
         sessions, agent = [], {"available": False, "note": f"The boat is unreachable ({exc}). "
                                "Recordings already in the Lab are still listed."}
+    from . import sessionboat
     tracks = track.list_tracks(race_id) if race_id else []
     debriefs = learning.list_debriefs(bid, race_id) if race_id else []
+    # a session is filed under the boat it was SAILED on (#320), not the active boat or the kit
+    every = learning.list_debriefs(None, race_id) if race_id else []
 
     def near(a, b):
         # two missing keys are the same recording: a GPX/YB track has no window, and neither
@@ -965,8 +981,12 @@ def _recordings(race_id=None):
             return a is None and b is None
         return abs(float(a) - float(b)) < 1.0
 
-    def latest_debrief(rec):
-        hit = [d for d in debriefs if near(d.get("window_start"), rec)]
+    def runs(rec, boat=None):
+        pool = debriefs if boat is None else [d for d in every if d.get("boat_id") == boat]
+        return [d for d in pool if near(d.get("window_start"), rec)]
+
+    def latest_debrief(rec, boat=None):
+        hit = runs(rec, boat)
         return max(hit, key=lambda d: d["created_at"]) if hit else None
 
     out, seen = [], set()
@@ -984,12 +1004,19 @@ def _recordings(race_id=None):
             continue
         seen.add(round(float(rec), 3) if rec is not None else None)
         trk = next((t for t in tracks if near(t.get("recording"), rec)), None)
+        eb = sessionboat.effective(ses)
+        # an "Other boat" (no profile) has no debriefs: none can be filed under a name alone
+        bkey = eb["boat_id"] if eb["boat_id"] else "\0none"
+        if eb["source"] == "active":
+            bkey = None                 # an agent from before #320: the active boat's, as before
         out.append({"recording": rec, "session_id": ses.get("id"), "name": ses.get("name"),
                     "kind": ses.get("kind"), "race_id": ses.get("race_id"),
                     "start_ts": marker, "end_ts": ses.get("end_ts"), "window": w,
                     "hours": w.get("hours"), "marker_hours": w.get("marker_hours"),
-                    "track": trk, "debrief": latest_debrief(rec),
-                    "n_debriefs": len([d for d in debriefs if near(d.get("window_start"), rec)])})
+                    "kit": ses.get("kit"), "boat_id": eb["boat_id"], "boat_name": eb["name"],
+                    "boat_source": eb["source"], "boat_has_profile": eb["has_profile"],
+                    "track": trk, "debrief": latest_debrief(rec, bkey),
+                    "n_debriefs": len(runs(rec, bkey))})
     # tracks the Lab holds that no session explains (a GPX/YB upload, or a session the boat has
     # since dropped) — they are debriefable too, and hiding them would hide a debrief that exists
     for t in tracks:
@@ -1006,6 +1033,25 @@ def _recordings(race_id=None):
     out.sort(key=lambda r: r["start_ts"] or 0, reverse=True)
     return {"race_id": race_id, "boat_id": bid, "agent": agent, "recordings": out,
             "debriefs": debriefs}
+
+
+@app.post("/api/debrief/session-boat")
+async def debrief_session_boat(body: dict):
+    """Edit the boat a recorded session was sailed on (#320): {kit, start_ts, boat_id | boat_name,
+    race_id?, recording?}. A wrong pick on the iPad, or an "Other boat" that has a profile now.
+    Debriefs of that recording filed under another boat leave that boat's learning (kept, marked
+    withdrawn); debrief it again to count it for this boat."""
+    from . import sessionboat
+    b = body or {}
+    ok, res = sessionboat.set_boat(b.get("kit"), b.get("start_ts"), b.get("boat_id"),
+                                   b.get("boat_name"))
+    if not ok:
+        return JSONResponse({"detail": res}, status_code=400)
+    n = 0
+    if b.get("recording") is not None:
+        n = await run_in_threadpool(learning.withdraw_recording, b.get("race_id"),
+                                    b.get("recording"), res.get("boat_id"))
+    return {"ok": True, "boat": res, "withdrawn": n}
 
 
 @app.post("/api/debrief/apply")

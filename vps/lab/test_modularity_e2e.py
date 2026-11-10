@@ -405,6 +405,38 @@ def test_orin_unconfigured_boat_never_falls_back_to_sr33():
         assert re.search(r"boat", out.get("note") or "", re.I), out
 
 
+def test_orin_on_another_boats_kit_routes_the_boat_sailed():
+    """#320: a kit set up for sr33 (REROUTE_BOAT=sr33), the crew picks Bravo at LOG with no Lab
+    prep. The Pi sends Bravo's profile + polar from its boat library and names the boat; the Orin
+    routes Bravo as Bravo and never opens sr33's files."""
+    from shared import boat_polar
+    job = _orin_job("sr33")
+    b = load_bravo()
+    req = _orin_request()
+    req["assets"] = {"boat": b, "boat_version": boat_profile.version(b), "chart": None,
+                     "polar": boat_polar.resolve(b), "received_at": None,
+                     "session_boat": {"boat_id": "bravo", "name": b.get("name"),
+                                      "from": "library", "at": T0}}
+    with watch() as seen:
+        out = job.run(req, is_online=lambda: False)
+    assert seen == []
+    assert out.get("available"), out.get("note")
+    assert out["boat"]["boat_id"] == "bravo" and out["polar"]["boat_id"] == "bravo"
+    assert out["polar"]["from"] == "library"
+    req["assets"].update(boat=None, boat_version=None, polar=None,
+                         session_boat={"boat_id": None, "name": "Mystery", "from": None, "at": None})
+    with pytest.raises(job.RunError, match="No polar for this boat"):
+        job.run(req, is_online=lambda: False)
+
+
+def test_boat_library_carries_bravos_own_polar():
+    """#320: the library the Pi keeps aboard serves Bravo with its own cert polar, never sr33's."""
+    from shared import boat_polar
+    e = next(x for x in boats.library()["boats"] if x["boat_id"] == "bravo")
+    assert e["polar"]["boat_id"] == "bravo" and e["polar"]["source"] == "cert"
+    assert not boat_polar.check(e["polar"], "bravo")
+
+
 # ==== 5. Race defaults (wave 2) ==================================================================
 @xfail("#310", "fleet retro defaults to the Bayview course when no definition is given")
 def test_retro_has_no_bayview_default():

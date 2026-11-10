@@ -39,3 +39,21 @@ def verify_token(tok) -> bool:
         return time.time() < float(exp)
     except ValueError:
         return False
+
+
+# ---- the boat's own read of the boat library (#320) --------------------------------------------
+# The Pi engine pulls GET /api/boats/library by itself whenever it has internet. It has no team
+# login; it sends the ingest token it already holds for the uplink and backfill. That token opens
+# this one read-only path and nothing else. Unset → only the team login opens it.
+MACHINE_PATHS = {"/api/boats/library"}
+
+
+def machine_token():
+    return (os.environ.get("BOAT_LIBRARY_TOKEN") or os.environ.get("INGEST_TOKEN") or "").strip()
+
+
+def machine_ok(path, tok) -> bool:
+    want = machine_token()
+    return (path in MACHINE_PATHS and bool(want) and bool(tok)
+            and hmac.compare_digest(str(tok), want))
+

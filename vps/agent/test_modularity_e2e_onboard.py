@@ -241,3 +241,36 @@ def test_no_engine_module_defaults_to_sr33():
     """BOAT_ID unset: each module refuses to start or has no boat id — never files as sr33."""
     ids = _module_boat_ids(None)
     assert all(v is None or str(v).startswith("refused") for v in ids.values()), ids
+
+
+# ==== #320: practice on any boat, no Lab prep (the boat library + the LOG picker) =================
+def test_practice_log_on_any_boat_no_lab_prep():
+    """A Practice LOG picks the boat: Bravo from the library aboard has its polar; an "Other boat"
+    records fine and says "No polar for this boat."; GET /boats and /session name the boat."""
+    from app import boatlib
+    lib = {"schema": boatlib.SCHEMA, "built_at": 1, "boats": [
+        {"boat_id": "bravo", "name": BRAVO["name"], "profile": BRAVO,
+         "boat_version": boat_profile.version(BRAVO), "polar": boat_polar.resolve(BRAVO)}]}
+    assert boatlib.store(lib)["stored"]
+    r = client.post("/session/start", json={"kind": "practice", "boat_id": "bravo"}).json()
+    try:
+        assert r["ok"] and r["active"]["boat_id"] == "bravo", r
+        b = client.get("/boats").json()
+        assert b["current"]["boat_id"] == "bravo" and b["current"]["has_polar"], b
+        assert [x["boat_id"] for x in b["boats"]] == ["bravo"]
+        s = client.get("/session").json()
+        assert s["active"]["boat_name"] == BRAVO["name"] and s["boats"]["current"]["boat_id"] == "bravo"
+        with watch() as seen:
+            rows = datasource.active().polars_stw()
+        assert seen == [] and abs(SPOL.lookup(rows, 12, 90) - SPOL.lookup(POLAR, 12, 90)) < 0.05
+    finally:
+        client.post("/session/end", json={"id": r["active"]["id"]})
+    r = client.post("/session/start", json={"kind": "practice", "boat_name": "Mystery"}).json()
+    try:
+        assert r["ok"] and r["active"]["boat_id"] is None and r["active"]["boat_name"] == "Mystery"
+        out = client.get("/sail", params={"tws": 11, "twa": 60}).json()
+        assert out.get("available") is False and out.get("note") == boat_polar.NO_POLAR, out
+        assert client.get("/boats").json()["current"]["note"] == boat_polar.NO_POLAR
+    finally:
+        client.post("/session/end", json={"id": r["active"]["id"]})
+

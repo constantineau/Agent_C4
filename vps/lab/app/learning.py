@@ -187,6 +187,34 @@ def list_debriefs(boat_id=None, race_id=None, limit=200):
         c.close()
 
 
+WITHDRAWN = "withdrawn:"
+
+
+def withdraw_recording(race_id, window_start, keep_boat=None):
+    """A session's boat was changed in the Lab (#320): its debriefs filed under any OTHER boat are
+    taken out of that boat's learning. Their bins were scored against the wrong boat's polar.
+    Nothing is deleted: `boat_id` becomes "withdrawn:<old id>" on the debrief and its bins, so
+    every per-boat read (proposals, re-score, trend, the recordings list) skips them and the
+    record still says whose they were. Debrief the session again to count it for its boat.
+    Returns how many debriefs were withdrawn."""
+    if window_start is None:
+        return 0
+    c = _conn()
+    try:
+        rows = c.execute(
+            "SELECT id, boat_id FROM debriefs WHERE race_id IS ? AND window_start IS NOT NULL "
+            "AND ABS(window_start - ?) < 1.0 AND boat_id IS NOT NULL AND boat_id NOT LIKE ?",
+            (race_id, float(window_start), WITHDRAWN + "%")).fetchall()
+        ids = [(r["id"], r["boat_id"]) for r in rows if r["boat_id"] != keep_boat]
+        for did, bid in ids:
+            c.execute("UPDATE debriefs SET boat_id=? WHERE id=?", (WITHDRAWN + bid, did))
+            c.execute("UPDATE perf_bins SET boat_id=? WHERE debrief_id=?", (WITHDRAWN + bid, did))
+        c.commit()
+        return len(ids)
+    finally:
+        c.close()
+
+
 def get_debrief(debrief_id):
     c = _conn()
     try:

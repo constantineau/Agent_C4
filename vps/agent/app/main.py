@@ -326,7 +326,7 @@ def racelog_sessions(derive: bool = True):
     pressing would be worse than none, so both are always served."""
     with pool.connection() as conn:
         rows = conn.execute(
-            "SELECT str_value FROM telemetry_raw WHERE path = 'crew.session' "
+            "SELECT str_value, boat_id FROM telemetry_raw WHERE path = 'crew.session' "
             "ORDER BY time DESC LIMIT 100").fetchall()
     import json as _json
     out, seen = [], set()
@@ -339,6 +339,9 @@ def racelog_sessions(derive: bool = True):
         if key in seen:
             continue
         seen.add(key)
+        # the KIT that recorded it (its rows are tagged with this id); the session's own
+        # boat_id/boat_name (#320) say which boat was SAILED, and are null on older markers
+        d["kit"] = r.get("boat_id")
         out.append(d)
     if derive:
         for s in out:

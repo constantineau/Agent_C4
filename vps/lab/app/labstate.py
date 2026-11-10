@@ -41,6 +41,18 @@ def update(values: dict):
     return values
 
 
+def set_in(key, sub, value):
+    """Set one entry of a dict-valued key, in one read-modify-replace (no lost concurrent edit)."""
+    with _LOCK:
+        os.makedirs(os.path.dirname(_PATH), exist_ok=True)
+        state = _read()
+        d = dict(state.get(key) or {})
+        d[sub] = value
+        state[key] = d
+        atomicio.write_json(_PATH, state)
+    return value
+
+
 def set(key, value):
     update({key: value})
     return value
