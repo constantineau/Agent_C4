@@ -714,8 +714,10 @@ class OnboardSource:
     def best_angles(self, tws_kn):
         """(optimal_upwind_twa, optimal_downwind_twa) at the nearest TWS; None if absent.
         Matches CloudSource: nearest TWS, then max target_vmg."""
+        rows = self._polars          # one snapshot for both picks (a push can land between)
+
         def pick(predicate):
-            cand = [p for p in self._polars if predicate(p["twa"]) and p["target_vmg"] is not None]
+            cand = [p for p in rows if predicate(p["twa"]) and p["target_vmg"] is not None]
             if not cand:
                 return None
             cand.sort(key=lambda p: (abs(p["tws"] - tws_kn), -p["target_vmg"]))
