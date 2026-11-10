@@ -102,6 +102,24 @@ check("south row first (the north strip has no data)", cell(10.02, 20.2) == 10.0
       and cell(10.45, 20.2) is None, (cell(10.02, 20.2), cell(10.45, 20.2)))
 check("downloaded and unpacked once", os.path.exists(g.raster(None)))
 
+print("1b) any nodata value; a new grid version is a new file (Codex on #300)")
+# depth grid (down is +) whose nodata is 0: a cell with one empty pixel is not covered
+asc0 = os.path.join(TMP, "d.asc")
+with open(asc0, "w") as f:
+    f.write(f"ncols 10\nnrows 10\nxllcorner {W}\nyllcorner {S}\ncellsize {STEP}\nNODATA_value 0\n")
+    for r in range(10):
+        f.write(" ".join("0" if (r, c) == (9, 0) else "10" for c in range(10)) + "\n")
+subprocess.run(["gdal_translate", "-q", "-of", "GTiff", "-a_srs", "EPSG:4326", "-a_nodata", "0",
+                asc0, os.path.join(TMP, "d.tif")], check=True)
+g0 = D.GridSource({"name": "zero_nd", "bbox": [S + 0.1, S, W, W + 0.1], "z": "depth",
+                   "url": "file://" + os.path.join(TMP, "d.tif"), "version": "1"})
+c0 = g0.cells((S + 0.1, S, W, W + 0.1), 0.05, 2, 2, None)
+check("nodata 0: the cell with an empty pixel is not covered, the others are",
+      c0[0] is None and c0[1:] == [10.0, 10.0, 10.0], c0)
+g1 = D.GridSource(dict(SPEC, version="2"))
+check("a new version: a new file and a new data version",
+      g1.raster(None) != g.raster(None) and g1.data_version != g.data_version)
+
 print("2) the join with the chart")
 _orig = (coastline.ensure_global, coastline.layers_in_bbox, coastline.active_source,
          enc.ensure_bbox, enc.layers_in_bbox)

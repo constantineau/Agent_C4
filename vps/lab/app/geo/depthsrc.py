@@ -99,7 +99,9 @@ class GridSource:
         self.label = str(spec.get("label") or self.name)
         self.navigational = bool(spec.get("navigational", False))
         self.bbox = tuple(float(v) for v in spec["bbox"])
-        self.data_version = f"{GRID_DATA_VERSION}:{self.name}:{spec.get('version', '')}"
+        self.file_id = hashlib.sha1(repr((spec.get("url"), spec.get("member"),
+                                          spec.get("version"))).encode()).hexdigest()[:10]
+        self.data_version = f"{GRID_DATA_VERSION}:{self.name}:{spec.get('version', '')}:{self.file_id}"
 
     def covers(self, bbox) -> bool:
         return _touches(bbox, self.bbox)
@@ -109,36 +111,55 @@ class GridSource:
         return os.path.join(cache_dir or CACHE, "grids", self.name)
 
     def raster(self, cache_dir) -> str:
-        """Path to the source GeoTIFF on disk, downloading it the first time."""
+        """Path to the source GeoTIFF on disk, downloading it the first time. The file is named
+        by the source's url, member and version: a new version of the grid is a new download,
+        never the old file under a new key (Codex on #300)."""
         d = self._dir(cache_dir)
-        out = os.path.join(d, f"{self.name}.tif")
+        out = os.path.join(d, f"{self.name}-{self.file_id}.tif")
         if os.path.exists(out):
             return out
-        os.makedirs(d, exist_ok=True)
-        url = self.spec["url"]
         member = self.spec.get("member")
-        tmp = atomicio.tmp_name(out)
+        blob = os.path.join(d, f"{self.name}-{self.file_id}.download")
         try:
-            req = urllib.request.Request(url, headers=_HDRS)
-            blob_path = tmp + ".dl"
-            with urllib.request.urlopen(req, timeout=300) as r, open(blob_path, "wb") as f:
-                while True:
-                    chunk = r.read(1 << 20)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-            if not member:
-                os.replace(blob_path, tmp)
-            else:
-                _unpack_member(blob_path, member, tmp)
-                os.remove(blob_path)
+            req = urllib.request.Request(self.spec["url"], headers=_HDRS)
+            with urllib.request.urlopen(req, timeout=300) as r, \
+                    atomicio.atomic_open(out if not member else blob, "wb") as f:
+                _copy(r, f)
+            if member:
+                with atomicio.atomic_open(out, "wb") as f:
+                    _unpack_member(blob, member, f)
         except Exception as exc:  # noqa: BLE001 — reported by the caller
-            for p in (tmp, tmp + ".dl"):
+            raise GridError(f"{self.name}: {type(exc).__name__}: {exc}"[:200]) from None
+        finally:
+            if member:
                 try:
-                    os.remove(p)
+                    os.remove(blob)
                 except OSError:
                     pass
-            raise GridError(f"{self.name}: {type(exc).__name__}: {exc}"[:200]) from None
+        return out
+
+    def _valid_mask(self, src) -> str:
+        """The raster's validity mask as a Byte GeoTIFF (255 = data, 0 = none), made once. Whatever
+        the nodata value (a sentinel of either sign, 0, NaN), GDAL's mask band says which pixels
+        have data (Codex on #300)."""
+        out = src[:-4] + "-valid.tif"
+        if os.path.exists(out):
+            return out
+        tmp = atomicio.tmp_name(out)
+        try:
+            r = subprocess.run(["gdal_translate", "-q", "-of", "GTiff", "-b", "mask", "-ot", "Byte",
+                                "-co", "COMPRESS=DEFLATE", src, tmp],
+                               capture_output=True, timeout=600)
+            if r.returncode != 0 or not os.path.exists(tmp):
+                raise GridError("gdal_translate: " + r.stderr.decode(errors="replace")[:150])
+        except (OSError, subprocess.TimeoutExpired, GridError) as exc:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            if isinstance(exc, GridError):
+                raise
+            raise GridError(f"gdal_translate: {type(exc).__name__}") from None
         atomicio.commit(tmp, out)
         return out
 
@@ -166,17 +187,13 @@ class GridSource:
         # the shallowest valid value per cell: max elevation (up is +), or min depth (down is +)
         wd = self._dir(cache_dir)
         shallow = self._warp(wd, src, te, nx, ny, "max" if z == "elevation" else "min", nodata)
-        # a cell is covered only if EVERY source pixel in it has data: warp again with nodata as a
-        # plain number; a sentinel is outside the data range, so the extreme towards it finds it
-        if nodata is None:
-            cover = None
-        else:
-            cover = self._warp(wd, src, te, nx, ny, "min" if nodata < 0 else "max", None,
-                               dst_nodata=nodata)
+        # a cell is covered only if EVERY source pixel in it has data: the validity mask's minimum
+        # over the cell is 255; outside the raster the cell is 0
+        cover = self._warp(wd, self._valid_mask(src), te, nx, ny, "min", None, dst_nodata=0.0)
         out = []
         for i in range(nx * ny):
             v = shallow[i]
-            if v is None or (cover is not None and (cover[i] is None or cover[i] == nodata)):
+            if v is None or v != v or cover[i] != 255.0:
                 out.append(None)
                 continue
             out.append(round(-v if z == "elevation" else v, 2))
@@ -237,28 +254,27 @@ class GridSource:
         return [None if v == dn else float(v) for v in vals]
 
 
-def _unpack_member(archive, member, dest):
-    """Copy one named file out of a .tar.gz or .zip to `dest`. Only that member is read, so a
-    path in the archive never lands anywhere else."""
+def _copy(src, dst):
+    while True:
+        chunk = src.read(1 << 20)
+        if not chunk:
+            break
+        dst.write(chunk)
+
+
+def _unpack_member(archive, member, dst):
+    """Copy one named file out of a .tar.gz or .zip into the open file `dst`. Only that member is
+    read, so a path in the archive never lands anywhere on disk."""
     if zipfile.is_zipfile(archive):
-        with zipfile.ZipFile(archive) as z, z.open(member) as src, open(dest, "wb") as f:
-            while True:
-                chunk = src.read(1 << 20)
-                if not chunk:
-                    break
-                f.write(chunk)
+        with zipfile.ZipFile(archive) as z, z.open(member) as src:
+            _copy(src, dst)
         return
     with tarfile.open(archive) as t:
         m = t.getmember(member)
         if not m.isfile():
             raise GridError(f"{member} is not a file")
-        src = t.extractfile(m)
-        with src, open(dest, "wb") as f:
-            while True:
-                chunk = src.read(1 << 20)
-                if not chunk:
-                    break
-                f.write(chunk)
+        with t.extractfile(m) as src:
+            _copy(src, dst)
 
 
 def grid_catalog() -> list:
