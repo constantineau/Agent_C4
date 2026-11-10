@@ -416,8 +416,9 @@ zero cost, and the sail plan was a post-hoc per-leg guess. 2g makes the sail a f
 isochrone search:
 - **Per-sail polars.** `build_speed_guide.py` now also emits `vps/db/seed/sr33_sail_polars.json` — the
   speed of EACH carried sail (J1/A3/S1 — the cert-rated A2 is not aboard) across its rated TWA domain, not just the envelope.
-  `polars.sail_polars()` loads it (env `SAIL_POLARS_FILE`); empty → the optimizer routes on the
-  envelope exactly as before.
+  The boat profile names it (`polar_files.sail_polars`, found in `BOAT_DATA_DIR`; see
+  `shared/boat_polar.py`, #303) and `polars.sail_polars(boat_polar)` reads it from the boat's polar
+  block; none (a cert-only boat) → the optimizer routes on the envelope exactly as before.
 - **Sail in the node state + hold-vs-peel.** `route_leg` carries the current sail; per step `sail_step`
   HOLDS it (at its OWN, slower-off-optimal per-sail speed) until it's `ROUTE_PEEL_HOLD_TOL` (6%) off the
   envelope-optimal sail, then PEELS to the optimal sail at full speed. A peel costs `ROUTE_PEEL_COST_S`
