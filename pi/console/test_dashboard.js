@@ -534,6 +534,28 @@ test("#247 a stale bank: grey, last volts with a red age, no verdict", () => {
   ok(!/healthy/i.test(t.consider), "consider: " + t.consider);
 });
 
+/* ---------------- #291 consumers on the per-channel table ---------------- */
+test("#291 DATA tile: a source unseen past its own limit (5 s GPS aboard) is 'one stale'", () => {
+  const h = { available: true, status: "ok", flags: [], notes: [], reason: "ok" };
+  const t = dataTile(h, { sources: { count: 4, sources: [{ last_seen_s: 8, stale_after_s: 5 }] } });
+  ok(t.status === "watch" && /one stale/.test(t.why), t.status + " | " + t.why);
+  const f = dataTile(h, { sources: { count: 4, sources: [{ last_seen_s: 3, stale_after_s: 5 }] } });
+  ok(f.status === "ok" && !/one stale/.test(f.why), f.status + " | " + f.why);
+  const old = dataTile(h, { sources: { count: 4, sources: [{ last_seen_s: 30 }] } });
+  ok(old.status === "ok", "an engine without stale_after_s keeps 45 s: " + old.status);
+});
+test("#291 FORECAST 'Now': no cached wind once /conditions wind is gone", () => {
+  const T = load();
+  const now = T.now() / 1000;
+  T.D.App.windHist = [{ t: now - 25, tws: 11, twd: 230 }];
+  T.D.App.seriesHist = [{ t: now - 25, tws: 11, twd: 230 }];
+  const fc = { available: true, hours: [{ in_h: 1, tws: 12, twd: 235 }, { in_h: 2, tws: 13, twd: 240 }] };
+  const t = T.D.BUILD.forecast({ forecast: fc, conditions: { available: true, tws: null, twd: null } });
+  ok(/no wind reading/.test(t.rows[0].cols[0]), "Now row: " + JSON.stringify(t.rows[0]));
+  const l = T.D.BUILD.forecast({ forecast: fc, conditions: { available: true, tws: 9, twd: 200 } });
+  ok(/9/.test(l.rows[0].cols[0]), "live Now row: " + JSON.stringify(l.rows[0]));
+});
+
 /* ---------------- #295 the Orin's load shed ---------------- */
 test("#295 shedding: one plain line under the top bar; the Re-route offer sees the level", async () => {
   const T = load();

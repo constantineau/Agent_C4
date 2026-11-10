@@ -29,11 +29,20 @@ import os
 import time
 
 from . import datasource
+from shared import staleness
 from shared import strategy_render as sr
 
 TREND_BUCKET_MIN = float(os.environ.get("TREND_BUCKET_MIN", "15"))
 TREND_MIN_SAMPLES = int(os.environ.get("TREND_MIN_SAMPLES", "5"))
-TREND_FRESH_S = float(os.environ.get("TREND_FRESH_S", "120"))   # newest wind older → no live read
+# Newest wind older than this → no live read. The consumer limit in `shared/staleness.py` (#291):
+# 30 s aboard, 120 s in the cloud (it sees the boat through the uplink). TREND_FRESH_S, when set,
+# overrides both.
+_TREND_FRESH_ENV = os.environ.get("TREND_FRESH_S")
+TREND_FRESH_S = None if _TREND_FRESH_ENV in (None, "") else float(_TREND_FRESH_ENV)
+
+
+def _fresh_s():
+    return TREND_FRESH_S if TREND_FRESH_S is not None else staleness.consumer_s("trend")
 WINDOWS_MIN = (60, 180)
 
 _MS_TO_KN = 1.943844
@@ -129,15 +138,16 @@ def get_trend(route=None, now=None):
                 "based": ["own wind archive"], "conf": "engine"}
 
     as_of = max(r[0] for r in (tws_rows + twd_rows))
-    if now - as_of > TREND_FRESH_S:
+    fresh_s = _fresh_s()
+    if now - as_of > fresh_s:
         return {"available": False, "note": "No live wind data.", "as_of": as_of,
                 "based": ["own wind archive"], "conf": "engine"}
 
     # freshness is per channel: a quiet TWS next to a live TWD must not keep serving an old rate
     stale = []
-    if tws_rows and now - max(r[0] for r in tws_rows) > TREND_FRESH_S:
+    if tws_rows and now - max(r[0] for r in tws_rows) > fresh_s:
         tws_rows, stale = [], stale + ["speed"]
-    if twd_rows and now - max(r[0] for r in twd_rows) > TREND_FRESH_S:
+    if twd_rows and now - max(r[0] for r in twd_rows) > fresh_s:
         twd_rows, stale = [], stale + ["direction"]
     note = {"speed": "No live wind speed data.",
             "direction": "No live wind direction data."}.get(stale[0]) if stale else None

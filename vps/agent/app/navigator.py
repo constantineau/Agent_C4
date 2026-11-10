@@ -481,18 +481,28 @@ def _fresh(s):
 ETA_WIND_MIN = float(os.environ.get("NAV_ETA_WIND_MIN", "20"))   # wind-smoothing window
 
 
-def _smoothed_wind(minutes=None):
+def _smoothed_wind(minutes=None, now=None):
     """(tws_kn, twd_deg) averaged over the window — circular mean for direction, so 359 deg and
-    1 deg average to 0 rather than 180. (None, None) when there is not enough history."""
+    1 deg average to 0 rather than 180. (None, None) when there is not enough history, or when
+    the newest TWS or TWD is older than the ETA's wind limit (#291, `staleness.consumer_s
+    ("eta_wind")`: 30 s aboard, 120 s in the cloud). Before, a 20-min window of old wind read
+    as steady wind and the polar ETA ran on for 20 min after the masthead died. Without it the
+    ETA falls back to made-good on the live COG/SOG, which needs no wind."""
     mins = ETA_WIND_MIN if minutes is None else minutes
     try:
         src = datasource.active()
-        tws = [v for _, v in src.series(_PATHS["tws"], mins) if v is not None]
-        twd = [v for _, v in src.series(_PATHS["twd"], mins) if v is not None]
+        tws_rows = [(t, v) for t, v in src.series(_PATHS["tws"], mins) if v is not None]
+        twd_rows = [(t, v) for t, v in src.series(_PATHS["twd"], mins) if v is not None]
     except Exception:
         return None, None
-    if not tws or not twd:
+    if not tws_rows or not twd_rows:
         return None, None
+    now = time.time() if now is None else now
+    limit = staleness.consumer_s("eta_wind")
+    if any(now - max(t for t, _ in rows) > limit for rows in (tws_rows, twd_rows)):
+        return None, None
+    tws = [v for _, v in tws_rows]
+    twd = [v for _, v in twd_rows]
     sy = sum(math.sin(v) for v in twd)          # radians in the archive, raw SI
     sx = sum(math.cos(v) for v in twd)
     return (sum(tws) / len(tws)) * 1.943844, (math.degrees(math.atan2(sy, sx)) + 360) % 360

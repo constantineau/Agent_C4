@@ -804,8 +804,10 @@
       // the boat's measured wind — only a REAL reading (a null tws is "no wind", not 0 kts)
       const live = p.conditions && p.conditions.available && p.conditions.tws != null && p.conditions.twd != null
         ? { tws: p.conditions.tws, twd: p.conditions.twd } : null;
-      const o0 = observedAt(0);
-      const obs = o0 && o0.tws != null && o0.twd != null ? o0 : live;
+      // "Now" is the live /conditions wind only (#291): the strip nulls wind past its dead limit,
+      // while the wind log's newest point counts as "now" for up to 60 s after the wind stops.
+      // observedAt() stays for the history points (−60 / −120 min).
+      const obs = live;
       App.fcObs = obs;                    // the plume detail pins the same reading at now
       const nowS = Date.now() / 1000;
       const fromPlume = (h) => {          // the models' mean at +h when there's no Open-Meteo series
@@ -1038,7 +1040,11 @@
     data(p) {
       const c = p.conditions, src = p.sources, h = currentHealth();
       const count = src && src.count != null ? src.count : 0;
-      const anyStale = src && src.sources && src.sources.some((s) => s.last_seen_s > 45);
+      // #291: a source is stale past its own limit from the engine (the failover limit of the
+      // fastest channel it sends: 5 s fast / 10 s slow aboard); 45 s only for an engine too old
+      // to send one.
+      const anyStale = src && src.sources && src.sources.some((s) =>
+        s.last_seen_s > (s.stale_after_s != null ? s.stale_after_s : 45));
       // #247: the stale alert per sensor group. A dead depth or GPS alone turns the tile, even
       // while every other sensor is fresh (the engine's `dead_groups`: watch at the dead limit,
       // act past 60 s).

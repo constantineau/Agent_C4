@@ -230,13 +230,15 @@ class PolarDS(StubDS):
         return [(8.0, 45.0, 6.0), (8.0, 90.0, 7.0), (12.0, 90.0, 8.0)]
 
     def series(self, path, minutes):
-        n = 30
+        # a full, live 10-min window: one sample every 5 s, the newest 1 s old (#291)
+        now = time.time()
+        ts = [now - 1 - 5 * i for i in range(119, -1, -1)]
         if path == "navigation.speedThroughWater":
-            return [(_now - i, 7.0 * PolarDS.pct / 1.943844) for i in range(n, 0, -1)]
+            return [(t, 7.0 * PolarDS.pct / 1.943844) for t in ts]
         if path == "environment.wind.speedTrue":
-            return [(_now - i, 8.0 / 1.943844) for i in range(n, 0, -1)]
+            return [(t, 8.0 / 1.943844) for t in ts]
         if path == "environment.wind.angleTrueWater":
-            return [(_now - i, 90.0 / 57.29577951308232) for i in range(n, 0, -1)]
+            return [(t, 90.0 / 57.29577951308232) for t in ts]
         return []
 
 
@@ -256,7 +258,7 @@ check("sailing at 95% -> quiet", r["plays"][0]["status"] == "quiet"
 
 class ThinDS(PolarDS):
     def series(self, path, minutes):
-        return []           # archive gap — fall back to the instantaneous read
+        return []           # archive gap: no % of polar (#291; the one-read fallback is gone)
 
     def latest_value(self, path):
         return {"navigation.speedThroughWater": 7.0 * 0.8 / 1.943844,
@@ -267,8 +269,8 @@ class ThinDS(PolarDS):
 matcher.datasource.active = lambda: ThinDS()
 matcher._POLAR_TABLE = None
 r = matcher.get_plays()
-check("thin archive -> instantaneous fallback (~80%)",
-      r["signals"]["polar_pct"] is not None and abs(r["signals"]["polar_pct"] - 80.0) < 1.5)
+check("thin archive -> no % of polar, even with a live instant read (#291)",
+      r["signals"]["polar_pct"] is None)
 matcher._POLAR_TABLE = None
 print("RESULT-8:", "PASS" if ok else "FAIL")
 
