@@ -192,6 +192,35 @@ check("the boat edit and the debrief's archive step take the same lock",
 
 judge.store.get_race = _saved_get_race
 
+print("5c) the observed polar is one boat's sailing only (Codex on #321)")
+from app import obspolar  # noqa: E402
+asked = []
+_aj = monitor.agent_json
+
+
+def _agent(path, timeout=30):
+    if path.startswith("/racelog/sessions"):
+        return {"sessions": [dict(x) for x in SESSIONS]}
+    asked.append(path)
+    raise RuntimeError("no track in this test")
+
+
+monitor.agent_json = _agent
+for _bid, _want in (("sr33", set()), ("bravo", {S_BRAVO, S_OLD, S_OTHER})):
+    asked.clear()
+    try:
+        obspolar.compute(min_seconds=60, boat_id=_bid)
+    except RuntimeError:
+        pass
+    starts = {float(p.split("start=")[1].split("&")[0]) for p in asked}
+    check(f"{_bid}'s observed polar reads only {_bid}'s sessions", starts <= _want
+          and (bool(starts) == bool(_want)))
+monitor.agent_json = _aj
+check("one cached build per boat", obspolar._cache("sr33") != obspolar._cache("bravo"))
+check("building and applying a suggestion take the boat-edit lock",
+      all(getattr(f, "__wrapped__", None) for f in (learning.propose, learning.apply_proposal,
+                                                    learning.rescore_propose)))
+
 print("6) the debrief runs for the session's boat, not the active one")
 seen = {}
 _get = boats.get_boat

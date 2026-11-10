@@ -23,6 +23,7 @@ from . import monitor, sessionboat
 from . import atomicio
 from . import track as T
 
+_ACTIVE = object()      # "the Lab's active boat" (read when called)
 CACHE = os.path.join(os.path.dirname(os.environ.get("LEARNING_DB", "/srv/learning/learning.db")),
                      "observed_polar.json")
 TWS_STEP_KN = 2.0
@@ -139,7 +140,7 @@ def _rows(raw, keyfn, min_seconds, strides, names=None, credit=None):
     return sorted(out, key=key), sorted(refused, key=key)
 
 
-def compute(min_seconds=MIN_SECONDS):
+def compute(min_seconds=MIN_SECONDS, boat_id=_ACTIVE):
     """Build the observed polar from every derivable race session. Returns the full artifact.
 
     Four views come off ONE pass of the record, because Cole asked (2026-09-15) to see each race
@@ -158,7 +159,14 @@ def compute(min_seconds=MIN_SECONDS):
     race_meta = []
     by_window = {}       # (start, end) -> its race_meta row
     seen_rec, seen_pool = {}, set()    # accepted fix seconds, per recording and pooled
+    if boat_id is _ACTIVE:
+        from . import boats
+        boat_id = boats.active_id()
     for s in monitor.agent_json(sessionboat.sessions_path())["sessions"]:
+        # #320: one boat's observed polar is its own sailing only (never another boat's session,
+        # nor an "Other boat" with no profile)
+        if sessionboat.effective(s)["boat_id"] != boat_id:
+            continue
         w = s.get("window") or {}
         if not w.get("hours"):
             continue
@@ -268,11 +276,21 @@ def compute(min_seconds=MIN_SECONDS):
             "tws_buckets": sorted({r["tws"] for r in cells})}
 
 
-def build(force=False):
+def _cache(boat_id):
+    """One cached build per boat (#320)."""
+    base, ext = os.path.splitext(CACHE)
+    return f"{base}.{boat_id}{ext}" if boat_id else CACHE
+
+
+def build(force=False, boat_id=_ACTIVE):
     """The cached artifact, recomputed on demand. A failed refresh keeps the last good build."""
+    if boat_id is _ACTIVE:
+        from . import boats
+        boat_id = boats.active_id()
+    cache = _cache(boat_id)
     if not force:
         try:
-            with open(CACHE) as fh:
+            with open(cache) as fh:
                 art = json.load(fh)
             # A cache written by an older build has none of the per-race views, or was built
             # under the old sample-count gate, and serving it would show numbers the page says
@@ -285,16 +303,17 @@ def build(force=False):
         except (OSError, ValueError):
             pass
     try:
-        art = compute()
+        art = compute(boat_id=boat_id)
+        art["boat_id"] = boat_id
     except Exception as exc:
         try:                                     # stale beats broken, but say so
-            with open(CACHE) as fh:
+            with open(cache) as fh:
                 stale = json.load(fh)
             stale["refresh_error"] = f"{type(exc).__name__}: {exc}"
             return stale
         except (OSError, ValueError):
             return {"cells": [], "races": [], "configs": [], "tws_buckets": [],
                     "error": f"agent unreachable and no cached build: {exc}"}
-    os.makedirs(os.path.dirname(CACHE), exist_ok=True)
-    atomicio.write_json(CACHE, art)
+    os.makedirs(os.path.dirname(cache), exist_ok=True)
+    atomicio.write_json(cache, art)
     return art

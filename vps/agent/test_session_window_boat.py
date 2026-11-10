@@ -40,5 +40,11 @@ check("a Lab edit splits two same-tag markers into two boats' windows",
       main._window_for(A, [A, B2], motion)["end_ts"] <= B2["start_ts"]
       and main._window_for(B2, [A, B2], motion)["start_ts"] >= A["end_ts"])
 
+# another kit's session in the middle (a second boat with its own Pi) clips nothing
+K2 = {"id": 9, "race_id": "r", "kit": "bravo", "boat_id": "bravo", "start_ts": T + 1200,
+      "end_ts": T + 2400}
+check("another kit's session never cuts this kit's window",
+      main._window_for(A, [A, K2], motion)["end_ts"] >= A["end_ts"])
+
 print("ALL OK" if ok else "SOME CHECKS FAILED")
 raise SystemExit(0 if ok else 1)

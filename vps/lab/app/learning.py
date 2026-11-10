@@ -187,6 +187,20 @@ def list_debriefs(boat_id=None, race_id=None, limit=200):
         c.close()
 
 
+def _evidence_locked(fn):
+    """Run under the lock a session-boat change takes (#320, Codex on #321): a suggestion is built,
+    or applied, either wholly before a withdrawal (which then marks it stale) or wholly after it
+    (on the evidence that is left), never from evidence withdrawn half way through."""
+    import functools
+
+    @functools.wraps(fn)
+    def run(*a, **k):
+        from . import sessionboat
+        with sessionboat.ARCHIVE_LOCK:
+            return fn(*a, **k)
+    return run
+
+
 WITHDRAWN = "withdrawn:"
 STALE_NOTE = "A session's boat changed. Its evidence left this boat. Build it again."
 
@@ -373,6 +387,7 @@ def bin_sources(boat_id=None):
         c.close()
 
 
+@_evidence_locked
 def propose(boat_id, recordings=None):
     """Aggregate the archive → a PROPOSED boat-model refinement (helm_factor + per-cell polar overlay),
     written as a `proposed` row for human review. Never touches the boat profile.
@@ -547,6 +562,7 @@ def list_proposals(boat_id=None, limit=50):
         c.close()
 
 
+@_evidence_locked
 def apply_proposal(pid, helm_factor=None, adjustments=None, note="", wave_coeffs=None):
     """HUMAN-APPROVED apply: write the (possibly human-edited) refinement onto the boat profile and mark
     the proposal applied. Falls back to the proposed values when the caller doesn't override. This is
@@ -699,6 +715,7 @@ def _current_wave_coeffs(boat_id):
     return env
 
 
+@_evidence_locked
 def calibrate_waves(boat_id):
     """Fit the sea-state degradation slope k (per point of sail) from the archive → a PROPOSED
     `wave_coeffs` refinement for human review. Never mutates the boat.
@@ -994,6 +1011,7 @@ def latest_rescore(boat_id):
         c.close()
 
 
+@_evidence_locked
 def rescore_propose(run_id, note=""):
     """A person approved a re-score run → file it as an ordinary `proposed` boat-model refinement.
     Nothing reaches the boat here: the proposal is applied, or not, through `apply_proposal` like

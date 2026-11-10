@@ -329,10 +329,13 @@ def _window_for(s, sessions, motion):
 
 
 def _clip_to_boat(w, ses, sessions):
-    """Stop a derived window at the nearest marker of a session sailed on ANOTHER boat (#320)."""
+    """Stop a derived window at the nearest marker of a session this kit sailed on ANOTHER boat
+    (#320): the kit moved boats in between."""
     a = float(ses["start_ts"])
     for o in sessions:
-        if _sailed(o) == _sailed(ses) or o.get("start_ts") is None:
+        # only the same KIT's other boats: another kit's sessions are another boat's record
+        if o.get("kit") != ses.get("kit") or _sailed(o) == _sailed(ses) \
+                or o.get("start_ts") is None:
             continue
         o_a = float(o["start_ts"])
         o_b = float(o.get("end_ts") or o_a)
