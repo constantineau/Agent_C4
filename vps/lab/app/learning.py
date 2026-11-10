@@ -798,6 +798,9 @@ def applied_model(boat_id):
                                  for a in (b.get("polar_adjustments") or [])
                                  if a.get("mult") is not None],
            "wave_coeffs": _current_wave_coeffs(boat_id),
+           # the boat's own overlay as scoring reads it (None = env priors): the bins' pct_flat
+           # is only valid while this is what the boat uses
+           "boat_wave_coeffs": boats.wave_coeffs(b),
            "proposal_id": None, "proposal_adjustments": [], "proposal_overall_pct": None}
     c = _conn()
     try:
@@ -947,6 +950,10 @@ def rescore_propose(run_id, note=""):
     if not res.get("ok"):
         return {"ok": False, "note": res.get("note") or "this re-score has nothing to suggest"}
     boat = boats.get_boat(run["boat_id"]) or {}
+    if boats.wave_coeffs(boat) != (run.get("against") or {}).get("boat_wave_coeffs"):
+        # the helm and overlay were refined on the sea-state model of the time; on another one
+        # they would not predict what the boat sailed
+        return {"ok": False, "note": "The wave settings changed since this ran. Score again."}
     helm_now = float(boat.get("helm_factor", 1.0))
     tag = {"rescore_run": run_id, "evidence_version": run.get("evidence_version")}
     now = time.time()

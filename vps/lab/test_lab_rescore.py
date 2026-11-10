@@ -218,6 +218,12 @@ check("a second approve is refused", LN.rescore_propose(run["id"])["ok"] is Fals
 check("reject on a decided run is refused", LN.rescore_reject(run["id"])["ok"] is False)
 check("reject on a ready run works", LN.rescore_reject(run2["id"])["ok"] is True
       and LN.get_rescore(run2["id"])["status"] == "rejected")
+run4 = RS.run("sr33", fetch_track=fake_fetch, score=fake_score)
+bt = boats.get_boat("sr33")
+boats.save_boat({**bt, "wave_coeffs": {"hs_deadband": 0.5, "k_up": 0.1, "floor": 0.6}})
+check("approve is refused when the wave settings changed since the run",
+      LN.rescore_propose(run4["id"])["ok"] is False and LN.get_rescore(run4["id"])["status"] == "ready")
+boats.save_boat(bt)
 check("approve on a rejected run is refused", LN.rescore_propose(run2["id"])["ok"] is False)
 
 # a wave fit that succeeds is shown, never filed: helm stays on the coefficients in use

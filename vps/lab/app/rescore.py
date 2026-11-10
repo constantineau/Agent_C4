@@ -9,7 +9,7 @@ recording the Lab no longer stores from the boat log IN MEMORY (nothing is saved
 store), and files one `rescore_runs` row via `learning.save_rescore`. It never writes perf_bins,
 proposals or the boat profile.
 """
-from . import boats, learning, track
+from . import learning, track
 
 # Bump when the code that turns a recording into bins changes in a way that should be re-scored.
 EVIDENCE_VERSION = "2026-11-09 (#49 #50 #63 #68)"
@@ -63,8 +63,10 @@ def run(boat_id, fetch_track=None, score=None, on_progress=None):
     log = on_progress or (lambda *_: None)
     if score is None:
         from .judge import score_recording as score
-    boat = boats.get_boat(boat_id) or {}
-    wave_coeffs = boats.wave_coeffs(boat)
+    # what the boat uses NOW, read once before scoring: the bins are scored on these wave
+    # coefficients and the comparison is against this model, even if the boat changes meanwhile
+    against = learning.applied_model(boat_id)
+    wave_coeffs = against.get("boat_wave_coeffs")
     recs = learning.archived_recordings(boat_id)
     bins, notes = [], []
     for r in recs:
@@ -95,4 +97,4 @@ def run(boat_id, fetch_track=None, score=None, on_progress=None):
                       "wave_corrected": bool(s.get("wave_corrected")),
                       "trust_refused": tr.get("refused_samples")})
     log("comparing with the boat model in use…")
-    return learning.save_rescore(boat_id, EVIDENCE_VERSION, notes, bins)
+    return learning.save_rescore(boat_id, EVIDENCE_VERSION, notes, bins, against=against)
