@@ -19,7 +19,8 @@ Hysteresis, two kinds:
   * time: the overall level drops only after SHED_HOLD_S with no signal asking for it. That also
     covers the model unload below, which frees ~5 GB at once and would otherwise flap.
 
-On entering a memory level the guard asks Ollama to unload its model (SHED_UNLOAD_MODEL=1). With
+On entering a memory level the guard asks Ollama to unload its model (SHED_UNLOAD_MODEL=1), after
+the new level is written, and again every 30 s while memory stays short if a model is loaded. With
 narration paused nothing would use it, and Ollama would otherwise hold the ~5 GB for its 5 min
 keep-alive. Heat and power don't unload: an idle model draws no GPU power.
 
@@ -31,6 +32,7 @@ import glob
 import json
 import os
 import sys
+import threading
 import time
 import urllib.request
 
@@ -215,7 +217,9 @@ class Guard:
     """The level from readings, with both hysteresis kinds. `step(readings, now)` → state dict.
     Readings: mem_mb, tj_c, oc_events (any may be None)."""
 
-    def __init__(self, cfg, unload=None):
+    UNLOAD_EVERY_S = 30.0
+
+    def __init__(self, cfg):
         self.cfg = cfg
         self.sig = {"memory": 0, "heat": 0, "power": 0}
         self.last_ask = {1: None, 2: None, 3: None}   # last time any signal asked for level k
@@ -223,11 +227,26 @@ class Guard:
         self.since = None
         self.cause = None
         self.last_oc = None
-        self.unload = unload
+        self.last_unload = None
+        self.now = None
+
+    def unload_due(self):
+        """True when the caller should (re)unload Ollama's model: on entering a memory level, then
+        every UNLOAD_EVERY_S while memory stays short (a request already queued in Ollama when we
+        unloaded would load it again). Called AFTER the new level is written, so nothing new starts
+        while the unload runs. Heat and power never unload: an idle model draws no GPU power."""
+        if not (self.cfg["unload"] and self.sig["memory"] >= 1):
+            self.last_unload = None
+            return False
+        if self.last_unload is not None and self.now - self.last_unload < self.UNLOAD_EVERY_S:
+            return False
+        self.last_unload = self.now
+        return True
 
     def step(self, r, now):
         c = self.cfg
-        prev_mem = self.sig["memory"]
+        self.now = now
+        rr = {k: (round(v, 1) if isinstance(v, float) else v) for k, v in r.items()}
         self.sig["memory"] = signal_level(self.sig["memory"], r.get("mem_mb"), c["mem"],
                                           c["mem_clear"], True)
         self.sig["heat"] = signal_level(self.sig["heat"], r.get("tj_c"), c["tj"], c["tj_clear"],
@@ -241,10 +260,10 @@ class Guard:
         asked = max(self.sig.values())
         for k in range(1, asked + 1):
             self.last_ask[k] = now
-        level = 0
+        level = asked        # never below what is asked now; the hold only keeps a higher one
         for k in (3, 2, 1):
             t = self.last_ask[k]
-            if t is not None and now - t < c["hold_s"]:
+            if k > level and t is not None and now - t < c["hold_s"]:
                 level = k
                 break
         if asked:
@@ -255,15 +274,13 @@ class Guard:
             self.since = now
             what = ", ".join(PAUSED_AT.get(level, [])) or "nothing"
             _log(f"level {self.level} -> {level} ({self.cause if level else 'recovered'}); "
-                 f"paused: {what}; readings {json.dumps(r)}")
+                 f"paused: {what}; readings {json.dumps(rr)}")
             self.level = level
-        if self.sig["memory"] >= 1 and prev_mem == 0 and c["unload"] and self.unload:
-            self.unload()
         if level == 0:
             self.cause = None
         return {"level": level, "cause": self.cause, "since": self.since, "updated": now,
                 "paused": PAUSED_AT.get(level, []), "signals": dict(self.sig),
-                "readings": {k: (round(v, 1) if isinstance(v, float) else v) for k, v in r.items()}}
+                "readings": rr}
 
 
 def unload_models(base):
@@ -274,6 +291,7 @@ def unload_models(base):
     except (OSError, ValueError) as exc:
         _log(f"unload: could not list Ollama models: {exc}")
         return
+    # nothing loaded (the usual case on a repeat check): no log, no request
     for name in filter(None, names):
         try:
             req = urllib.request.Request(base + "/api/generate", data=json.dumps(
@@ -302,13 +320,18 @@ def main():
     cfg = load_config()
     path = state_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    g = Guard(cfg, unload=lambda: unload_models(cfg["ollama"]))
+    g = Guard(cfg)
+    unloader = None
     _log(f"watching: memory {cfg['mem']} MB (clear {cfg['mem_clear']}), heat {cfg['tj']} C "
          f"(clear {cfg['tj_clear']}), power level {cfg['power']}, hold {cfg['hold_s']:.0f} s; "
          f"state {path}")
     while True:
         try:
             write_state(g.step(readings(), time.time()), path)
+            # only after the pause is published, and off the loop so the state keeps refreshing
+            if g.unload_due() and not (unloader and unloader.is_alive()):
+                unloader = threading.Thread(target=unload_models, args=(cfg["ollama"],), daemon=True)
+                unloader.start()
         except Exception as exc:  # noqa: BLE001 — keep watching; a stale file fails open anyway
             _log(f"step failed: {type(exc).__name__}: {exc}")
         time.sleep(cfg["interval_s"])

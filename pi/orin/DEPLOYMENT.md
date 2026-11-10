@@ -343,7 +343,9 @@ room for one. Under full load tj levelled at 70 °C; the hardware's own throttle
 
 Hysteresis: a signal leaves a level only past its clear value, and the overall level drops only
 after `SHED_HOLD_S` (300 s) with nothing asking for it. On entering a memory level the guard asks
-Ollama to unload its model (`SHED_UNLOAD_MODEL=1`): with narration paused nothing would use it, and
+Ollama to unload its model (`SHED_UNLOAD_MODEL=1`), after the new level is written, and again every
+30 s while memory stays short (a request already queued could reload it). With narration paused
+nothing would use the model, and
 Ollama would hold the ~5 GB for its 5 min keep-alive. The hold stops the unload/reload from
 flapping; a reload after recovery takes ~2.5 min. Heat and power don't unload.
 

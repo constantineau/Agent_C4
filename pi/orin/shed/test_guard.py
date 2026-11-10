@@ -76,8 +76,7 @@ def main():
           guard.read_mem_available_mb(os.path.join(tmp, "nope")) is None)
 
     cfg = guard.load_config({})
-    unloads = []
-    g = guard.Guard(cfg, unload=lambda: unloads.append(1))
+    g = guard.Guard(cfg)
     t = 1000.0
 
     print("memory: narration, then plume, then re-route")
@@ -87,7 +86,8 @@ def main():
     check("1000 MB (worst seen with only the copilot) → still 0", st["level"] == 0)
     st = g.step(mb(700), t + 10)
     check("700 MB → level 1: narration paused", st["level"] == 1 and st["paused"] == ["narration"])
-    check("entering a memory level unloads the model once", unloads == [1])
+    check("entering a memory level asks for an unload", g.unload_due())
+    check("…once: not again on the same step", not g.unload_due())
     st = g.step(mb(580), t + 15)
     check("580 MB → level 2: narration + plume", st["level"] == 2
           and st["paused"] == ["narration", "plume"])
@@ -95,27 +95,30 @@ def main():
     check("340 MB (worst seen, #253) → level 3: re-route too",
           st["level"] == 3 and st["paused"] == ["narration", "plume", "reroute"])
     check("cause is memory", st["cause"] == "memory")
-    check("still one unload (only on entry)", unloads == [1])
+    check("no repeat unload within 30 s", not g.unload_due())
+    st = g.step(mb(340), t + 45)
+    check("memory still short 35 s later → unload again (a queued request may have reloaded it)",
+          g.unload_due())
 
     print("value hysteresis")
-    st = g.step(mb(700), t + 25)
+    st = g.step(mb(700), t + 55)
     check("back above the level-3 enter (500) but under its clear (750) → signal stays 3",
           g.sig["memory"] == 3)
-    st = g.step(mb(800), t + 30)
+    st = g.step(mb(800), t + 60)
     check("above 750 → memory signal drops to 2 (under its 850 clear)", g.sig["memory"] == 2)
 
     print("time hysteresis (hold 300 s)")
-    st = g.step(mb(6000), t + 35)
+    st = g.step(mb(6000), t + 65)
     check("memory back, signal 0, but the level holds at 3", g.sig["memory"] == 0 and st["level"] == 3)
-    st = g.step(mb(6000), t + 25 + 299)
+    st = g.step(mb(6000), t + 55 + 299)
     check("299 s after level 3 was last asked for → still 3", st["level"] == 3)
-    st = g.step(mb(6000), t + 25 + 301)
-    check("301 s → level 3 lifted; level 2 was asked for until t+30 → 2", st["level"] == 2)
-    st = g.step(mb(6000), t + 30 + 301)
+    st = g.step(mb(6000), t + 55 + 301)
+    check("301 s → level 3 lifted; level 2 was asked for until t+60 → 2", st["level"] == 2)
+    st = g.step(mb(6000), t + 60 + 301)
     check("then back to 0", st["level"] == 0 and st["cause"] is None)
 
     print("heat")
-    g2 = guard.Guard(cfg, unload=lambda: unloads.append(2))
+    g2 = guard.Guard(cfg)
     h = lambda c: {"mem_mb": 6000.0, "tj_c": float(c), "oc_events": 0}  # noqa: E731
     check("70 C (measured peak under full load) → 0", g2.step(h(70), t)["level"] == 0)
     check("85 C → level 1", g2.step(h(85), t + 5)["level"] == 1)
@@ -123,17 +126,23 @@ def main():
           and g2.level == 3)
     g2.step(h(91), t + 15)
     check("91 C: under the 95 enter, over the 90 clear → heat signal stays 3", g2.sig["heat"] == 3)
-    check("heat never unloads the model", unloads == [1])
+    check("heat never unloads the model", not g2.unload_due())
 
     print("power")
-    g3 = guard.Guard(cfg, unload=lambda: unloads.append(3))
+    g3 = guard.Guard(cfg)
     p = lambda n: {"mem_mb": 6000.0, "tj_c": 45.0, "oc_events": n}  # noqa: E731
     check("first reading of an old count (14368) → 0", g3.step(p(14368), t)["level"] == 0)
     check("count steady → 0", g3.step(p(14368), t + 5)["level"] == 0)
     st = g3.step(p(14370), t + 10)
     check("count rising → level 1, cause power", st["level"] == 1 and st["cause"] == "power")
     check("held after the count stops rising", g3.step(p(14370), t + 15)["level"] == 1)
-    check("power never unloads the model", unloads == [1])
+    check("power never unloads the model", not g3.unload_due())
+    check("SHED_UNLOAD_MODEL=0 never unloads",
+          not (lambda gg: (gg.step(mb(300), t), gg.unload_due())[1])(
+              guard.Guard(guard.load_config({"SHED_UNLOAD_MODEL": "0"}))))
+    g0 = guard.Guard(guard.load_config({"SHED_HOLD_S": "0"}))
+    check("SHED_HOLD_S=0 still sheds what is asked now (no hold)",
+          g0.step(mb(340), t)["level"] == 3 and g0.step(mb(6000), t + 5)["level"] == 0)
     check("SHED_POWER_LEVEL=0 ignores power",
           guard.Guard(guard.load_config({"SHED_POWER_LEVEL": "0"})).step(p(5), t)["level"] == 0)
 
