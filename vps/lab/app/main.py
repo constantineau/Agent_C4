@@ -919,12 +919,25 @@ async def debrief_run(body: dict):
     race_id = b.get("race_id")
     if not race_id:
         return JSONResponse({"detail": "race_id required"}, status_code=400)
-    # the boat the session was SAILED on (#320): the Lab's edit, else the session's own pick;
-    # an "Other boat" with no profile can't be scored (no polar) and is refused, plainly
-    boat_id, why = sessionboat.for_debrief(b)
+    # the boat the session was SAILED on (#320): the Lab's edit, else the session's own pick,
+    # read off the boat log here (never from the request); an "Other boat" with no profile can't
+    # be scored (no polar) and is refused, plainly. An uploaded track (no session) → active boat.
+    rev = sessionboat.revision()           # before the track is fetched (see _guard)
+    ses = None
+    if b.get("session_id") is not None or b.get("start_ts") is not None:
+        ses = await run_in_threadpool(_log_session, b)
+        if ses is None:
+            return {"ok": False, "note": "Couldn't find this session on the boat log. Try again."}
+
+    def _boat_now():
+        if ses is None:
+            return None, None
+        eff = sessionboat.effective(ses)
+        return (eff["boat_id"], None) if eff["has_profile"] else (None, sessionboat.OTHER_NO_PROFILE)
+
+    boat_id, why = _boat_now()
     if why:
         return {"ok": False, "note": why}
-    rev = sessionboat.revision()           # before the track is fetched (see _guard)
 
     def _work(progress):
         rec = b.get("recording")
@@ -946,13 +959,30 @@ async def debrief_run(body: dict):
         # ...and no session's boat edited since this started: an edit of a session stitched
         # into this window changes what the window holds even if this session's boat didn't
         with sessionboat.ARCHIVE_LOCK:
-            now_id, _why = sessionboat.for_debrief(b)
+            now_id, _why = _boat_now()
             same = now_id == boat_id and sessionboat.revision() == rev
             yield (same, None if same else sessionboat.BOAT_CHANGED)
 
     return jobs.start("debrief", _work, result_key="report",
                       meta={"race_id": race_id, "recording": b.get("recording"),
                             "session_id": b.get("session_id")})
+
+
+def _log_session(b):
+    """The boat-log session a debrief request names (by start_ts, and id when given), or None."""
+    try:
+        sessions = (monitor.agent_json(sessionboat.sessions_path(), timeout=30) or {}).get(
+            "sessions") or []
+    except Exception:  # noqa: BLE001
+        return None
+    for x in sessions:
+        if b.get("start_ts") is not None and (x.get("start_ts") is None or
+                                              abs(float(x["start_ts"]) - float(b["start_ts"])) > 1e-3):
+            continue
+        if b.get("session_id") is not None and x.get("id") != b.get("session_id"):
+            continue
+        return x
+    return None
 
 
 @app.get("/api/debrief/run/status")
@@ -1078,6 +1108,7 @@ async def debrief_session_boat(body: dict):
                 return sorted(keys), x.get("race_id")
         return None
 
+    rev0 = sessionboat.revision()      # windows move with edits: re-checked under the lock
     old = await run_in_threadpool(_old_recording)
     if old is None:
         return JSONResponse({"detail": "Couldn't find this session on the boat log. Try again."},
@@ -1087,6 +1118,8 @@ async def debrief_session_boat(body: dict):
         # one step under the archive lock: a debrief finishing now either filed before this (and
         # is withdrawn below) or sees the new boat and files nothing
         with sessionboat.ARCHIVE_LOCK:
+            if sessionboat.revision() != rev0:
+                return False, "Another boat edit landed meanwhile. Try again.", 0
             ok, res = sessionboat.set_boat(b.get("kit"), b.get("start_ts"), b.get("boat_id"),
                                            b.get("boat_name"))
             if not ok:

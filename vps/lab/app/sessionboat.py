@@ -95,24 +95,6 @@ def revision() -> int:
         return 0
 
 
-def for_debrief(body):
-    """The boat a debrief of `body`'s session is for → (boat_id or None, reason or None).
-    The Lab's edit wins, then what the recordings row sent (the marker's boat). Nothing at all
-    (an uploaded GPX/YB track, an older client) → (None, None): the active boat, as before."""
-    b = body or {}
-    if b.get("start_ts") is not None and "kit" in b:
-        eff = effective({"kit": b.get("kit"), "start_ts": b["start_ts"],
-                         "boat_id": b.get("boat_id"), "boat_name": b.get("boat_name")})
-        if not eff["has_profile"]:
-            return None, OTHER_NO_PROFILE
-        return eff["boat_id"], None
-    if b.get("boat_id"):
-        return (b["boat_id"], None) if boats.get_boat(b["boat_id"]) else (None, OTHER_NO_PROFILE)
-    if b.get("boat_name"):
-        return None, OTHER_NO_PROFILE
-    return None, None
-
-
 def sessions_path() -> str:
     """The agent's /racelog/sessions, carrying the Lab's boat edits so the boat log derives each
     window per boat as edited (two sessions tagged one boat on the iPad and split here must not

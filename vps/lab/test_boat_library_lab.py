@@ -130,8 +130,9 @@ r = client.post("/api/debrief/session-boat", headers=TEAM, json={
     "kit": "sr33", "start_ts": S_OTHER, "boat_id": "bravo", "race_id": RID, "recording": S_OTHER})
 check("assigned to Bravo (e.g. after importing its cert)", r.status_code == 200
       and r.json()["boat"]["boat_id"] == "bravo")
-check("…and it is now debriefable for Bravo", sessionboat.for_debrief(
-    {"kit": "sr33", "start_ts": S_OTHER, "boat_id": None, "boat_name": "Mystery"}) == ("bravo", None))
+check("…and it is now debriefable for Bravo", sessionboat.effective(
+    {"kit": "sr33", "start_ts": S_OTHER, "boat_id": None, "boat_name": "Mystery"})["boat_id"]
+      == "bravo")
 recs = {x["session_id"]: x for x in client.get(f"/api/debrief/recordings?race_id={RID}",
                                                 headers=TEAM).json()["recordings"]}
 check("the recordings list shows the Lab's edit", recs[3]["boat_id"] == "bravo"
@@ -258,6 +259,22 @@ check("…a session-boat edit since then makes it stale (rebuilt; here the rebui
 check("building and applying a suggestion take the boat-edit lock",
       all(getattr(f, "__wrapped__", None) for f in (learning.propose, learning.apply_proposal,
                                                     learning.rescore_propose)))
+
+print("5d) a debrief request naming only the session gets the boat from the boat log")
+import time as _time  # noqa: E402
+got = {}
+_rj, _llt = judge.run_judge, main.load_log_track
+judge.run_judge = lambda *a, **k: got.update(boat=k.get("boat_id")) or {"available": True}
+main.load_log_track = lambda b: ({"window": {"start_ts": S_BRAVO}, "n": 1}, 200)
+r = client.post("/api/debrief/run", headers=TEAM, json={"race_id": RID, "session_id": 1,
+                                                        "start_ts": S_BRAVO}).json()
+for _ in range(100):
+    if "boat" in got:
+        break
+    _time.sleep(0.05)
+judge.run_judge, main.load_log_track = _rj, _llt
+check("no boat in the request, active boat sr33 → run for Bravo (the session's)",
+      got.get("boat") == "bravo")
 
 print("6) the debrief runs for the session's boat, not the active one")
 seen = {}
