@@ -169,6 +169,16 @@ try:
     check("outside both: no depth data", f.no_depth(10.45, 20.2, 10.46, 20.2))
     check("the summary names the grid", f.summary().get("depth_grids") == ["Test grid"])
 
+    enc.layers_in_bbox = lambda bbox, cache_dir=None, depth=None: {
+        "land": [], "shoal": [], "obstruction": [], "depth_cover": [], "missing": []}
+    fo = OB.build_for_course(COURSE, "c", BBOX, res_deg=RES, use_cache=False, source="enc",
+                             safety_depth=SR33)
+    check("grid only, no chart: still the depth-source build (Deploy rebuilds it the same way)",
+          fo.source == "enc" and fo.summary()["safety_depth_m"] == round(SR33, 2)
+          and fo.blocked(10.2, 20.4), (fo.source, fo.summary()["safety_depth_m"]))
+    enc.layers_in_bbox = lambda bbox, cache_dir=None, depth=None: {
+        "land": [], "shoal": [], "obstruction": [], "depth_cover": [ENC_BOX], "missing": []}
+
     print("3) shoals per boat")
     check("1 m blocked for sr33", f.blocked(10.2, 20.4))
     check("2.3 m blocked for sr33", f.blocked(10.2, 20.5))

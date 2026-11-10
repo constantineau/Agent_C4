@@ -472,6 +472,7 @@ def build_for_course(definition: dict, course_id, bbox, *, coastline_on=True, zo
             # the depth sources whose coverage touches this race's box (#292): the chart (NOAA ENC)
             # first, then any depth grid for the water it doesn't chart
             chart, *grids = depthsrc.sources_for(bbox)
+            grid_used = False
             try:
                 layers = chart.layers(bbox, cache_dir, depth)
                 if layers.get("missing"):
@@ -491,7 +492,8 @@ def build_for_course(definition: dict, course_id, bbox, *, coastline_on=True, zo
                 field.nodepth = bytearray(b"\x01") * (field.nx * field.ny)
                 for poly in layers.get("depth_cover", []) + layers.get("land", []):
                     field._fill_polygon(poly, 0, "depth", mask=field.nodepth)
-                if _apply_grids(field, grids, depth, cache_dir):
+                grid_used = _apply_grids(field, grids, depth, cache_dir)
+                if grid_used:
                     field.safety_depth = depth
             if layers.get("land") or layers.get("shoal") or layers.get("depth_cover"):
                 field.safety_depth = depth
@@ -504,8 +506,11 @@ def build_for_course(definition: dict, course_id, bbox, *, coastline_on=True, zo
                 _overlay(field, "land_rings", layers.get("land", []))
                 _overlay(field, "shoal_rings", layers.get("shoal", []))
                 _overlay(field, "obstruction_rings", layers.get("obstruction", []))
-            else:
-                field.source = coastline.active_source()     # ENC unavailable → global backstop alone
+            elif not grid_used:
+                # nothing from ENC or a grid → the global backstop alone. With grid depths the
+                # source stays "enc" (charts + depth sources), so the Deploy chart for the boat
+                # is rebuilt the same way, grid shoals included (Codex on #300)
+                field.source = coastline.active_source()
         else:                                                # global coastline only (no ENC requested)
             _fill_global_backstop(field, cache_dir)
             field.source = coastline.active_source()         # honest provenance (gshhg | natural_earth)
