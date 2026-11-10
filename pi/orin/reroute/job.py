@@ -362,13 +362,18 @@ def pick_polar(carried, boat, boat_info):
 
     The deployed boat's own polar, carried with the profile by the Lab's Deploy push, when the
     profile is the deployed one and the block is whole and is that boat's. Otherwise the profile's
-    own: its inline ORC cert, or the files it names in this checkout. Never another boat's."""
+    own: its inline ORC cert, or the files it names in this checkout — unless the push said
+    "no polar" (an explicit null). Never another boat's."""
     if boat is None:
         return None, None
     if (boat_info or {}).get("source") == "deploy":
         pol = (carried or {}).get("polar")
         if isinstance(pol, dict) and not boat_polar.check(pol, boat.get("boat_id")):
             return pol, "deploy"
+        if "polar" in (carried or {}) and pol is None:
+            # Deploy sent no polar on purpose (none for this boat, or it changed since the
+            # playbook): its word stands, no fallback (Codex on #319)
+            return None, None
     pol = boats.polar_for(boat)
     return (pol, "orin") if pol else (None, None)
 

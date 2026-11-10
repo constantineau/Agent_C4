@@ -542,7 +542,7 @@ def _rejoin_tab(definition, course_id, wf, consensus, cur, waves, marks, off_nm,
         from .geo import build_leg_fields
         bbox = optimizer.course_bbox(definition, course_id)
         if bbox:   # cache-shared with the scenario fan's optimize_course builds
-            base, leg_fields = build_leg_fields(definition, course_id, bbox, boat_polar=boat_polar, **(chart or {}))
+            base, leg_fields = build_leg_fields(definition, course_id, bbox, **(chart or {}))
     except Exception:
         base, leg_fields = None, []
     rp = optimizer._resolution("fast")

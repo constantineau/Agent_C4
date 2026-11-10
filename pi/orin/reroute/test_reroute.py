@@ -816,6 +816,13 @@ check("with the Deploy's polar: used and named (id, source, version)",
       and job.NOT_DEPLOYED_POLAR not in out12["warnings"])
 check("…same route as the Orin's own copy of sr33's polar",
       out12["total_hours"] == out11["total_hours"] and out12["points"] == out11["points"])
+pol, src = job.pick_polar(dict(CARRY, polar=None), REVIEWED, {"source": "deploy"})
+check("Deploy said no polar (explicit null) → none, no fallback", pol is None and src is None)
+try:
+    job.run(dict(REQ, assets=dict(CARRY, polar=None)), now=NOW, is_online=lambda: False)
+    check("…and the run is refused", False)
+except job.RunError as e:
+    check("…and the run is refused: 'No polar for this boat.'", str(e) == job.NO_POLAR)
 pol, src = job.pick_polar(dict(CARRY, polar=dict(P33, label="x")), REVIEWED, {"source": "deploy"})
 check("a tampered polar block → not used, the profile's own", src == "orin")
 BRAVO = json.load(open(os.path.join(REPO, "vps", "lab", "boats", "bravo.json")))

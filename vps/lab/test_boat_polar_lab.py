@@ -247,6 +247,20 @@ for fn in sorted(os.listdir(APP)):
         if name in ("polars_stw", "sail_polars") and not node.args and not node.keywords:
             bad.append(f"{fn}:{node.lineno} {name}()")
 check(f"every call passes the boat's polar ({', '.join(bad) or 'all do'})", not bad)
+# …and never to a function that doesn't take it (a `boat_polar=` to build_leg_fields raised a
+# TypeError that a broad except swallowed: the rejoin table lost its obstacles — Codex on #319)
+takes, passes = set(), []
+for fn in sorted(os.listdir(APP)):
+    if fn.endswith(".py"):
+        for node in ast.walk(ast.parse(open(os.path.join(APP, fn)).read())):
+            if isinstance(node, ast.FunctionDef) and any(
+                    a.arg == "boat_polar" for a in node.args.args + node.args.kwonlyargs):
+                takes.add(node.name)
+            if isinstance(node, ast.Call) and any(k.arg == "boat_polar" for k in node.keywords):
+                nm = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", "")
+                passes.append((fn, node.lineno, nm))
+wrong = [f"{f}:{n} {nm}" for f, n, nm in passes if nm not in takes]
+check(f"boat_polar only goes to functions that take it ({', '.join(wrong) or 'yes'})", not wrong)
 
 print("ALL OK" if ok else "SOME CHECKS FAILED")
 raise SystemExit(0 if ok else 1)

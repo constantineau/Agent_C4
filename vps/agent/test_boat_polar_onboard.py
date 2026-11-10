@@ -112,10 +112,18 @@ check("the re-route request carries Bravo's polar", req["polar"]["boat_id"] == "
 leaked = sorted(set(opened) & SR33_FILES)
 check(f"no sr33 polar file opened (opened: {leaked or 'none'})", not leaked)
 
-print("4) a deployed cert profile without a block → its own cert")
+print("4) the Lab said no polar (explicit null) → none; an older push (no key) → the profile's cert")
 check("stored", deploy(BRAVO, None) == (True, ""))
-check("Bravo's cert from the profile", orinassets.boat_polar()["source"] == "cert"
-      and orinassets.boat_polar()["boat_id"] == "bravo")
+check("explicit null: no polar, not the profile's cert", orinassets.boat_polar() is None)
+check("…and the Orin is told so (key present, null)", "polar" in orinassets.for_run({"race_id": "r"}, "c")
+      and orinassets.for_run({"race_id": "r"}, "c")["polar"] is None)
+body = {"schema": orinassets.SCHEMA, "race_id": "r", "course_id": "c", "chart": None,
+        "boat_id": "bravo", "boat": BRAVO, "boat_version": boat_profile.version(BRAVO)}
+orinassets._write(json.dumps({"received_at": 2, "assets": body}))
+check("an older push without the key: Bravo's cert from the profile",
+      orinassets.boat_polar()["source"] == "cert" and orinassets.boat_polar()["boat_id"] == "bravo")
+check("…and the Orin request carries no polar key (it may use the profile's own)",
+      "polar" not in orinassets.for_run({"race_id": "r"}, "c"))
 check("sr33 profile without its block → no polar (no files aboard)",
       deploy(SR33, None) == (True, "") and orinassets.boat_polar() is None)
 

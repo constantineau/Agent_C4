@@ -232,7 +232,9 @@ def for_run(definition, course_id):
         and a.get("course_id") == course_id
     return {"chart": a.get("chart") if same else None, "boat": a.get("boat"),
             "boat_version": a.get("boat_version") if a.get("boat") else None,
-            "polar": a.get("polar") if a.get("boat") else None,
+            # only when the push carried the key: an older push has none, so the Orin may fall
+            # back to the profile's own; an explicit null means "no polar" (Codex on #319)
+            **({"polar": a.get("polar") if a.get("boat") else None} if "polar" in a else {}),
             "race_id": a.get("race_id"), "course_id": a.get("course_id"),
             "received_at": rec.get("received_at")}
 
@@ -263,8 +265,10 @@ def boat_polar():
             carried = a.get("polar")
             if isinstance(carried, dict) and not BP.check(carried, boat.get("boat_id")):
                 pol = carried
-            else:
-                pol = BP.resolve(boat, dirs=())          # inline cert only: no files aboard
+            elif "polar" not in a:
+                # a push from a Lab before #304 (no polar key): the profile's inline cert only,
+                # no files aboard. An explicit null is the Lab's word: no polar (Codex on #319)
+                pol = BP.resolve(boat, dirs=())
     _POLAR_MEMO.update(key=key, polar=pol)
     return pol
 
