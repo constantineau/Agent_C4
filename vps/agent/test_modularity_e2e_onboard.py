@@ -217,13 +217,26 @@ print(json.dumps(out))
 """
 
 
-@xfail("#307", "every engine module defaults BOAT_ID to 'sr33' when it isn't set")
-def test_no_engine_module_defaults_to_sr33():
-    """BOAT_ID unset: each module refuses to start or has no boat id — never files as sr33."""
+def _module_boat_ids(boat_id):
+    """Each engine module's BOAT_ID, imported fresh with BOAT_ID set to `boat_id` (None = unset)."""
     env = {k: v for k, v in os.environ.items() if k != "BOAT_ID"}
+    if boat_id is not None:
+        env["BOAT_ID"] = boat_id
     env["PYTHONPATH"] = os.pathsep.join([os.path.join(REPO, "vps", "agent"), REPO, ENGINE_DIR])
     p = subprocess.run([sys.executable, "-c", _PROBE, *ENGINE_MODULES], env=env,
                        capture_output=True, text=True, timeout=120)
     assert p.returncode == 0, p.stderr[-800:]
-    ids = json.loads(p.stdout.strip().splitlines()[-1])
+    return json.loads(p.stdout.strip().splitlines()[-1])
+
+
+def test_every_engine_module_takes_the_configured_boat():
+    """BOAT_ID=bravo: every module that keeps a boat id keeps Bravo's (none hard-codes sr33)."""
+    ids = _module_boat_ids("bravo")
+    assert all(v in ("bravo", None) for v in ids.values()), ids
+
+
+@xfail("#307", "every engine module defaults BOAT_ID to 'sr33' when it isn't set")
+def test_no_engine_module_defaults_to_sr33():
+    """BOAT_ID unset: each module refuses to start or has no boat id — never files as sr33."""
+    ids = _module_boat_ids(None)
     assert not [m for m, v in ids.items() if v == "sr33"], ids

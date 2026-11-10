@@ -300,7 +300,9 @@ def scored():
 
 
 def test_debrief_scores_bravo(scored):
-    assert scored[0].get("available", True) is not False, scored[0].get("note")
+    s = scored[0]
+    assert s.get("available", True) is not False, s.get("note")
+    assert s.get("perf_bins"), "the speed half scored nothing"
 
 
 @xfail("#303", "debrief scores Bravo's speed against sr33's polar")
