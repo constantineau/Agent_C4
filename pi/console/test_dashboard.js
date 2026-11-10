@@ -571,6 +571,18 @@ test("#295 a health read asked before the press doesn't end the Pi offer", async
   answer(); await p;
   ok(T.D.rerouteView().button.engine === "pi", "an older read ended the offer");
 });
+test("#295 overlapping health polls: an older one finishing late doesn't hide the line", async () => {
+  const T = load();
+  let failOld;
+  T.ctx.fetchImpl = () => new Promise((res, rej) => { failOld = () => rej(new Error("timeout")); });
+  const a = T.D.fetchCopilotHealth();
+  T.tick(15000);
+  T.ctx.fetchImpl = () => json({ shed: { level: 3, guard: "on", cause: "heat" } });
+  await T.D.fetchCopilotHealth();
+  failOld(); await a;
+  const el = T.ctx.document.getElementById("shedWarn");
+  ok(el.hidden === false && el.textContent === "Orin hot. AI, plume and re-route paused.", "line: " + el.textContent);
+});
 test("#295 no Orin / no copilot (any boat): no line, no error", async () => {
   const T = load();
   for (const impl of [() => Promise.reject(new Error("no route to host")),

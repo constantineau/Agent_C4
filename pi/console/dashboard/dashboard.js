@@ -1771,6 +1771,7 @@
     // 20 s: /health checks the engine, then Ollama (its own 8 s timeout), in turn.
     const askedAt = Date.now();
     const r = await COL.fetchJsonWithin(COPILOT + "/health", { headers: { Accept: "application/json" } }, 20000);
+    if (askedAt < App.cpHealthAt) return;   // polls can overlap: a newer read already landed
     App.cpHealth = r && typeof r === "object" ? r : null;
     App.cpHealthAt = askedAt;
     renderShed();
