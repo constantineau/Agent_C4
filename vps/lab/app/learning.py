@@ -526,6 +526,12 @@ def apply_proposal(pid, helm_factor=None, adjustments=None, note="", wave_coeffs
         return {"ok": False, "note": "boat profile not found"}
     if prop.get("kind") == "wave_coeffs":
         return _apply_wave(prop, boat, wave_coeffs, note)
+    summ = prop.get("summary") or {}
+    if isinstance(summ, dict) and "rescore_run" in summ \
+            and boats.wave_coeffs(boat) != summ.get("boat_wave_coeffs"):
+        # a re-score's helm and overlay were refined on the wave settings of the time (#245)
+        return {"ok": False, "note": "The wave settings changed since this re-score. "
+                "Score again in the Polar tab."}
     hf = prop["helm_proposed"] if helm_factor is None else float(helm_factor)
     hf = round(max(_HELM_MIN, min(_HELM_MAX, hf)), 3)
     adj = prop["adjustments"] if adjustments is None else adjustments
@@ -955,7 +961,8 @@ def rescore_propose(run_id, note=""):
         # they would not predict what the boat sailed
         return {"ok": False, "note": "The wave settings changed since this ran. Score again."}
     helm_now = float(boat.get("helm_factor", 1.0))
-    tag = {"rescore_run": run_id, "evidence_version": run.get("evidence_version")}
+    tag = {"rescore_run": run_id, "evidence_version": run.get("evidence_version"),
+           "boat_wave_coeffs": (run.get("against") or {}).get("boat_wave_coeffs")}
     now = time.time()
     c = _conn()
     try:

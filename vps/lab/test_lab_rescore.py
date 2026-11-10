@@ -212,6 +212,12 @@ check("…an ordinary 'proposed' boat-model row, tagged with the run and scoring
 check("…with the re-scored values", p["helm_proposed"] == run["result"]["helm_proposed"]
       and len(p["adjustments"]) == len(run["result"]["adjustments"]))
 check("the boat model is still unchanged", json.dumps(boats.get_boat("sr33"), sort_keys=True) == applied_boat)
+bt0 = boats.get_boat("sr33")
+boats.save_boat({**bt0, "wave_coeffs": {"hs_deadband": 0.5, "k_up": 0.1, "floor": 0.6}})
+check("applying a re-score suggestion after the wave settings changed is refused",
+      LN.apply_proposal(res["proposal_id"])["ok"] is False
+      and LN.get_proposal(res["proposal_id"])["status"] == "proposed")
+boats.save_boat(bt0)
 check("the run is marked proposed", LN.get_rescore(run["id"])["status"] == "proposed")
 check("a second approve is refused", LN.rescore_propose(run["id"])["ok"] is False
       and rows("proposals") == n_props + 1)
