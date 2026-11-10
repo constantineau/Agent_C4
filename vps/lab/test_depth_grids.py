@@ -46,6 +46,8 @@ def elev(lat, lon):
         return -9999
     if lon < 20.1:
         return -1.0          # 1 m: a shoal the chart (ENC) says is not there; the chart wins
+    if 10.12 <= lat < 10.13 and 20.17 <= lon < 20.18:
+        return -0.5          # one 0.5 m pixel among 10 m ones: the cell takes the shallowest
     if lon < 20.3:
         return -10.0         # deep
     if lon < 20.45:
@@ -98,6 +100,8 @@ def cell(lat, lon):
 
 check("deep water: 10 m", cell(10.2, 20.2) == 10.0, cell(10.2, 20.2))
 check("a shoal: 1 m", cell(10.2, 20.4) == 1.0, cell(10.2, 20.4))
+check("one shallow pixel in a deep cell: the cell is that shallow", cell(10.12, 20.17) == 0.5,
+      cell(10.12, 20.17))
 check("south row first (the north strip has no data)", cell(10.02, 20.2) == 10.0
       and cell(10.45, 20.2) is None, (cell(10.02, 20.2), cell(10.45, 20.2)))
 check("downloaded and unpacked once", os.path.exists(g.raster(None)))

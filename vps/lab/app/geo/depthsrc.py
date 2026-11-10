@@ -39,7 +39,7 @@ from .. import atomicio
 from . import enc
 
 CACHE = os.environ.get("ENC_CACHE", "/srv/enc")
-GRID_DATA_VERSION = "grid_v1"           # bump when the grid reduction changes (cache + mask keys)
+GRID_DATA_VERSION = "grid_v2"           # bump when the grid reduction changes (cache + mask keys)
 _HDRS = {"User-Agent": "Agent_C4-lab/1.0"}
 
 # NOAA NCEI (ex-NGDC) Great Lakes bathymetry, 3 arc-second (~90 m), compiled 1999 with CHS: each
@@ -245,7 +245,8 @@ class GridSource:
         """gdalwarp the raster onto the mask grid (EPSG:4326, `how` = max|min over the source
         pixels in each cell) → [float|None] north-first. Raises GridError on any failure."""
         out = os.path.join(wd, f"warp-{os.getpid()}-{threading.get_ident()}-{how}.bil")
-        cmd = ["gdalwarp", "-q", "-overwrite", "-of", "EHdr", "-ot", "Float32",
+        # -ovr NONE: always the full-resolution pixels; an averaged overview would hide a shoal
+        cmd = ["gdalwarp", "-q", "-overwrite", "-ovr", "NONE", "-of", "EHdr", "-ot", "Float32",
                "-t_srs", "EPSG:4326", "-te", *te, "-ts", str(nx), str(ny), "-r", how,
                "-srcnodata", "None" if src_nodata is None else repr(src_nodata),
                "-dstnodata", repr(float(dst_nodata)), "-wo", "INIT_DEST=NO_DATA", src, out]
