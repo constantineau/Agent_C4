@@ -102,7 +102,11 @@ class GridSource:
         self.bbox = tuple(float(v) for v in spec["bbox"])
         self.file_id = hashlib.sha1(repr((spec.get("url"), spec.get("member"),
                                           spec.get("version"))).encode()).hexdigest()[:10]
-        self.data_version = f"{GRID_DATA_VERSION}:{self.name}:{spec.get('version', '')}:{self.file_id}"
+        # everything that changes what the grid says or how a leg is labelled: in the cell and
+        # mask cache keys, so a corrected catalog entry never reuses an old result (Codex on #300)
+        meaning = hashlib.sha1(repr((self.file_id, (spec.get("z") or "elevation").lower(),
+                                     self.navigational, self.label)).encode()).hexdigest()[:10]
+        self.data_version = f"{GRID_DATA_VERSION}:{self.name}:{spec.get('version', '')}:{meaning}"
 
     def covers(self, bbox) -> bool:
         return _touches(bbox, self.bbox)
@@ -120,7 +124,8 @@ class GridSource:
         if os.path.exists(out):
             return out
         member = self.spec.get("member")
-        blob = os.path.join(d, f"{self.name}-{self.file_id}.download")
+        # each caller its own archive: two first builds at once never share (or delete) one
+        blob = atomicio.tmp_name(os.path.join(d, f"{self.name}-{self.file_id}.download"))
         try:
             req = urllib.request.Request(self.spec["url"], headers=_HDRS)
             with urllib.request.urlopen(req, timeout=300) as r, \

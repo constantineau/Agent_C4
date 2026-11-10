@@ -120,6 +120,10 @@ g1 = D.GridSource(dict(SPEC, version="2"))
 check("a new version: a new file and a new data version",
       g1.raster(None) != g.raster(None) and g1.data_version != g.data_version)
 
+check("a changed sign or label: a new data version",
+      D.GridSource(dict(SPEC, z="depth")).data_version != g.data_version
+      and D.GridSource(dict(SPEC, label="Other")).data_version != g.data_version)
+
 print("2) the join with the chart")
 _orig = (coastline.ensure_global, coastline.layers_in_bbox, coastline.active_source,
          enc.ensure_bbox, enc.layers_in_bbox)
