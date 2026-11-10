@@ -730,11 +730,27 @@ def legs_summary(base, legs):
     return s
 
 
+def _fully_charted(field):
+    """Cells the chart covers whole: a cell counts as charted (`nodepth` 0) when the chart covers
+    its centre, so a cell at the chart's edge may be half uncharted water. Only a charted cell
+    whose 8 neighbours are charted too counts here; a cell at the box's edge never does."""
+    nx, ny, nd = field.nx, field.ny, field.nodepth
+    out = bytearray(nx * ny)
+    for iy in range(1, ny - 1):
+        for ix in range(1, nx - 1):
+            i = iy * nx + ix
+            if not (nd[i - nx - 1] or nd[i - nx] or nd[i - nx + 1] or nd[i - 1] or nd[i]
+                    or nd[i + 1] or nd[i + nx - 1] or nd[i + nx] or nd[i + nx + 1]):
+                out[i] = 1
+    return out
+
+
 def _apply_grids(field, grids, safety_depth, cache_dir) -> bool:
-    """Fill the water no chart covers from the depth grids (#292). Per cell: only where
-    `field.nodepth` still says "no depth data"; the shallowest grid depth there is the cell's
-    depth, and shallower than `safety_depth` blocks it (a shoal). A grid that fails to load is
-    listed in `field.depth_gaps` and its water stays "no depth data". True if any grid gave a
+    """Fill the water no chart covers from the depth grids (#292). Per cell, everywhere but the
+    cells the chart covers whole (`_fully_charted`: at the chart's edge both apply, so a shoal in
+    a cell's uncharted half is still seen; Codex on #300): the shallowest grid depth there is the
+    cell's depth, and shallower than `safety_depth` blocks it (a shoal). A grid that fails to load
+    is listed in `field.depth_gaps` and its water stays "no depth data". True if any grid gave a
     depth."""
     got = []
     for g in grids:
@@ -748,10 +764,11 @@ def _apply_grids(field, grids, safety_depth, cache_dir) -> bool:
         return False
     marks = {g.name: bytearray(field.nx * field.ny) for g, _c in got if not g.navigational}
     nd, mask = field.nodepth, field.mask
+    charted = _fully_charted(field)
     shoal = 0
     any_depth = False
     for i in range(field.nx * field.ny):
-        if not nd[i]:
+        if charted[i]:
             continue
         best, who = None, None
         for g, cells in got:

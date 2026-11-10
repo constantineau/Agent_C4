@@ -147,10 +147,12 @@ _orig = (coastline.ensure_global, coastline.layers_in_bbox, coastline.active_sou
 coastline.ensure_global = lambda cache_dir=None: None
 coastline.layers_in_bbox = lambda bbox, cache_dir=None: {"land": [], "lakes": [], "islands": []}
 coastline.active_source = lambda: "stub"
-ENC_BOX = [[(20.0, S), (20.1, S), (20.1, N), (20.0, N)]]          # the chart covers the west strip
+ENC_BOX = [[(20.0, S), (20.15, S), (20.15, N), (20.0, N)]]        # the chart covers the west strip
+ENC_EDGE = [[(20.30, S), (20.33, S), (20.33, N), (20.30, N)]]      # ...and the west 3/5 of a column
 enc.ensure_bbox = lambda bbox, cache_dir=None: None
 enc.layers_in_bbox = lambda bbox, cache_dir=None, depth=None: {
-    "land": [], "shoal": [], "obstruction": [], "depth_cover": [ENC_BOX], "missing": []}
+    "land": [], "shoal": [], "obstruction": [], "depth_cover": [ENC_BOX, ENC_EDGE],
+    "missing": []}
 COURSE = {"race_id": "t292", "zones": [], "courses": [{
     "id": "c", "start": {"lat": 10.2, "lon": 20.05},
     "marks": [{"name": "M", "type": "mark", "rounding": "none", "lat": 10.2, "lon": 20.2}],
@@ -160,8 +162,10 @@ try:
                             safety_depth=SR33)
     check("depths checked", f.depth == "ok", f.depth)
     check("chart water: depth known, not from the grid",
-          not f.no_depth(10.2, 20.05, 10.2, 20.06) and not f.nonnav_labels(10.2, 20.05, 10.2, 20.06))
-    check("the chart wins: its strip isn't blocked by the grid's shoal", not f.blocked(10.2, 20.05))
+          not f.no_depth(10.2, 20.07, 10.2, 20.08) and not f.nonnav_labels(10.2, 20.07, 10.2, 20.08))
+    check("the chart wins: its strip isn't blocked by the grid's shoal", not f.blocked(10.2, 20.07))
+    check("the chart's edge: the grid's shoal in the cell's uncharted half still blocks",
+          f.blocked(10.2, 20.34))
     check("grid water: depth known, from the grid",
           not f.no_depth(10.2, 20.2, 10.2, 20.21)
           and f.nonnav_labels(10.2, 20.2, 10.2, 20.21) == ["Test grid"])
@@ -177,7 +181,8 @@ try:
           fo.source == "enc" and fo.summary()["safety_depth_m"] == round(SR33, 2)
           and fo.blocked(10.2, 20.4), (fo.source, fo.summary()["safety_depth_m"]))
     enc.layers_in_bbox = lambda bbox, cache_dir=None, depth=None: {
-        "land": [], "shoal": [], "obstruction": [], "depth_cover": [ENC_BOX], "missing": []}
+        "land": [], "shoal": [], "obstruction": [], "depth_cover": [ENC_BOX, ENC_EDGE],
+    "missing": []}
 
     print("3) shoals per boat")
     check("1 m blocked for sr33", f.blocked(10.2, 20.4))
@@ -227,7 +232,7 @@ try:
                              safety_depth=SR33)
     check("grids off: chart only, the rest no depth data",
           not fn.depth_gaps and fn.no_depth(10.2, 20.2, 10.2, 20.21)
-          and not fn.no_depth(10.2, 20.05, 10.2, 20.06))
+          and not fn.no_depth(10.2, 20.07, 10.2, 20.08))
 finally:
     (coastline.ensure_global, coastline.layers_in_bbox, coastline.active_source,
      enc.ensure_bbox, enc.layers_in_bbox) = _orig
