@@ -121,7 +121,7 @@ _ACTIVE = object()     # "read the active boat now" (callers that did not captur
 
 
 def run_judge(race_id, playbook_id=None, models=None, on_progress=None, recording=None,
-              boat_id=None):
+              boat_id=None, archive_guard=None):
     """Debrief one RECORDING of a race.
 
     Two halves, and they have different prerequisites — which is the whole point:
@@ -186,11 +186,19 @@ def run_judge(race_id, playbook_id=None, models=None, on_progress=None, recordin
     }
     log("writing the critique…")
     report["critique"] = _critique(report) or _deterministic_critique(report)
-    try:                                   # archive to the ongoing learning DB (best-effort)
-        bid = boat.get("boat_id")
-        report["archived_id"] = learning.archive_debrief(report, bid)
-    except Exception:
-        pass
+    # `archive_guard()`: a context manager yielding (ok, note), held across the archive write, so
+    # the caller can refuse to file a debrief whose session changed boats meanwhile (#320)
+    import contextlib
+    guard = archive_guard or (lambda: contextlib.nullcontext((True, None)))
+    with guard() as (file_ok, why):
+        if not file_ok:
+            report["archive_note"] = why
+            return report
+        try:                               # archive to the ongoing learning DB (best-effort)
+            bid = boat.get("boat_id")
+            report["archived_id"] = learning.archive_debrief(report, bid)
+        except Exception:
+            pass
     return report
 
 

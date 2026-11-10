@@ -4747,7 +4747,8 @@ function polRescoreCard() {
   }
   const decided = run.status === "proposed"
     ? `<span class="pill ok">suggestion #${run.proposal_id} made</span> <a href="#learnings">review it in Learnings</a>`
-    : run.status === "rejected" ? `<span class="pill">rejected</span>` : "";
+    : run.status === "rejected" ? `<span class="pill">rejected</span>`
+    : run.status === "stale" ? `<span class="pill warn">out of date</span> <span class="muted">A session's boat changed. Re-score again.</span>` : "";
   const act = run.status === "ready" && cmp.available
     ? `<button class="mini" onclick="polRescoreDecide(${run.id},'propose')">Approve as suggestion</button>
        <button class="mini" style="margin-left:8px" onclick="polRescoreDecide(${run.id},'reject')">Reject</button>

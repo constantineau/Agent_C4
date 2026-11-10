@@ -11,9 +11,16 @@ The debrief, the recordings list and learning file a session under this boat, ne
 """
 from __future__ import annotations
 
+import threading
 import time
 
 from . import boats, labstate
+
+# Held across "change a session's boat + withdraw its old debriefs" and across a debrief job's
+# "is this still the session's boat? + archive". Without it a debrief running while the boat is
+# changed would file fresh learning under the old boat after the withdrawal (Codex on #321).
+ARCHIVE_LOCK = threading.RLock()
+BOAT_CHANGED = "This session's boat changed while it ran. Not filed. Debrief it again."
 
 KEY = "session_boats"
 NAME_MAX = 40

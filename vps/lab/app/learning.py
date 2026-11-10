@@ -188,6 +188,7 @@ def list_debriefs(boat_id=None, race_id=None, limit=200):
 
 
 WITHDRAWN = "withdrawn:"
+STALE_NOTE = "A session's boat changed. Its evidence left this boat. Build it again."
 
 
 def withdraw_recording(race_id, window_start, keep_boat=None):
@@ -206,9 +207,17 @@ def withdraw_recording(race_id, window_start, keep_boat=None):
             "AND ABS(window_start - ?) < 1.0 AND boat_id IS NOT NULL AND boat_id NOT LIKE ?",
             (race_id, float(window_start), WITHDRAWN + "%")).fetchall()
         ids = [(r["id"], r["boat_id"]) for r in rows if r["boat_id"] != keep_boat]
+        now = time.time()
         for did, bid in ids:
             c.execute("UPDATE debriefs SET boat_id=? WHERE id=?", (WITHDRAWN + bid, did))
             c.execute("UPDATE perf_bins SET boat_id=? WHERE debrief_id=?", (WITHDRAWN + bid, did))
+        for bid in {b for _d, b in ids}:
+            # a suggestion or re-score built on that evidence can no longer be applied: it would
+            # change this boat's model with another boat's sailing. Build it again.
+            c.execute("UPDATE proposals SET status='stale',decided_at=?,decided_note=? "
+                      "WHERE boat_id IS ? AND status='proposed'", (now, STALE_NOTE, bid))
+            c.execute("UPDATE rescore_runs SET status='stale',decided_at=?,decided_note=? "
+                      "WHERE boat_id IS ? AND status='ready'", (now, STALE_NOTE, bid))
         c.commit()
         return len(ids)
     finally:

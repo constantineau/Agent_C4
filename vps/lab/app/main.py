@@ -9,6 +9,7 @@ surface (pi/console) — not this.
 Slice 1: shared-password auth + the race library (list / get / validate) + the web shell. Next:
 the dual-input ingestion (auto-find URL / paste-link / upload PDF → Opus extraction → review).
 """
+import contextlib
 import datetime
 import json
 import os
@@ -936,7 +937,14 @@ async def debrief_run(body: dict):
             progress(f"{res.get('n')} fixes over {(res.get('window') or {}).get('hours')} h"
                      f" · {res.get('sail_changes')} sail change(s)")
         return judge.run_judge(race_id, b.get("playbook_id"), on_progress=progress, recording=rec,
-                               boat_id=boat_id)
+                               boat_id=boat_id, archive_guard=_guard)
+
+    @contextlib.contextmanager
+    def _guard():
+        # the session's boat, re-read under the lock the boat edit takes: unchanged → file it
+        with sessionboat.ARCHIVE_LOCK:
+            now_id, _why = sessionboat.for_debrief(b)
+            yield (now_id == boat_id, None if now_id == boat_id else sessionboat.BOAT_CHANGED)
 
     return jobs.start("debrief", _work, result_key="report",
                       meta={"race_id": race_id, "recording": b.get("recording"),
@@ -1043,14 +1051,24 @@ async def debrief_session_boat(body: dict):
     withdrawn); debrief it again to count it for this boat."""
     from . import sessionboat
     b = body or {}
-    ok, res = sessionboat.set_boat(b.get("kit"), b.get("start_ts"), b.get("boat_id"),
-                                   b.get("boat_name"))
+
+    def _change():
+        # one step under the archive lock: a debrief finishing now either filed before this (and
+        # is withdrawn below) or sees the new boat and files nothing
+        with sessionboat.ARCHIVE_LOCK:
+            ok, res = sessionboat.set_boat(b.get("kit"), b.get("start_ts"), b.get("boat_id"),
+                                           b.get("boat_name"))
+            if not ok:
+                return ok, res, 0
+            n = 0
+            if b.get("recording") is not None:
+                n = learning.withdraw_recording(b.get("race_id"), b.get("recording"),
+                                                res.get("boat_id"))
+            return ok, res, n
+
+    ok, res, n = await run_in_threadpool(_change)
     if not ok:
         return JSONResponse({"detail": res}, status_code=400)
-    n = 0
-    if b.get("recording") is not None:
-        n = await run_in_threadpool(learning.withdraw_recording, b.get("race_id"),
-                                    b.get("recording"), res.get("boat_id"))
     return {"ok": True, "boat": res, "withdrawn": n}
 
 

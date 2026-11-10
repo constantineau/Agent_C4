@@ -138,6 +138,15 @@ check("the recordings list shows the Lab's edit", recs[3]["boat_id"] == "bravo"
       and recs[3]["boat_source"] == "lab")
 
 print("5) a wrong pick fixed: the old boat's debrief leaves that boat's learning")
+_c = learning._conn()
+_c.execute("INSERT INTO proposals (created_at, boat_id, status, helm_current, helm_proposed, "
+           "adjustments_json, summary_json) VALUES (1, 'sr33', 'proposed', 1.0, 0.95, '[]', '{}')")
+_c.execute("INSERT INTO rescore_runs (created_at, boat_id, evidence_version, status) "
+           "VALUES (1, 'sr33', 'v', 'ready')")
+_c.commit()
+PID = _c.execute("SELECT max(id) FROM proposals").fetchone()[0]
+RUN = _c.execute("SELECT max(id) FROM rescore_runs").fetchone()[0]
+_c.close()
 before = [d["window_start"] for d in learning.archived_recordings("sr33")]
 r = client.post("/api/debrief/session-boat", headers=TEAM, json={
     "kit": "sr33", "start_ts": S_OLD, "boat_id": "bravo", "race_id": RID, "recording": S_OLD})
@@ -148,6 +157,36 @@ check("nothing deleted: the record says whose it was",
       any(d["boat_id"] == learning.WITHDRAWN + "sr33" for d in learning.list_debriefs(None, RID)))
 check("Bravo's learning doesn't count it until it is debriefed again",
       S_OLD not in [d["window_start"] for d in learning.archived_recordings("bravo")])
+
+check("sr33's pending suggestion built on it can no longer be applied (Codex on #321)",
+      learning.get_proposal(PID)["status"] == "stale"
+      and learning.apply_proposal(PID)["ok"] is False)
+check("…nor its ready re-score", learning.get_rescore(RUN)["status"] == "stale"
+      and learning.rescore_propose(RUN)["ok"] is False)
+
+print("5b) a debrief that finishes after its session changed boats files nothing (Codex on #321)")
+import contextlib  # noqa: E402
+_saved_get_race = judge.store.get_race
+judge.store.get_race = lambda rid: {"name": "x"}
+judge.track.load_track = lambda rid, rec=None: {"fixes": [1], "window": {"start_ts": S_BRAVO}}
+judge.pbstore.list_bundles = lambda: []
+judge._own_speed_fields = lambda *a, **k: (None, None)
+judge._score_actual_track = lambda *a, **k: {"available": True, "window": {"start_ts": S_BRAVO}}
+judge._critique = lambda r: "ok"
+n0 = len(learning.list_debriefs("bravo", None))
+rep = judge.run_judge(RID, boat_id="bravo", archive_guard=lambda: contextlib.nullcontext(
+    (False, sessionboat.BOAT_CHANGED)))
+check("boat changed meanwhile → not filed, said", "archived_id" not in rep
+      and rep["archive_note"] == sessionboat.BOAT_CHANGED
+      and len(learning.list_debriefs("bravo", None)) == n0)
+rep = judge.run_judge(RID, boat_id="bravo", archive_guard=lambda: contextlib.nullcontext((True, None)))
+check("unchanged → filed under the session's boat", rep.get("archived_id")
+      and len(learning.list_debriefs("bravo", None)) == n0 + 1)
+src = open(os.path.join(HERE, "app", "main.py")).read()
+check("the boat edit and the debrief's archive step take the same lock",
+      src.count("sessionboat.ARCHIVE_LOCK") >= 2)
+
+judge.store.get_race = _saved_get_race
 
 print("6) the debrief runs for the session's boat, not the active one")
 seen = {}

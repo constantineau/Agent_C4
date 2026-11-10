@@ -311,6 +311,38 @@ def _motion_series(t0, t1, bucket_s=300):
     return out, best, resolved
 
 
+def _sailed(ses):
+    """Which boat a session was sailed on, as the marker says (#320): its boat id, else its typed
+    name, else the kit that recorded it (a marker from before #320)."""
+    return (ses.get("kit"), ses.get("boat_id") or ses.get("boat_name") or ses.get("kit"))
+
+
+def _window_for(s, sessions, motion):
+    """The derived window of session `s`, one boat's only (#320; see racelog_sessions)."""
+    mine = [x for x in sessions if _sailed(x) == _sailed(s)]
+    w = race_window.derive(mine, motion, race_id=s.get("race_id"), anchor_ts=float(s["start_ts"]))
+    if w:
+        _clip_to_boat(w, s, sessions)
+    return w
+
+
+def _clip_to_boat(w, ses, sessions):
+    """Stop a derived window at the nearest marker of a session sailed on ANOTHER boat (#320)."""
+    a = float(ses["start_ts"])
+    for o in sessions:
+        if _sailed(o) == _sailed(ses) or o.get("start_ts") is None:
+            continue
+        o_a = float(o["start_ts"])
+        o_b = float(o.get("end_ts") or o_a)
+        if a < o_a < w["end_ts"]:
+            w["end_ts"] = o_a
+            w.setdefault("provenance", []).append("stopped where another boat's session starts")
+        if w["start_ts"] < o_b < a:
+            w["start_ts"] = o_b
+            w.setdefault("provenance", []).append("started where another boat's session ends")
+    w["hours"] = round((w["end_ts"] - w["start_ts"]) / 3600.0, 2)
+
+
 @app.get("/racelog/sessions")
 def racelog_sessions(derive: bool = True):
     """RACE-SESSION markers backfilled from the boat (`crew.session` readings) — the windows the
@@ -351,7 +383,9 @@ def racelog_sessions(derive: bool = True):
                 # Look a long way past the marker — the whole point is that the marker may have
                 # stopped early — but bound it so one session cannot scan a season.
                 motion, msrc, resolved = _motion_series(a - 6 * 3600, b + 24 * 3600)
-                w = race_window.derive(out, motion, race_id=s.get("race_id"), anchor_ts=a)
+                # #320: one window is one boat. Only this boat's markers stitch, and the window
+                # never runs into another boat's session (the kit moved boats in between).
+                w = _window_for(s, out, motion)
                 if w:
                     w["motion_source"] = msrc
                     w["motion_device"] = (n2k_sources.resolve(msrc, n2k_sources.devices_for(
