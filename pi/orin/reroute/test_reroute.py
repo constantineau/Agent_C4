@@ -979,6 +979,34 @@ check("no-forecast run: last good route kept, result id unchanged, attempt repor
       kept.get("available") is True and kj.last_done == good_id
       and kj.last["state"] == "error" and "No forecast" in kj.last["detail"])
 
+print("4d) load shed level 3 (#248): no new run, said plainly; a dead guard blocks nothing")
+_shed = os.path.join(_tmp, "shed-state.json")
+os.environ["SHED_STATE"] = _shed
+STARTED = []
+
+
+def shed_runner(job_dir):
+    STARTED.append(job_dir)
+    return FakeProc(job_dir)
+
+
+sj = service.Jobs(state_dir=os.path.join(_tmp, "shed"), runner=shed_runner, timeout_s=600)
+with open(_shed, "w") as f:
+    json.dump({"level": 3, "cause": "memory", "updated": time.time()}, f)
+code, body = sj.start({"device": "iPad 1"})
+check("level 3 → 503, nothing started", code == 503 and body.get("paused") and not STARTED)
+check("…'Re-route paused: Orin low on memory.'",
+      body.get("detail") == "Re-route paused: Orin low on memory.")
+with open(_shed, "w") as f:
+    json.dump({"level": 2, "cause": "memory", "updated": time.time()}, f)
+check("level 2 (plume shed only) → re-route still runs", sj.start({"device": "x"})[0] == 202)
+sj.current["proc"].finish(0, result={"schema": "c4.reroute/v1", "job_id": "s", "available": True})
+sj.status()
+with open(_shed, "w") as f:
+    json.dump({"level": 3, "cause": "memory", "updated": time.time() - 600}, f)
+check("stale state (guard dead) → runs", sj.start({"device": "x"})[0] == 202)
+os.environ.pop("SHED_STATE")
+
 print("5) the HTTP API")
 srv = service.ThreadingHTTPServer(("127.0.0.1", 0), service.make_handler(jobs, allow_from={"127.0.0.1"}))
 threading.Thread(target=srv.serve_forever, daemon=True).start()
