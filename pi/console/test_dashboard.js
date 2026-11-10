@@ -68,7 +68,7 @@ function load() {
   vm.createContext(ctx);
   ctx.__clock = () => nowMs;
   vm.runInContext("Date.now = function () { return __clock(); };", ctx);
-  for (const f of ["crewwatch.js", "collisionwatch.js", "briefguard.js", "plume.js", "reroute.js", "reclog.js"])
+  for (const f of ["crewwatch.js", "collisionwatch.js", "briefguard.js", "plume.js", "shed.js", "reroute.js", "reclog.js"])
     vm.runInContext(fs.readFileSync(path.join(DIR, f), "utf8"), ctx, { filename: f });
   let D = null;
   ctx.__C4DashTest = (api) => { D = api; };
@@ -554,6 +554,68 @@ test("#291 FORECAST 'Now': no cached wind once /conditions wind is gone", () => 
   ok(/no wind reading/.test(t.rows[0].cols[0]), "Now row: " + JSON.stringify(t.rows[0]));
   const l = T.D.BUILD.forecast({ forecast: fc, conditions: { available: true, tws: 9, twd: 200 } });
   ok(/9/.test(l.rows[0].cols[0]), "live Now row: " + JSON.stringify(l.rows[0]));
+});
+
+/* ---------------- #295 the Orin's load shed ---------------- */
+test("#295 shedding: one plain line under the top bar; the Re-route offer sees the level", async () => {
+  const T = load();
+  T.ctx.fetchImpl = (url) => (url === "/copilot/health"
+    ? json({ status: "ok", shed: { level: 3, guard: "on", cause: "memory", paused: ["narration", "plume", "reroute"] } })
+    : Promise.reject(new Error("down")));
+  await T.D.fetchCopilotHealth();
+  const el = T.ctx.document.getElementById("shedWarn");
+  ok(el.hidden === false && el.textContent === "Orin low on memory. AI, plume and re-route paused.",
+    "line: " + el.hidden + " " + el.textContent);
+  T.D.App.rtPress = { phase: "paused", engine: "orin", at: T.now() - 1000, armAt: 0, until: T.now() + 60000,
+    detail: "Re-route paused: Orin low on memory." };
+  T.D.App.cpHealthAt = T.now();
+  ok(T.D.rerouteView().button.engine === "pi", "the Pi offer stays while level 3");
+  T.ctx.fetchImpl = (url) => (url === "/copilot/health"
+    ? json({ status: "ok", shed: { level: 0, guard: "on", cause: null, paused: [] } })
+    : Promise.reject(new Error("down")));
+  T.tick(1000);
+  await T.D.fetchCopilotHealth();
+  ok(el.hidden === true && el.textContent === "", "level 0 hides it");
+  ok(T.D.rerouteView().button.engine === "orin", "back to the Orin once the shed clears");
+});
+test("#295 a health read asked before the press doesn't end the Pi offer", async () => {
+  const T = load();
+  let answer;
+  T.ctx.fetchImpl = (url) => (url === "/copilot/health"
+    ? new Promise((res) => { answer = () => res({ ok: true, status: 200, json: () => Promise.resolve(
+      { shed: { level: 0, guard: "on" } }) }); })
+    : Promise.reject(new Error("down")));
+  const p = T.D.fetchCopilotHealth();
+  T.tick(500);
+  T.D.App.rtPress = { phase: "paused", engine: "orin", at: T.now(), armAt: 0, until: T.now() + 60000,
+    detail: "Re-route paused: Orin low on memory." };
+  T.tick(500);
+  answer(); await p;
+  ok(T.D.rerouteView().button.engine === "pi", "an older read ended the offer");
+});
+test("#295 overlapping health polls: an older one finishing late doesn't hide the line", async () => {
+  const T = load();
+  let failOld;
+  T.ctx.fetchImpl = () => new Promise((res, rej) => { failOld = () => rej(new Error("timeout")); });
+  const a = T.D.fetchCopilotHealth();
+  T.tick(15000);
+  T.ctx.fetchImpl = () => json({ shed: { level: 3, guard: "on", cause: "heat" } });
+  await T.D.fetchCopilotHealth();
+  failOld(); await a;
+  const el = T.ctx.document.getElementById("shedWarn");
+  ok(el.hidden === false && el.textContent === "Orin hot. AI, plume and re-route paused.", "line: " + el.textContent);
+});
+test("#295 no Orin / no copilot (any boat): no line, no error", async () => {
+  const T = load();
+  for (const impl of [() => Promise.reject(new Error("no route to host")),
+    () => Promise.resolve({ ok: false, status: 502, json: () => Promise.resolve({}) })]) {
+    T.ctx.fetchImpl = impl;
+    await T.D.fetchCopilotHealth();
+    const el = T.ctx.document.getElementById("shedWarn");
+    ok(el.hidden === true && el.textContent === "", "a line with no copilot: " + el.textContent);
+    ok(T.D.App.cpHealth === null, "held a health read with no copilot");
+    ok(T.D.rerouteView().button.label === "Re-route now", "button changed with no copilot");
+  }
 });
 
 (async () => {
