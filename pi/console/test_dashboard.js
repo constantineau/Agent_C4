@@ -556,6 +556,21 @@ test("#295 shedding: one plain line under the top bar; the Re-route offer sees t
   ok(el.hidden === true && el.textContent === "", "level 0 hides it");
   ok(T.D.rerouteView().button.engine === "orin", "back to the Orin once the shed clears");
 });
+test("#295 a health read asked before the press doesn't end the Pi offer", async () => {
+  const T = load();
+  let answer;
+  T.ctx.fetchImpl = (url) => (url === "/copilot/health"
+    ? new Promise((res) => { answer = () => res({ ok: true, status: 200, json: () => Promise.resolve(
+      { shed: { level: 0, guard: "on" } }) }); })
+    : Promise.reject(new Error("down")));
+  const p = T.D.fetchCopilotHealth();
+  T.tick(500);
+  T.D.App.rtPress = { phase: "paused", engine: "orin", at: T.now(), armAt: 0, until: T.now() + 60000,
+    detail: "Re-route paused: Orin low on memory." };
+  T.tick(500);
+  answer(); await p;
+  ok(T.D.rerouteView().button.engine === "pi", "an older read ended the offer");
+});
 test("#295 no Orin / no copilot (any boat): no line, no error", async () => {
   const T = load();
   for (const impl of [() => Promise.reject(new Error("no route to host")),

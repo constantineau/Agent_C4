@@ -1767,9 +1767,12 @@
      off or the link down) → null and no line: that case is shown elsewhere, never twice. */
   async function fetchCopilotHealth() {
     if (App.src !== "live") return;
-    const r = await COL.fetchJsonWithin(COPILOT + "/health", { headers: { Accept: "application/json" } }, 8000);
+    // stamped when ASKED: a level-0 read asked before a refused press must not end its Pi offer.
+    // 20 s: /health checks the engine, then Ollama (its own 8 s timeout), in turn.
+    const askedAt = Date.now();
+    const r = await COL.fetchJsonWithin(COPILOT + "/health", { headers: { Accept: "application/json" } }, 20000);
     App.cpHealth = r && typeof r === "object" ? r : null;
-    App.cpHealthAt = Date.now();
+    App.cpHealthAt = askedAt;
     renderShed();
     render();
   }
