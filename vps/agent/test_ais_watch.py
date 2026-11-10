@@ -19,6 +19,7 @@ Pure: a stub data source, no DB, no live AIS. Exits non-zero on any failure.
 """
 import math
 import os
+os.environ["BOAT_ID"] = "sr33"   # these checks are about sr33's own N2K devices (no default boat, #307)
 import sys
 import time
 

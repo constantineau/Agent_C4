@@ -20,7 +20,8 @@ import os
 
 from .db import pool
 
-BOAT_ID = os.environ.get("BOAT_ID", "sr33")
+from shared.boat_id import require as _require_setting  # noqa: E402
+BOAT_ID = _require_setting("BOAT_ID")   # no default: another boat must never write as sr33 (#307)
 # Fail-closed: unknown -> race. Dev compose sets RACE_MODE_DEFAULT=practice.
 DEFAULT_MODE = os.environ.get("RACE_MODE_DEFAULT", "race").strip().lower()
 if DEFAULT_MODE not in ("race", "practice"):

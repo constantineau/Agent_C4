@@ -74,7 +74,7 @@ def _ais_sources(conn, tables, probe_rows=5000):
     return found
 
 
-def build(archive_db, start, end, step_s, out_dir, boat_id="sr33", spool_db=None):
+def build(archive_db, start, end, step_s, out_dir, boat_id, spool_db=None):
     """Ground truth over the archive, and over the spool when one is given.
 
     The spool matters here as much as it does in the frames: build a full-race timeline against
@@ -168,6 +168,7 @@ def main():
     ap = argparse.ArgumentParser(description="Build the Race Rewind ground-truth series.")
     ap.add_argument("--archive", default="/home/constantineau/backups/c4-boat-pull-2026-08-30/"
                                          "work/archive-backfill.db")
+    ap.add_argument("--boat", required=True, help="the recorded boat's id (no default)")
     ap.add_argument("--start", required=True)
     ap.add_argument("--end", required=True)
     ap.add_argument("--step", type=float, default=30.0)
@@ -176,7 +177,7 @@ def main():
                                     "the same file the frames were built with, or the "
                                     "ground-truth pane goes blank where the archive stops")
     a = ap.parse_args()
-    build(a.archive, _iso(a.start), _iso(a.end), a.step, a.out, spool_db=a.spool)
+    build(a.archive, _iso(a.start), _iso(a.end), a.step, a.out, a.boat, spool_db=a.spool)
 
 
 if __name__ == "__main__":

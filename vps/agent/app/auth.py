@@ -16,7 +16,8 @@ Transport: the web app sends `Authorization: Bearer <token>` on REST and `?token
 WebSocket (browsers can't set headers on a WS handshake from JS).
 
 Config:
-  BOAT_PASSWORD  shared crew password (dev default 'sr33-dev'; MUST be set in prod .env).
+  BOAT_PASSWORD  shared crew password. Required, no default (#307): with auth enabled and no
+                 password set, the agent refuses to start rather than ship a known password.
   AUTH_SECRET    HMAC signing secret; defaults to a value derived from BOAT_PASSWORD so tokens
                  rotate automatically when the password changes. Set explicitly in prod.
   AUTH_TTL_HOURS token lifetime (default 720h / 30 days — crew shouldn't re-auth mid-passage).
@@ -27,9 +28,13 @@ import hmac
 import os
 import time
 
-BOAT_PASSWORD = os.environ.get("BOAT_PASSWORD", "sr33-dev")
+from shared.boat_id import require as _require_setting
+
 AUTH_TTL_HOURS = float(os.environ.get("AUTH_TTL_HOURS", "720"))
 AUTH_ENABLED = os.environ.get("AUTH_ENABLED", "true").strip().lower() not in ("0", "false", "no")
+# No default password: unset with auth on → stop at start with one plain line. An open bench
+# (AUTH_ENABLED=false) needs none.
+BOAT_PASSWORD = _require_setting("BOAT_PASSWORD") if AUTH_ENABLED else os.environ.get("BOAT_PASSWORD", "")
 
 # Derive a default signing secret from the password (so changing the password invalidates old
 # tokens); allow an explicit override for defence in depth.

@@ -30,7 +30,11 @@ def main(argv):
     if not optimizer.course_bbox(d, cid):
         print("the course has no mark positions", file=sys.stderr)
         return 1
-    boat = boats.get_boat(orinassets.boat_id())   # the boat the Deploy is for: its draft
+    bid = orinassets.boat_id()                    # the boat the Deploy is for: its draft
+    if not bid:
+        print(orinassets.NO_DEPLOY_BOAT, file=sys.stderr)
+        return 1
+    boat = boats.get_boat(bid)
     chart, why = orinassets.build_chart(d, cid, boat, open_water=open_water)
     if why:
         print(f"{why} Not writing a chart. If this course box truly has no land, add --open-water.",

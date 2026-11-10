@@ -29,7 +29,8 @@ from shared import polar as SPOL
 
 from .db import pool
 
-BOAT_ID = os.environ.get("BOAT_ID", "sr33")
+from shared.boat_id import require as _require_setting  # noqa: E402
+BOAT_ID = _require_setting("BOAT_ID")   # no default: another boat must never write as sr33 (#307)
 
 _KN = 1.943844
 _DEG = 57.295779513

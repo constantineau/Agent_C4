@@ -47,8 +47,8 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgresql://sr33:sr33-dev@timescaledb:5432/sr33_dev}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-4-8}
-      BOAT_ID: ${BOAT_ID:-sr33}
-      BOAT_PASSWORD: ${BOAT_PASSWORD:-sr33-dev}   # shared-password web auth (Phase 7)
+      BOAT_ID: ${BOAT_ID:?set BOAT_ID in .env (this boat's id)}
+      BOAT_PASSWORD: ${BOAT_PASSWORD:?set BOAT_PASSWORD in .env}   # shared crew web password, no default
       AUTH_ENABLED: ${AUTH_ENABLED:-true}
       RACE_MODE_DEFAULT: ${RACE_MODE_DEFAULT:-practice}   # 9.2 gate: dev opens; prod omits -> fail-closed 'race'
     ports:
@@ -85,7 +85,8 @@ services:
       LAB_PASSWORD: ${LAB_PASSWORD:-lab-dev}
       LAB_AUTH_ENABLED: ${LAB_AUTH_ENABLED:-true}
       AGENT_URL: ${AGENT_URL:-http://agent:8000}        # Monitor: our-boat telemetry from the cloud agent
-      BOAT_PASSWORD: ${BOAT_PASSWORD:-sr33-dev}          # to auth to the agent for /conditions
+      BOAT_PASSWORD: ${BOAT_PASSWORD:?set BOAT_PASSWORD in .env}   # to auth to the agent for /conditions
+      DEPLOY_BOAT_ID: ${DEPLOY_BOAT_ID:?set DEPLOY_BOAT_ID in .env (the boat Deploy pushes to)}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}        # race-doc ingestion (Opus extraction)
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-4-8}          # single-model knob (extract/judge)
       ANTHROPIC_MODEL_CHAIN: ${ANTHROPIC_MODEL_CHAIN:-claude-fable-5-1,claude-opus-5}  # every Lab LLM call but race import: Fable 5.1 primary, Opus 5 fallback

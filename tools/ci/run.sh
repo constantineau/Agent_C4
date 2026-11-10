@@ -36,8 +36,12 @@ run() {
   wired[$f]=1
   [[ -n $filter && $f != *"$filter"* ]] && return
   local cmd=("$@"); [[ ${#cmd[@]} -eq 0 ]] && cmd=(python3 "/repo/$f")
+  # Services have no default boat or crew password (#307): CI names a made-up boat explicitly, so
+  # no test can pass by quietly being sr33. A test about a missing setting unsets it itself.
   local log rc; log=$(docker run --rm --network none -v "$repo:/repo:ro" -w "$wd" \
-    -e PYTHONPATH="$pp" -e PYTHONDONTWRITEBYTECODE=1 -e C4_CI=1 "sr33-ci-$svc" "${cmd[@]}" 2>&1)
+    -e PYTHONPATH="$pp" -e PYTHONDONTWRITEBYTECODE=1 -e C4_CI=1 \
+    -e BOAT_ID=ci-boat -e REROUTE_BOAT=ci-boat -e BOAT_PASSWORD=ci-only-password \
+    "sr33-ci-$svc" "${cmd[@]}" 2>&1)
   rc=$?
   local line
   while IFS= read -r line; do skips+=("$f: ${line#*] }"); done \
@@ -85,6 +89,7 @@ build archiver pi/archiver/Dockerfile
 build uplink pi/uplink/Dockerfile
 build n2kout pi/n2kout/Dockerfile
 build agent vps/agent/Dockerfile
+build ingestion vps/ingestion/Dockerfile
 build lab vps/lab/Dockerfile
 docker image inspect node:22-alpine >/dev/null 2>&1 || docker pull -q node:22-alpine >/dev/null \
   || { echo "PULL FAILED: node:22-alpine"; exit 1; }
@@ -97,6 +102,8 @@ orin_area agent pi/orin/copilot/**/test_*.py
 # The Orin's load-shed guard (#248) is stdlib python; the copilot imports its reader.
 orin_area agent pi/orin/shed/**/test_*.py
 area agent /repo /repo/vps/agent:/repo:/repo/pi/archiver vps/agent/**/test_*.py
+# The ingestion API (#307: no default boat) runs in its own image (fastapi + psycopg_pool).
+area ingestion /repo /repo/vps/ingestion:/repo vps/ingestion/**/test_*.py
 # shared/ is pure stdlib, imported by every service; the agent image is as good as any.
 area agent /repo /repo shared/**/test_*.py
 # The Signal K plugin step (#171) is shell scripts; the test drives them with sh (stdlib python).

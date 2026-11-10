@@ -21,6 +21,7 @@ So the assertions here are mostly about *bindability*, not about ranking taste:
 Run:  PYTHONPATH=vps/agent:. python3 vps/agent/test_source_priority.py
 """
 import os
+os.environ["BOAT_ID"] = "sr33"   # these checks are about sr33's own N2K devices (no default boat, #307)
 import re
 import sys
 

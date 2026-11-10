@@ -40,8 +40,21 @@ class Reading(BaseModel):
     _no_nul = field_validator("source", "path", "str_value")(strip_nul)
 
 
+# No default boat (#307): a batch that doesn't say which boat it is from is refused (400) by
+# `_boat()`, never filed under some boat's name.
+NO_BOAT = "boat_id is missing. Say which boat this data is from."
+
+
+def _boat(batch):
+    """The batch's boat id, stripped; a missing or blank one is a 400 with a plain message."""
+    bid = (batch.boat_id or "").strip()
+    if not bid:
+        raise HTTPException(status_code=400, detail=NO_BOAT)
+    return bid
+
+
 class RawBatch(BaseModel):
-    boat_id: str = "sr33"
+    boat_id: Optional[str] = None
     readings: list[Reading] = Field(..., min_length=1)
 
 
@@ -65,7 +78,7 @@ class AisObservation(BaseModel):
 
 
 class AisBatch(BaseModel):
-    boat_id: str = "sr33"
+    boat_id: Optional[str] = None
     targets: list[AisObservation] = Field(..., min_length=1)
 
 
@@ -104,7 +117,8 @@ def health():
 def ingest_ais(batch: AisBatch):
     """Store raw AIS target observations. Geometry columns stay NULL — the agent's
     ais.py recomputes range/bearing/CPA/TCPA live against own-ship position."""
-    rows = [(t.time, batch.boat_id, t.mmsi, t.name, t.lat, t.lon, t.sog, t.cog)
+    boat = _boat(batch)
+    rows = [(t.time, boat, t.mmsi, t.name, t.lat, t.lon, t.sog, t.cog)
             for t in batch.targets]
     sql = ("INSERT INTO ais_targets (time, boat_id, mmsi, name, lat, lon, sog, cog) "
            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)")
@@ -112,13 +126,14 @@ def ingest_ais(batch: AisBatch):
         with conn.cursor() as cur:
             cur.executemany(sql, rows)
         conn.commit()
-    return {"accepted": len(rows), "boat_id": batch.boat_id}
+    return {"accepted": len(rows), "boat_id": boat}
 
 
 @app.post("/ingest/raw", dependencies=[Depends(require_token)])
 def ingest_raw(batch: RawBatch):
     """Collect-everything endpoint: store every (source, path) reading verbatim."""
-    rows = [(r.time, batch.boat_id, r.source, r.path, r.value, r.str_value)
+    boat = _boat(batch)
+    rows = [(r.time, boat, r.source, r.path, r.value, r.str_value)
             for r in batch.readings]
     sql = ("INSERT INTO telemetry_raw (time, boat_id, source, path, value, str_value) "
            "VALUES (%s, %s, %s, %s, %s, %s)")
@@ -126,4 +141,4 @@ def ingest_raw(batch: RawBatch):
         with conn.cursor() as cur:
             cur.executemany(sql, rows)
         conn.commit()
-    return {"accepted": len(rows), "boat_id": batch.boat_id}
+    return {"accepted": len(rows), "boat_id": boat}

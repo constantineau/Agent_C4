@@ -22,6 +22,7 @@ voltage nadir, the kick came 2 h 18 m later, and by then the bank was recovering
 Run:  PYTHONPATH=vps/agent:. python3 vps/agent/test_sensor_health.py
 """
 import os
+os.environ["BOAT_ID"] = "sr33"   # these checks are about sr33's own N2K devices (no default boat, #307)
 import sys
 import time
 

@@ -31,12 +31,12 @@ Usage (the rig's ephemeral venv, plus `psycopg[binary]`):
 
     python tools/replay/spool_to_sqlite.py \
         --dsn "postgresql://sr33:sr33-dev@localhost:5433/sr33_dev" \
-        --since 2026-07-18T20:40:30Z --until 2026-07-19T02:10:00Z \
+        --boat-id <boat> --since 2026-07-18T20:40:30Z --until 2026-07-19T02:10:00Z \
         --out /home/constantineau/backups/replay-jul18/spool-jul18-to0210.db
 
 Then build a timeline across the whole race:
 
-    python tools/replay/harness.py \
+    python tools/replay/harness.py --boat <boat> \
         --spool /home/constantineau/backups/replay-jul18/spool-jul18-to0210.db \
         --start 2026-07-18T17:03:31Z --end 2026-07-19T02:09:00Z --step 30 --out <dir>
 
@@ -52,8 +52,6 @@ import os
 import sqlite3
 import sys
 from datetime import datetime, timezone
-
-BOAT_ID = os.environ.get("BOAT_ID", "sr33")
 
 # Mirrors pi/archiver/archiver.py. Kept verbatim rather than imported: the archiver's DDL lives
 # inside a larger schema string with backfill bookkeeping this file has no business creating,
@@ -106,7 +104,7 @@ def db_count_empty(path):
         db.close()
 
 
-def export(dsn, since, until, out, boat_id=BOAT_ID, batch=20000):
+def export(dsn, since, until, out, boat_id, batch=20000):
     import psycopg
 
     tmp = out + ".tmp"
@@ -204,7 +202,7 @@ def main():
     ap.add_argument("--since", required=True, help="inclusive, ISO8601 (e.g. 2026-07-18T20:40:30Z)")
     ap.add_argument("--until", required=True, help="exclusive, ISO8601")
     ap.add_argument("--out", required=True)
-    ap.add_argument("--boat-id", default=BOAT_ID)
+    ap.add_argument("--boat-id", required=True, help="the boat whose data to export (no default)")
     a = ap.parse_args()
     n = export(a.dsn, _parse(a.since), _parse(a.until), a.out, boat_id=a.boat_id)
     return 0 if n else 1
