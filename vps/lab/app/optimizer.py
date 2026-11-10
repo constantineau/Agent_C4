@@ -713,7 +713,7 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, deadline=None,
             if BEAT_TOGO and _pos0 == "beat":
                 bm = _bearing(nlat, nlon, dlat, dlon)
                 togo = _beat_dist_nm(P, tws, twd, dmark_new, bm)
-                if TACK_CUMULATIVE and _beat_tack_owed(P, tws, twd, bm, hdg):
+                if TACK_CUMULATIVE and TACK_COST_S > 0 and _beat_tack_owed(P, tws, twd, bm, hdg):
                     # the tack this node still owes, priced like one it made (#66)
                     togo += sp * (TACK_PRUNE_S * maneuver_prune_mult / 3600.0)
             score = (direct - togo) - pen
@@ -810,8 +810,11 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, deadline=None,
                     pen += sp * (PEEL_PRUNE_S * maneuver_prune_mult / 3600.0)
                     extra_s += PEEL_COST_S
                     pl += 1
-            pen += sp2 * (TACK_PRUNE_S * maneuver_prune_mult / 3600.0)
-            tk += 1
+            tack_s = 0.0
+            if TACK_COST_S > 0:                          # priced like a tacking fan step in expand
+                pen += sp2 * (TACK_PRUNE_S * maneuver_prune_mult / 3600.0)
+                tack_s = TACK_COST_S
+                tk += 1
             d2 = min(r, (dt_h - t1) * sp2)
             nlat, nlon = _advance(mlat, mlon, h2, d2)
             if obstacles and obstacles.crosses(mlat, mlon, nlat, nlon):
@@ -820,7 +823,7 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, deadline=None,
             dmark_new = _hav_nm(nlat, nlon, dlat, dlon)
             dmin = min(node.get("dmin", direct), dmark_mid, dmark_new)
             mid["dmin"] = min(node.get("dmin", direct), dmark_mid)
-            t_end = node["t"] + (t1 + d2 / sp2) * 3600 + TACK_COST_S + extra_s
+            t_end = node["t"] + (t1 + d2 / sp2) * 3600 + tack_s + extra_s
             place(cand, mid, nlat, nlon, t_end, h2, pen, tk, sail2, pl, dmin, dmark_new, tws2, twd2, sp2)
 
     def direct_lay(node, tws, twd, dmark, bmark):
