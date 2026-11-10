@@ -96,7 +96,7 @@ services:
       SIGNALK_WS: ${SIGNALK_WS:-ws://localhost:3010/signalk/v1/stream?subscribe=all}
       VPS_URL: ${VPS_URL:-http://localhost:8101}
       INGEST_TOKEN: ${INGEST_TOKEN:-dev-ingest-token}
-      BOAT_ID: ${BOAT_ID:-sr33}
+      BOAT_ID: ${BOAT_ID:-}   # no default: unset, the service won't start (#307); the bench overlay sets its own
       AGG_SECONDS: ${AGG_SECONDS:-15}
       QUEUE_DIR: /var/lib/sr33/queue
     # Store-and-forward queue on a named volume so a reboot mid-outage doesn't drop the
@@ -119,7 +119,7 @@ services:
     network_mode: host
     environment:
       SIGNALK_WS: ${SIGNALK_WS:-ws://localhost:3010/signalk/v1/stream?subscribe=all}
-      BOAT_ID: ${BOAT_ID:-sr33}
+      BOAT_ID: ${BOAT_ID:-}   # no default: unset, the service won't start (#307); the bench overlay sets its own
       ARCHIVE_DB: /var/lib/sr33/archive/archive.db
       VPS_URL: ${VPS_URL:-http://localhost:8101}
       INGEST_TOKEN: ${INGEST_TOKEN:-dev-ingest-token}
@@ -158,7 +158,7 @@ services:
       SIGNALK_WS: ${SIGNALK_WS:-ws://localhost:3010/signalk/v1/stream?subscribe=all}
       ARCHIVE_DB: /var/lib/sr33/archive/archive.db
       ENGINE_DB: /var/lib/sr33/engine/engine.db
-      BOAT_ID: ${BOAT_ID:-sr33}
+      BOAT_ID: ${BOAT_ID:-}   # no default: unset, the service won't start (#307); the bench overlay sets its own
       # the Orin copilot over the Pi-Orin cable: /playbook/load stages + commits the playbook there
       COPILOT_URL: ${COPILOT_URL:-http://10.10.10.2:8300}
       # Our own AIS MMSI: the collision watch drops this target (our own echo). Set it in .env

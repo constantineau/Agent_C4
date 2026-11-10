@@ -33,7 +33,8 @@ from shared import units
 
 from . import datasource
 
-BOAT_ID = os.environ.get("BOAT_ID", "sr33")
+from shared.boat_id import require as _require_setting  # noqa: E402
+BOAT_ID = _require_setting("BOAT_ID")   # no default: another boat must never write as sr33 (#307)
 
 # Windows (minutes). Recent = "how is the helm doing now"; baseline = the boat's own
 # earlier steering this stint to measure against.

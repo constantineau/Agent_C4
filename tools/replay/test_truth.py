@@ -35,13 +35,13 @@ path = next(iter(truth.PATHS))
 # first row of the group (the .100 sample), which is the opposite of what the docstring claims.
 for t, v in (("2026-07-18T17:00:00.100Z", 1.0), ("2026-07-18T17:00:00.500Z", 2.0),
              ("2026-07-18T17:00:00.900Z", 3.0)):
-    c.execute("INSERT INTO readings VALUES (?,?,?,?,?)", (t, "sr33", path, "src1", v))
+    c.execute("INSERT INTO readings VALUES (?,?,?,?,?)", (t, "bravo", path, "src1", v))
 c.commit()
 c.close()
 
 start = datetime(2026, 7, 18, 16, 59, 59, tzinfo=timezone.utc)
 end = datetime(2026, 7, 18, 17, 0, 2, tzinfo=timezone.utc)
-doc = truth.build(db, start, end, 1.0, os.path.join(tmp, "out"))
+doc = truth.build(db, start, end, 1.0, os.path.join(tmp, "out"), "bravo")
 conv = truth.PATHS[path][2]
 series = doc["series"][path]["src1"]
 got = next(x for x in series if x is not None)

@@ -360,6 +360,10 @@ def make_handler(jobs, allow_from=None):
 
 
 def main():
+    # each run (job.py) needs the boat; check it here so a missing one stops the service at start
+    # with a plain line, not every crew re-route later (#307)
+    from shared import boat_id
+    boat_id.require("REROUTE_BOAT")
     jobs = Jobs()
 
     def watchdog():                 # saves a finished run even if nobody polls

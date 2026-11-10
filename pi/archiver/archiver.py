@@ -63,7 +63,8 @@ _ROTATING = threading.Event()
 SIGNALK_WS = os.environ.get(
     "SIGNALK_WS", "ws://localhost:3010/signalk/v1/stream?subscribe=all"
 )
-BOAT_ID = os.environ.get("BOAT_ID", "sr33")
+from shared.boat_id import require as _require_setting  # noqa: E402
+BOAT_ID = _require_setting("BOAT_ID")   # no default: another boat must never write as sr33 (#307)
 ARCHIVE_DB = Path(os.environ.get("ARCHIVE_DB", "/var/lib/sr33/archive/archive.db"))
 # Crash-safety vs. throughput: flush the buffer to disk whenever it reaches FLUSH_ROWS or
 # every FLUSH_SECONDS, whichever comes first. With WAL + synchronous=FULL each flush fsyncs,

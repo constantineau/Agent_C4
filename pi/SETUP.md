@@ -86,7 +86,7 @@ cd ~/Agent_C4
 export CAN_IFACE=can0
 export VPS_URL=https://<your-cloud-host>          # e.g. the TLS domain, or the Tailscale URL
 export INGEST_TOKEN=<the ingestion token>
-export BOAT_ID=sr33
+export BOAT_ID=<this boat's id>             # required, no default (the profile id in vps/lab/boats/)
 
 docker compose -f compose.pi.yml up -d --build
 docker compose -f compose.pi.yml ps

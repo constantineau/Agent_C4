@@ -14,6 +14,7 @@ Run:  PYTHONPATH=vps/agent:. python3 vps/agent/test_wind_source.py
 """
 import math
 import os
+os.environ["BOAT_ID"] = "sr33"   # these checks are about sr33's own N2K devices (no default boat, #307)
 import sqlite3
 import sys
 import tempfile

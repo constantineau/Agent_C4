@@ -22,7 +22,7 @@ Fidelity notes, all deliberate:
   - AIS/fleet is empty: the archiver stored own-ship contexts only (see source.py).
 
 Usage:
-    python tools/replay/harness.py --start 2026-07-18T17:03:31Z --end 2026-07-18T20:40:00Z \
+    python tools/replay/harness.py --boat <boat> --start 2026-07-18T17:03:31Z --end 2026-07-18T20:40:00Z \
         --step 30 --out /home/constantineau/backups/replay-jul18/timeline
 """
 import argparse
@@ -101,7 +101,9 @@ def _hermetic():
     socket.socket.connect_ex = _local_only(_real_ex)
 
 
-def _setup(archive_db, engine_db, polars_file, spool_db=None):
+def _setup(archive_db, engine_db, polars_file, spool_db=None, boat=None):
+    if boat:                            # the engine reads it at import; it has no default (#307)
+        os.environ["BOAT_ID"] = boat
     os.environ.update(
         ARCHIVE_DB=archive_db, ENGINE_DB=engine_db, POLARS_FILE=polars_file,
         DATA_SOURCE="onboard", ONBOARD_LIVE_WS="false",
@@ -120,8 +122,8 @@ def _setup(archive_db, engine_db, polars_file, spool_db=None):
 
 
 def build(archive_db, engine_db, polars_file, start, end, step_s, out_dir, endpoints=None,
-          spool_db=None):
-    _setup(archive_db, engine_db, polars_file, spool_db=spool_db)
+          spool_db=None, boat=None):
+    _setup(archive_db, engine_db, polars_file, spool_db=spool_db, boat=boat)
     import freezegun
     from freezegun import freeze_time
     from fastapi.testclient import TestClient
@@ -222,6 +224,7 @@ def main():
     ap.add_argument("--spool", help="a readings-schema SQLite file of uplink aggregates "
                                     "(tools/replay/spool_to_sqlite.py) attached alongside the "
                                     "archive, so the timeline can run past where it stops")
+    ap.add_argument("--boat", required=True, help="the recorded boat's id (no default)")
     ap.add_argument("--start", required=True)
     ap.add_argument("--end", required=True)
     ap.add_argument("--step", type=float, default=30.0, help="seconds between frames")
@@ -230,7 +233,7 @@ def main():
     a = ap.parse_args()
     build(a.archive, a.engine, a.polars, _iso(a.start), _iso(a.end), a.step, a.out,
           endpoints=[e.strip() for e in a.endpoints.split(",")] if a.endpoints else None,
-          spool_db=a.spool)
+          spool_db=a.spool, boat=a.boat)
 
 
 if __name__ == "__main__":

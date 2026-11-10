@@ -28,7 +28,8 @@ from . import summarizer as _summarizer
 from . import polar_tool as _polar_tool
 from . import race_mode
 
-BOAT_ID = os.environ.get("BOAT_ID", "sr33")
+from shared.boat_id import require as _require_setting  # noqa: E402
+BOAT_ID = _require_setting("BOAT_ID")   # no default: another boat must never write as sr33 (#307)
 
 _id = lambda x: x
 _ms_to_kn = lambda x: x * 1.943844

@@ -151,7 +151,7 @@ iPad Re-route ──▶ Pi ──POST /run {…, definition, assets}──▶ Or
   built for the deployed course with the carried boat's draft (`vps/lab/app/orinassets.py`).
 - **Boat profile:** the Lab's reviewed one from its volume (helm factor, approved polar cells,
   draft), with its version, for the boat the locked playbook was built with (its
-  `boat_model.boat_id`; `DEPLOY_BOAT_ID`, default `sr33`, only when the bundle doesn't say). If
+  `boat_model.boat_id`; `DEPLOY_BOAT_ID`, no default, only when the bundle doesn't say). If
   that boat has no profile, nothing is sent for it (never another boat's) and the step is red.
 - **Grid checked first:** the Pi and the Orin derive the chart's grid from its box and cell size,
   require it to match the stated size and stay under 20 M cells, before anything is allocated.
@@ -266,7 +266,7 @@ Remove: `sudo systemctl disable --now sr33-orin-reroute`, delete the unit, `rm -
 | `GRIB_CACHE` | `~/c4-plume/gribcache` | the plume's cache |
 | `REROUTE_DIR` | `~/c4-reroute` | state, jobs, last result |
 | `REROUTE_CHART_DIR` | `$REROUTE_DIR/chart` | only for a Pi from before the Deploy carried the chart: `<race_id>__<course_id>.json` |
-| `REROUTE_BOAT` | `sr33` | boat profile id; a carried profile for another boat isn't used |
+| `REROUTE_BOAT` | required (no default) | boat profile id; missing → the service won't start; a carried profile for another boat isn't used |
 | `REROUTE_DOWNLOAD_BUDGET_S` / `REROUTE_REQUEST_TIMEOUT_S` | `180` / `20` | downloads, when online |
 | `REROUTE_API_TIMEOUT_S` | `60` | one ICON/GEM load, in all (capped by what's left of the budget) |
 | `REROUTE_ROUTE_BUDGET_S` | `300` | optimizer time cap |

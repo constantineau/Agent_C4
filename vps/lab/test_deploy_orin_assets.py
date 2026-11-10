@@ -21,6 +21,7 @@ _tmp = tempfile.mkdtemp()
 os.environ["INGESTED_DIR"] = _tmp
 os.environ["DEPLOY_PI_ENGINE_URL"] = "http://pi:8200"
 os.environ["DEPLOY_COPILOT_URL"] = "http://pi:8091/copilot"
+os.environ["DEPLOY_BOAT_ID"] = "sr33"     # set explicitly: there is no default boat (#307)
 
 from shared import boat_profile  # noqa: E402
 
@@ -106,7 +107,7 @@ check("ENC depths didn't load → chart null, said (Codex on #287)", p4["chart"]
 LAND["depth_failed"] = False
 os.environ["DEPLOY_BOAT_ID"] = "nope"
 p4, problems4 = OA.build(DEF, "c")
-os.environ.pop("DEPLOY_BOAT_ID")
+os.environ["DEPLOY_BOAT_ID"] = "sr33"
 check("no profile for the boat → nothing half-built", p4["boat"] is None and p4["chart"] is None
       and problems4 == [OA.NO_BOAT.format(boat="nope")])
 
@@ -119,8 +120,16 @@ pb_x, pr_x = OA.build(DEF, "c", bundle={"boat_model": {"boat_id": "ghost"}})
 check("the bundle's boat has no profile → nothing sent for another boat, said",
       pb_x["boat"] is None and pb_x["chart"] is None and pb_x["boat_id"] == "ghost"
       and pr_x == ["No boat profile for ghost. Chart and profile not sent."])
-check("a bundle that doesn't say → DEPLOY_BOAT_ID", OA.boat_id({"boat_model": {}}) == "sr33"
-      and OA.boat_id(None) == "sr33" and OA.boat_id({"boat_model": {"boat_id": " "}}) == "sr33")
+os.environ["DEPLOY_BOAT_ID"] = "deep"
+check("a bundle that doesn't say → DEPLOY_BOAT_ID", OA.boat_id({"boat_model": {}}) == "deep"
+      and OA.boat_id(None) == "deep" and OA.boat_id({"boat_model": {"boat_id": " "}}) == "deep")
+os.environ.pop("DEPLOY_BOAT_ID")
+# #307: there is no default boat (it used to be sr33) — unset, nothing is carried and it's said
+check("no bundle boat, no DEPLOY_BOAT_ID → no boat (never sr33)", OA.boat_id(None) is None)
+p_none, pr_none = OA.build(DEF, "c")
+check("... and the push sends nothing for any boat, said", p_none["boat"] is None
+      and p_none["chart"] is None and p_none["boat_id"] is None and pr_none == [OA.NO_DEPLOY_BOAT])
+os.environ["DEPLOY_BOAT_ID"] = "sr33"
 
 print("a carried field's grid is checked before anything is allocated:")
 EVIL = dict(geo.field_to_dict(geo.ObstacleField((46.0, 42.0, -84.0, -80.0), res_deg=1.0)),

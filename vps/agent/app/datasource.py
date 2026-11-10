@@ -27,7 +27,8 @@ try:
 except ImportError:
     pool = None
 
-BOAT_ID = os.environ.get("BOAT_ID", "sr33")
+from shared.boat_id import require as _require_setting  # noqa: E402
+BOAT_ID = _require_setting("BOAT_ID")   # no default: another boat must never write as sr33 (#307)
 
 # `source_priority` is tuned live in the DB; a few seconds' cache keeps one navigator read (seven
 # latest_value calls plus the series) to a single priority query.

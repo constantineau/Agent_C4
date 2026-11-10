@@ -28,7 +28,8 @@ import time
 from .db import pool
 from . import race_mode, tools
 
-BOAT_ID = os.environ.get("BOAT_ID", "sr33")
+from shared.boat_id import require as _require_setting  # noqa: E402
+BOAT_ID = _require_setting("BOAT_ID")   # no default: another boat must never write as sr33 (#307)
 EVAL_SECONDS = int(os.environ.get("ALERT_EVAL_SECONDS", "15"))
 
 # --- thresholds (conservative; tune on real sails) -------------------------------------

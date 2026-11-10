@@ -15,6 +15,7 @@ Run:  PYTHONPATH=vps/agent:. python3 vps/agent/test_data_ages.py
 """
 import math
 import os
+os.environ["BOAT_ID"] = "sr33"   # these checks are about sr33's own N2K devices (no default boat, #307)
 import re
 import sqlite3
 import sys

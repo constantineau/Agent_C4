@@ -20,7 +20,8 @@ from shared import staleness
 from . import datasource
 from . import fatigue
 
-BOAT_ID = os.environ.get("BOAT_ID", "sr33")
+from shared.boat_id import require as _require_setting  # noqa: E402
+BOAT_ID = _require_setting("BOAT_ID")   # no default: another boat must never write as sr33 (#307)
 
 _ms_to_kn = lambda x: x * 1.943844
 _rad_to_deg = lambda x: x * 57.295779513

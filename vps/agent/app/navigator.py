@@ -17,7 +17,8 @@ from shared import staleness
 
 from . import datasource
 
-BOAT_ID = os.environ.get("BOAT_ID", "sr33")
+from shared.boat_id import require as _require_setting  # noqa: E402
+BOAT_ID = _require_setting("BOAT_ID")   # no default: another boat must never write as sr33 (#307)
 ROUND_NM = 0.06            # within this of a mark = rounded; advance to the next
 LAYLINE_TOL_DEG = 4.0      # within this of a layline bearing = "on the layline"
 

@@ -25,7 +25,8 @@ from datetime import datetime, timedelta, timezone
 from .db import pool
 from . import tools
 
-BOAT_ID = os.environ.get("BOAT_ID", "sr33")
+from shared.boat_id import require as _require_setting  # noqa: E402
+BOAT_ID = _require_setting("BOAT_ID")   # no default: another boat must never write as sr33 (#307)
 MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-8")
 API_KEY = os.environ.get("ANTHROPIC_API_KEY", "").strip()
 SUMMARY_MIN = float(os.environ.get("SUMMARY_MIN", "20"))
