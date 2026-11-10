@@ -45,16 +45,23 @@ check("sr33 still has its map", n2k_sources.devices_for("sr33"))
 check("another boat gets none (label-only), never sr33's", n2k_sources.devices_for("bravo") == {})
 
 print("no default boat or password anywhere:")
-SETTINGS = "BOAT_ID|REROUTE_BOAT|DEPLOY_BOAT_ID|BOAT_PASSWORD"
+SETTINGS = "BOAT_ID|REROUTE_BOAT|DEPLOY_BOAT_ID|BOAT_PASSWORD|DATABASE_URL|POSTGRES_PASSWORD"
+# the old dev password as a value; "sr33-dev-lab" / "sr33-dev_lab_..." / "name: sr33-dev" are names
+OLD_PW = re.compile(r"sr33-dev(?![-_\w])")
 PY_DEFAULT = re.compile(r"""environ\.get\(\s*["'](%s)["']\s*,\s*["'][^"']+["']""" % SETTINGS)
 COMPOSE_DEFAULT = re.compile(r"\$\{(%s):?-[^}]" % SETTINGS)   # an empty default is fine
 SKIP_DIRS = {".git", "node_modules", "__pycache__", "docs"}
-py_hits, compose_hits = [], []
+py_hits, compose_hits, pw_hits = [], [], []
 for d, dirs, files in os.walk(ROOT):
     dirs[:] = [x for x in dirs if x not in SKIP_DIRS]
     for f in files:
         p = os.path.join(d, f)
         rel = os.path.relpath(p, ROOT)
+        if f.endswith((".py", ".yml", ".yaml", ".md", ".sh", ".example", ".js", ".mjs", ".json",
+                       ".env", ".service")) and rel != os.path.join("shared", "test_boat_id.py"):
+            with open(p, encoding="utf-8", errors="replace") as fh:
+                pw_hits += [f"{rel}:{i}" for i, line in enumerate(fh, 1)
+                            if OLD_PW.search(line) and not re.match(r"\s*name:\s*sr33-dev\s*$", line)]
         if f.endswith(".py") and not f.startswith("test_"):
             with open(p, encoding="utf-8", errors="replace") as fh:
                 py_hits += [f"{rel}: {m.group(0)}" for m in PY_DEFAULT.finditer(fh.read())]
@@ -65,6 +72,8 @@ check("no service code defaults a boat or the password" + (f" ({py_hits})" if py
       not py_hits)
 check("no compose file defaults them" + (f" ({compose_hits})" if compose_hits else ""),
       not compose_hits)
+check("the old dev password appears nowhere as a value" + (f" ({pw_hits})" if pw_hits else ""),
+      not pw_hits)
 with open(os.path.join(ROOT, ".env.example"), encoding="utf-8") as fh:
     example = dict(line.strip().split("=", 1) for line in fh
                    if "=" in line and not line.lstrip().startswith("#"))

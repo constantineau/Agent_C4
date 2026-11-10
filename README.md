@@ -34,7 +34,7 @@ docker compose -f compose.dev.yml up -d --build   # Timescale + ingestion + agen
 bash vps/db/seed/seed_dev.sh                       # placeholder polars/waypoints + fake telemetry
 ```
 
-- Web chat (iPad):     http://localhost:8090   (server-side shared password; dev pw `sr33-dev`)
+- Web chat (iPad):     http://localhost:8090   (server-side shared password: BOAT_PASSWORD in .env, no default)
 - C4 Performance Lab:  http://localhost:8103   (prep/debrief; dev pw `lab-dev`)
 - Ingestion docs:      http://localhost:8101/docs
 - Agent docs:          http://localhost:8102/docs

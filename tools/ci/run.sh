@@ -36,11 +36,13 @@ run() {
   wired[$f]=1
   [[ -n $filter && $f != *"$filter"* ]] && return
   local cmd=("$@"); [[ ${#cmd[@]} -eq 0 ]] && cmd=(python3 "/repo/$f")
-  # Services have no default boat or crew password (#307): CI names a made-up boat explicitly, so
-  # no test can pass by quietly being sr33. A test about a missing setting unsets it itself.
+  # Services have no default boat, crew password or DB DSN (#307): CI names made-up ones explicitly,
+  # so no test can pass by quietly being sr33. A test about a missing setting unsets it itself.
+  # (No container here reaches a database: --network none.)
   local log rc; log=$(docker run --rm --network none -v "$repo:/repo:ro" -w "$wd" \
     -e PYTHONPATH="$pp" -e PYTHONDONTWRITEBYTECODE=1 -e C4_CI=1 \
     -e BOAT_ID=ci-boat -e REROUTE_BOAT=ci-boat -e BOAT_PASSWORD=ci-only-password \
+    -e DATABASE_URL=postgresql://ci:ci-only-db-password@127.0.0.1:5432/ci \
     "sr33-ci-$svc" "${cmd[@]}" 2>&1)
   rc=$?
   local line

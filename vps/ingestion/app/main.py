@@ -12,7 +12,10 @@ from typing import Optional
 from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
+from shared.boat_id import require as _require_setting
 from .db import pool
+
+_require_setting("DATABASE_URL")     # no default DSN: unset, ingestion won't start (plain line)
 
 INGEST_TOKEN = os.environ.get("INGEST_TOKEN", "dev-ingest-token")
 

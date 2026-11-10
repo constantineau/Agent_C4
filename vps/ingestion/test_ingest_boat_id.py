@@ -4,10 +4,15 @@ Before: a batch without `boat_id` was filed under "sr33", so an uplink that left
 into sr33's history. Now it's a 400 with a plain message, and nothing is written.
 """
 import os
+import subprocess
 import sys
 from contextlib import contextmanager
 
 os.environ.setdefault("INGEST_TOKEN", "test-token")
+_no_dsn = subprocess.run([sys.executable, "-c", "import app.main"],
+                         env={k: v for k, v in os.environ.items() if k != "DATABASE_URL"},
+                         capture_output=True, text=True, timeout=60)
+os.environ.setdefault("DATABASE_URL", "postgresql://t:made-up@127.0.0.1:1/t")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -60,6 +65,10 @@ H = {"Authorization": f"Bearer {main.INGEST_TOKEN}"}
 READING = {"time": "2026-11-10T12:00:00Z", "source": "n2k.1", "path": "navigation.speedOverGround",
            "value": 3.2}
 TARGET = {"time": "2026-11-10T12:00:00Z", "mmsi": 316000001, "lat": 45.0, "lon": -82.0}
+
+print("start-up:")
+check("no DATABASE_URL → won't start, saying so (no built-in DSN)", _no_dsn.returncode != 0
+      and "DATABASE_URL is not set" in (_no_dsn.stderr.strip().splitlines() or [""])[-1])
 
 print("/ingest/raw:")
 r = c.post("/ingest/raw", json={"readings": [READING]}, headers=H)

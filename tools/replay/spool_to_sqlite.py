@@ -30,7 +30,7 @@ as a 5-Hz measurement. Keep them as separate files, attached at read time and la
 Usage (the rig's ephemeral venv, plus `psycopg[binary]`):
 
     python tools/replay/spool_to_sqlite.py \
-        --dsn "postgresql://sr33:sr33-dev@localhost:5433/sr33_dev" \
+        --dsn "postgresql://sr33:<password>@localhost:5433/sr33_dev" \
         --boat-id <boat> --since 2026-07-18T20:40:30Z --until 2026-07-19T02:10:00Z \
         --out /home/constantineau/backups/replay-jul18/spool-jul18-to0210.db
 
@@ -197,8 +197,8 @@ def export(dsn, since, until, out, boat_id, batch=20000):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--dsn", default=os.environ.get(
-        "DATABASE_URL", "postgresql://sr33:sr33-dev@localhost:5433/sr33_dev"))
+    ap.add_argument("--dsn", default=os.environ.get("DATABASE_URL"), required=not os.environ.get("DATABASE_URL"),
+                    help="Postgres DSN (default: $DATABASE_URL; no built-in password)")
     ap.add_argument("--since", required=True, help="inclusive, ISO8601 (e.g. 2026-07-18T20:40:30Z)")
     ap.add_argument("--until", required=True, help="exclusive, ISO8601")
     ap.add_argument("--out", required=True)

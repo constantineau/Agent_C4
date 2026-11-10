@@ -45,16 +45,23 @@ p = subprocess.run([sys.executable, "-c", "from app import tools; print(tools.BO
                    capture_output=True, text=True, timeout=120)
 check("tools.BOAT_ID is the one set (bravo)", p.stdout.strip() == "bravo")
 
+print("database:")
+rc, last = start("app.main", drop=("DATABASE_URL",))
+check("no DATABASE_URL → the agent stops, saying so (no built-in DSN)",
+      rc != 0 and "DATABASE_URL is not set" in last[0])
+rc, last = start("app.datasource_onboard", drop=("DATABASE_URL",))
+check("...but the Pi engine's shared modules don't need one", rc == 0)
+
 print("crew password:")
 rc, last = start("app.auth", drop=("BOAT_PASSWORD",), AUTH_ENABLED="true")
 check("auth on, no BOAT_PASSWORD → stops, saying so", rc != 0 and "BOAT_PASSWORD is not set" in last[0])
 rc, last = start("app.auth", drop=("BOAT_PASSWORD",), AUTH_ENABLED="false")
 check("open bench (AUTH_ENABLED=false) needs none", rc == 0)
 p = subprocess.run([sys.executable, "-c",
-                    "from app import auth; print(auth.check_password('sr33-dev'))"],
+                    "from app import auth; print(auth.check_password('made-up-default'))"],
                    env={**{k: v for k, v in os.environ.items() if k != "BOAT_PASSWORD"},
                         "AUTH_ENABLED": "false"}, capture_output=True, text=True, timeout=120)
-check("the old dev password is not a default", p.stdout.strip() != "True")
+check("no password works when none is set", p.stdout.strip() != "True")
 p = subprocess.run([sys.executable, "-c",
                     "from app import auth; print(auth.check_password(' pw '), auth.check_password('pw'))"],
                    env=dict(os.environ, BOAT_PASSWORD=" pw ", AUTH_ENABLED="true"),
