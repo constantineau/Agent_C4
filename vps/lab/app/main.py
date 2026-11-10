@@ -1185,15 +1185,26 @@ def load_log_track(body):
     end_ts?, name?, use_marker?}. The bounds are the session's DERIVED race window, not the
     button (see `resolve_log_window`); the window used is stored with the track and reported
     back. Stores it exactly like a GPX/YB track; the sail log rides along."""
-    from . import monitor
     body = body or {}
     rid = body.get("race_id")
     if not rid or (body.get("start_ts") is None and body.get("session_id") is None):
         return {"detail": "race_id and one of session_id / start_ts are required"}, 422
-    try:
-        sessions = (monitor.agent_json("/racelog/sessions", timeout=30) or {}).get("sessions") or []
-    except Exception as exc:
-        return {"detail": f"agent unreachable: {exc}"}, 502
+    t, code = fetch_log_track(body)
+    if code != 200:
+        return t, code
+    meta = track.save_track(rid, t)
+    return {"ok": True, **meta, "sail_changes": len(t.get("sail_log") or [])}, 200
+
+
+def fetch_log_track(body, sessions=None):
+    """The boat-log track for a session, in memory → (track, 200) or ({"detail"}, code). Saves
+    nothing: `load_log_track` stores it for a debrief, the re-score (#245) only scores it."""
+    from . import monitor
+    if sessions is None:
+        try:
+            sessions = (monitor.agent_json("/racelog/sessions", timeout=30) or {}).get("sessions") or []
+        except Exception as exc:
+            return {"detail": f"agent unreachable: {exc}"}, 502
     win = resolve_log_window(body, sessions)
     if not win:
         return {"detail": "no such race session on the boat log"}, 404
@@ -1227,11 +1238,22 @@ def load_log_track(body):
         trust = {"available": False,
                  "note": f"Instrument check didn't run ({exc}). Nothing was left out, so be "
                          f"careful with boat-model changes from this track."}
-    meta = track.save_track(rid, {"source": "boatlog", "boat": body.get("name"),
-                                      "fixes": fixes, "n": len(fixes), "window": win,
-                                      "trust": trust,
-                                      "sail_log": r.get("sail_log") or []})
-    return {"ok": True, **meta, "sail_changes": len(r.get("sail_log") or [])}, 200
+    return {"source": "boatlog", "boat": body.get("name"), "fixes": fixes, "n": len(fixes),
+            "window": win, "trust": trust, "sail_log": r.get("sail_log") or []}, 200
+
+
+def rescore_fetch(race_id, window_start):
+    """A recording the Lab no longer stores, straight from the boat log, in memory (#245)."""
+    from . import monitor, rescore
+    try:
+        sessions = (monitor.agent_json("/racelog/sessions", timeout=30) or {}).get("sessions") or []
+    except Exception as exc:
+        return None, f"boat log unreachable: {type(exc).__name__}"
+    body = rescore.log_body_for(window_start, sessions)
+    if body is None:
+        return None, "not on the boat log any more"
+    t, code = fetch_log_track({**body, "race_id": race_id}, sessions)
+    return (t, None) if code == 200 else (None, t.get("detail"))
 
 
 @app.post("/api/debrief/track/clear")
@@ -1321,6 +1343,48 @@ async def learning_apply(pid: int, body: dict = None):
     body = body or {}
     return await run_in_threadpool(learning.apply_proposal, pid, body.get("helm_factor"),
                                    body.get("adjustments"), body.get("note", ""), body.get("wave_coeffs"))
+
+
+# ---- Re-score (#245): today's evidence code over the archived recordings, as a versioned run ----
+@app.post("/api/learning/rescore")
+async def learning_rescore(body: dict = None):
+    """Start a re-score of every archived recording of the boat. Files a run; changes nothing."""
+    from . import jobs, rescore
+    bid = (body or {}).get("boat_id") or (boats.active_boat() or {}).get("boat_id")
+    if not bid:
+        return JSONResponse({"detail": "no active boat"}, status_code=400)
+    return jobs.start("rescore", lambda progress: rescore.run(bid, fetch_track=rescore_fetch,
+                                                              on_progress=progress),
+                      meta={"boat_id": bid})
+
+
+@app.get("/api/learning/rescore/status")
+async def learning_rescore_status(job_id: str = ""):
+    from . import jobs
+    return jobs.status("rescore", job_id=job_id)
+
+
+@app.get("/api/learning/rescore/latest")
+async def learning_rescore_latest(boat_id: str = None):
+    bid = boat_id or (boats.active_boat() or {}).get("boat_id")
+    return {"boat_id": bid, "run": await run_in_threadpool(learning.latest_rescore, bid)}
+
+
+@app.get("/api/learning/rescore/{run_id}")
+async def learning_rescore_get(run_id: int):
+    r = await run_in_threadpool(learning.get_rescore, run_id)
+    return r or JSONResponse({"detail": "not found"}, status_code=404)
+
+
+@app.post("/api/learning/rescore/{run_id}/propose")
+async def learning_rescore_propose(run_id: int, body: dict = None):
+    """Approve a re-score → an ordinary proposal, applied (or not) in Learnings (ADR-0003)."""
+    return await run_in_threadpool(learning.rescore_propose, run_id, (body or {}).get("note", ""))
+
+
+@app.post("/api/learning/rescore/{run_id}/reject")
+async def learning_rescore_reject(run_id: int, body: dict = None):
+    return await run_in_threadpool(learning.rescore_reject, run_id, (body or {}).get("note", ""))
 
 
 @app.post("/api/learning/proposals/{pid}/reject")

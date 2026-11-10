@@ -74,6 +74,12 @@ def _conn():
         n_debriefs INTEGER, n_bins INTEGER,
         adjustments_json TEXT, summary_json TEXT,
         decided_at REAL, decided_note TEXT, applied_json TEXT);
+    CREATE TABLE IF NOT EXISTS rescore_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        created_at REAL, boat_id TEXT, evidence_version TEXT, status TEXT,
+        against_json TEXT, recordings_json TEXT, bins_json TEXT, result_json TEXT,
+        wave_json TEXT, comparison_json TEXT,
+        proposal_id INTEGER, decided_at REAL, decided_note TEXT);
     """)
     _ensure_columns(c)      # additive-only migration for archives created before these columns
     return c
@@ -342,108 +348,132 @@ def propose(boat_id, recordings=None):
     from . import boats
     c = _conn()
     try:
-        bins, races = _latest_bins_per_race(c, boat_id)
+        bins, _races = _latest_bins_per_race(c, boat_id)
         if not bins:
             return {"ok": False, "note": "No debrief data for this boat yet. Run a debrief with a "
                     "boat track first."}
-        offered = len(bins)
-        by_choice = 0
-        if recordings is not None:
-            chosen = [b for b in bins if selects(b.get("window_start"), recordings)]
-            by_choice = len(bins) - len(chosen)
-            if not chosen:
-                have = sorted({b.get("window_start") for b in bins}, key=lambda x: x or 0)
-                return {"ok": False, "note": "none of the selected races has data yet. "
-                        f"{len(bins)} cell(s) are available from {len(have)} recording(s). "
-                        "Pick one of those, or debrief the race you want first."}
-            bins = chosen
-        # ACTUAL polars only (Cole 2026-09-09): the boat model refines off measured angles and
-        # measured wind speed. GRIB-derived bins — including every bin archived before wind_source
-        # existed, all of which were forecast-based — are excluded and the exclusion is REPORTED.
-        # A polar taught by a forecast's idea of the wind is the phantom-bin failure at scale.
-        # A cell is "inferred" when the paddlewheel was out and SOG stood in for STW (#49): the
-        # tide is in it, so it is left out the same way.
-        excluded = [b for b in bins if b.get("wind_source") != "measured"]
-        inferred = sum(1 for b in excluded if b.get("wind_source") == "inferred")
-        mixed = sum(1 for b in excluded if b.get("wind_source") == "mixed")
-        forecast = len(excluded) - inferred - mixed
-        bins = [b for b in bins if b.get("wind_source") == "measured"]
-        races = {b["race_id"] for b in bins}
-        used = sorted({_rec(b) for b in bins}, key=lambda k: (k[0], k[1] or 0))
-        if not bins:
-            return {"ok": False,
-                    "note": "No measured data yet ("
-                            + ", ".join(x for x in (
-                                f"{forecast} from forecasts" if forecast else "",
-                                f"{inferred} from GPS speed" if inferred else "",
-                                f"{mixed} partly measured" if mixed else "") if x)
-                            + " left out). Debrief from the boat's log. The boat model only "
-                              "learns from the instruments."}
-        # Refine off the FLAT-WATER-equivalent % (pct_flat = raw pct with the sea-state loss removed)
-        # so helm_factor stays a flat-water number and doesn't double-count waves; older bins with no
-        # pct_flat fall back to the raw pct (== flat when there was no sea-state field).
-        _pf = lambda b: (b["pct_flat"] if b.get("pct_flat") is not None else b["pct"])
-        # overall achievable fraction = sample-weighted flat-water % of polar
-        sw = sum(_pf(b) * b["samples"] for b in bins)
-        sn = sum(b["samples"] for b in bins)
-        overall_pct = sw / sn if sn else 100.0
         helm_current = float((boats.active_boat() or {}).get("helm_factor", 1.0)) \
             if (boats.active_boat() or {}).get("boat_id") == boat_id else 1.0
-        helm_proposed = round(max(_HELM_MIN, min(_HELM_MAX, overall_pct / 100.0)), 3)
-
-        # per-cell SHAPE multiplier, RELATIVE to the overall level (helm_factor carries the level, so
-        # the overlay only captures where the boat is relatively weak/strong by angle — no double-count)
-        cells = {}
-        for b in bins:
-            k = (b["tws"], b["twa"])
-            cells.setdefault(k, {"pct": [], "n": [], "samples": 0, "races": set(),
-                                 "pos": b["point_of_sail"]})
-            cells[k]["pct"].append(_pf(b)); cells[k]["n"].append(b["samples"])
-            cells[k]["samples"] += b["samples"]
-            cells[k]["races"].add(_rec(b))          # recordings, not race ids (see recording_key)
-        adjustments, by_pos, thin = [], {}, 0
-        for (tws, twa), v in sorted(cells.items()):
-            if len(v["races"]) < _MIN_RACES_FOR_CELL:
-                continue
-            if v["samples"] < _MIN_SAMPLES_FOR_CELL:
-                thin += 1
-                continue
-            # SAMPLE-WEIGHTED across the cell's bins. Bins are per sail configuration, so a cell
-            # holds several: on Jul 15 2026, 10 kn/120° was A3+J1 at 92% over 117 samples, A3+SS
-            # at 93% over 13, and a 5-sample S2 bin at 59% (a douse) — the unweighted mean read
-            # 81% and proposed ×0.886 against a cell the boat sails at 92%.
-            cell_pct = sum(p * n for p, n in zip(v["pct"], v["n"])) / v["samples"]
-            rel = (cell_pct / 100.0) / (overall_pct / 100.0) if overall_pct else 1.0
-            mult = round(max(_CELL_MULT_MIN, min(_CELL_MULT_MAX, rel)), 3)
-            if abs(mult - 1.0) < _CELL_DEADBAND:
-                continue
-            adjustments.append({"tws": tws, "twa": twa, "point_of_sail": v["pos"], "mult": mult,
-                                "cell_pct": round(cell_pct), "samples": v["samples"],
-                                "races": len(v["races"]),
-                                "basis": f"sailed {round(cell_pct)}% of polar over {v['samples']} samples / "
-                                         f"{len(v['races'])} recording(s)"})
-            p = by_pos.setdefault(v["pos"], {"pct": [], "n": 0})
-            p["pct"].append(cell_pct); p["n"] += v["samples"]
-        summary = {"overall_pct": round(overall_pct), "n_samples": sn,
-                   "bins_offered": offered, "excluded_by_choice": by_choice,
-                   "recordings_selected": (None if recordings is None else list(recordings)),
-                   "by_point_of_sail": {k: round(sum(x["pct"]) / len(x["pct"]))
-                                        for k, x in by_pos.items()},
-                   "races": sorted(races), "wind_source": "measured",
-                   "recordings": [{"race_id": r, "window_start": w} for r, w in used],
-                   "excluded_forecast_bins": forecast,
-                   "excluded_inferred_bins": inferred,
-                   "excluded_mixed_bins": mixed,
-                   "thin_cells_skipped": thin, "min_cell_samples": _MIN_SAMPLES_FOR_CELL}
+        r = refine(bins, recordings, helm_current)
+        if not r["ok"]:
+            return r
         row = c.execute(
             """INSERT INTO proposals (created_at,boat_id,status,helm_current,helm_proposed,overall_pct,
                n_debriefs,n_bins,adjustments_json,summary_json) VALUES (?,?,?,?,?,?,?,?,?,?)""",
-            (time.time(), boat_id, "proposed", helm_current, helm_proposed, round(overall_pct, 1),
-             len(used), len(bins), json.dumps(adjustments), json.dumps(summary)))
+            (time.time(), boat_id, "proposed", helm_current, r["helm_proposed"], r["overall_pct"],
+             r["n_debriefs"], r["n_bins"], json.dumps(r["adjustments"]), json.dumps(r["summary"])))
         c.commit()
         return {"ok": True, **get_proposal(row.lastrowid)}
     finally:
         c.close()
+
+
+def refine(bins, recordings=None, helm_current=1.0):
+    """The proposal MATH, pure: measured bins → helm_factor + per-cell polar overlay. `propose()`
+    feeds it the archive's latest bins and files the result for review; the re-score (#245) feeds
+    it bins re-scored with today's evidence code and files nothing until a person asks. Returns
+    {"ok": False, "note"} or {"ok": True, helm_proposed, overall_pct, adjustments, summary,
+    n_debriefs, n_bins, cells} — `cells` is every cell's evidence, proposed or not, so a
+    comparison can say why a cell dropped out."""
+    offered = len(bins)
+    by_choice = 0
+    if recordings is not None:
+        chosen = [b for b in bins if selects(b.get("window_start"), recordings)]
+        by_choice = len(bins) - len(chosen)
+        if not chosen:
+            have = sorted({b.get("window_start") for b in bins}, key=lambda x: x or 0)
+            return {"ok": False, "note": "none of the selected races has data yet. "
+                    f"{len(bins)} cell(s) are available from {len(have)} recording(s). "
+                    "Pick one of those, or debrief the race you want first."}
+        bins = chosen
+    # ACTUAL polars only (Cole 2026-09-09): the boat model refines off measured angles and
+    # measured wind speed. GRIB-derived bins — including every bin archived before wind_source
+    # existed, all of which were forecast-based — are excluded and the exclusion is REPORTED.
+    # A polar taught by a forecast's idea of the wind is the phantom-bin failure at scale.
+    # A cell is "inferred" when the paddlewheel was out and SOG stood in for STW (#49): the
+    # tide is in it, so it is left out the same way.
+    excluded = [b for b in bins if b.get("wind_source") != "measured"]
+    inferred = sum(1 for b in excluded if b.get("wind_source") == "inferred")
+    mixed = sum(1 for b in excluded if b.get("wind_source") == "mixed")
+    forecast = len(excluded) - inferred - mixed
+    bins = [b for b in bins if b.get("wind_source") == "measured"]
+    races = {b["race_id"] for b in bins}
+    used = sorted({_rec(b) for b in bins}, key=lambda k: (k[0], k[1] or 0))
+    if not bins:
+        return {"ok": False,
+                "note": "No measured data yet ("
+                        + ", ".join(x for x in (
+                            f"{forecast} from forecasts" if forecast else "",
+                            f"{inferred} from GPS speed" if inferred else "",
+                            f"{mixed} partly measured" if mixed else "") if x)
+                        + " left out). Debrief from the boat's log. The boat model only "
+                          "learns from the instruments."}
+    # Refine off the FLAT-WATER-equivalent % (pct_flat = raw pct with the sea-state loss removed)
+    # so helm_factor stays a flat-water number and doesn't double-count waves; older bins with no
+    # pct_flat fall back to the raw pct (== flat when there was no sea-state field).
+    _pf = lambda b: (b["pct_flat"] if b.get("pct_flat") is not None else b["pct"])
+    # overall achievable fraction = sample-weighted flat-water % of polar
+    sw = sum(_pf(b) * b["samples"] for b in bins)
+    sn = sum(b["samples"] for b in bins)
+    overall_pct = sw / sn if sn else 100.0
+    helm_proposed = round(max(_HELM_MIN, min(_HELM_MAX, overall_pct / 100.0)), 3)
+
+    # per-cell SHAPE multiplier, RELATIVE to the overall level (helm_factor carries the level, so
+    # the overlay only captures where the boat is relatively weak/strong by angle — no double-count)
+    cells = {}
+    for b in bins:
+        k = (b["tws"], b["twa"])
+        cells.setdefault(k, {"pct": [], "n": [], "samples": 0, "races": set(),
+                             "pos": b["point_of_sail"]})
+        cells[k]["pct"].append(_pf(b)); cells[k]["n"].append(b["samples"])
+        cells[k]["samples"] += b["samples"]
+        cells[k]["races"].add(_rec(b))          # recordings, not race ids (see recording_key)
+    adjustments, by_pos, thin, evidence = [], {}, 0, []
+    for (tws, twa), v in sorted(cells.items()):
+        ev = {"tws": tws, "twa": twa, "point_of_sail": v["pos"], "samples": v["samples"],
+              "races": len(v["races"])}
+        evidence.append(ev)
+        if len(v["races"]) < _MIN_RACES_FOR_CELL:
+            ev["outcome"] = "few_races"
+            continue
+        if v["samples"] < _MIN_SAMPLES_FOR_CELL:
+            thin += 1
+            ev["outcome"] = "thin"
+            continue
+        # SAMPLE-WEIGHTED across the cell's bins. Bins are per sail configuration, so a cell
+        # holds several: on Jul 15 2026, 10 kn/120° was A3+J1 at 92% over 117 samples, A3+SS
+        # at 93% over 13, and a 5-sample S2 bin at 59% (a douse) — the unweighted mean read
+        # 81% and proposed ×0.886 against a cell the boat sails at 92%.
+        cell_pct = sum(p * n for p, n in zip(v["pct"], v["n"])) / v["samples"]
+        rel = (cell_pct / 100.0) / (overall_pct / 100.0) if overall_pct else 1.0
+        mult = round(max(_CELL_MULT_MIN, min(_CELL_MULT_MAX, rel)), 3)
+        ev["cell_pct"] = round(cell_pct)
+        ev["mult"] = mult
+        if abs(mult - 1.0) < _CELL_DEADBAND:
+            ev["outcome"] = "deadband"
+            continue
+        ev["outcome"] = "proposed"
+        adjustments.append({"tws": tws, "twa": twa, "point_of_sail": v["pos"], "mult": mult,
+                            "cell_pct": round(cell_pct), "samples": v["samples"],
+                            "races": len(v["races"]),
+                            "basis": f"sailed {round(cell_pct)}% of polar over {v['samples']} samples / "
+                                     f"{len(v['races'])} recording(s)"})
+        p = by_pos.setdefault(v["pos"], {"pct": [], "n": 0})
+        p["pct"].append(cell_pct); p["n"] += v["samples"]
+    summary = {"overall_pct": round(overall_pct), "n_samples": sn,
+               "bins_offered": offered, "excluded_by_choice": by_choice,
+               "recordings_selected": (None if recordings is None else list(recordings)),
+               "by_point_of_sail": {k: round(sum(x["pct"]) / len(x["pct"]))
+                                    for k, x in by_pos.items()},
+               "races": sorted(races), "wind_source": "measured",
+               "recordings": [{"race_id": r, "window_start": w} for r, w in used],
+               "excluded_forecast_bins": forecast,
+               "excluded_inferred_bins": inferred,
+               "excluded_mixed_bins": mixed,
+               "thin_cells_skipped": thin, "min_cell_samples": _MIN_SAMPLES_FOR_CELL}
+    return {"ok": True, "helm_current": helm_current, "helm_proposed": helm_proposed,
+            "overall_pct": round(overall_pct, 1), "adjustments": adjustments, "summary": summary,
+            "n_debriefs": len(used), "n_bins": len(bins), "cells": evidence}
 
 
 def _row_to_proposal(r):
@@ -496,6 +526,12 @@ def apply_proposal(pid, helm_factor=None, adjustments=None, note="", wave_coeffs
         return {"ok": False, "note": "boat profile not found"}
     if prop.get("kind") == "wave_coeffs":
         return _apply_wave(prop, boat, wave_coeffs, note)
+    summ = prop.get("summary") or {}
+    if isinstance(summ, dict) and "rescore_run" in summ \
+            and _current_wave_coeffs(prop["boat_id"]) != summ.get("wave_coeffs_in_use"):
+        # a re-score's helm and overlay were refined on the wave settings of the time (#245)
+        return {"ok": False, "note": "The wave settings changed since this re-score. "
+                "Score again in the Polar tab."}
     hf = prop["helm_proposed"] if helm_factor is None else float(helm_factor)
     hf = round(max(_HELM_MIN, min(_HELM_MAX, hf)), 3)
     adj = prop["adjustments"] if adjustments is None else adjustments
@@ -638,12 +674,34 @@ def calibrate_waves(boat_id):
     conservative prior (hitting it needs extreme seas). A point of sail's prior k is kept when its data
     lacks Hs SPREAD (can't fit a slope from flat-water races)."""
     cur = _current_wave_coeffs(boat_id)
-    floor = cur["floor"]
     c = _conn()
     try:
-        bins, races = _latest_bins_per_race(c, boat_id)
+        bins, _races = _latest_bins_per_race(c, boat_id)
     finally:
         c.close()
+    r = fit_waves(bins, cur)
+    if not r["ok"]:
+        return r
+    c = _conn()
+    try:
+        row = c.execute(
+            """INSERT INTO proposals (created_at,boat_id,status,kind,helm_current,helm_proposed,
+               overall_pct,n_debriefs,n_bins,adjustments_json,summary_json,wave_json)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (time.time(), boat_id, "proposed", "wave_coeffs", None, None, None,
+             r["n_debriefs"], r["n_bins"], json.dumps([]), json.dumps(r["summary"]),
+             json.dumps(r["proposed"])))
+        c.commit()
+        return {"ok": True, **get_proposal(row.lastrowid)}
+    finally:
+        c.close()
+
+
+def fit_waves(bins, cur):
+    """The wave-fit MATH, pure: bins + the coefficients in use → {"ok": False, note, …} or
+    {"ok": True, proposed, summary, n_debriefs, n_bins}. `calibrate_waves()` files the result
+    for review; the re-score (#245) only shows it."""
+    floor = cur["floor"]
     # Same provenance rule as `propose()` (#49, #240): the wave slope is fit off measured wind and
     # measured STW only. A forecast-wind or SOG-inferred cell would set the coefficients the
     # optimizer routes on from evidence the polar refinement already refuses.
@@ -705,16 +763,239 @@ def calibrate_waves(boat_id):
     summary = {"by_point_of_sail": detail, "deadband": db_info,
                "current_coeffs": {k: round(v, 4) for k, v in cur.items()}, "races": sorted(races),
                "excluded_not_measured": left_out}
+    return {"ok": True, "proposed": proposed, "summary": summary, "n_debriefs": len(races),
+            "n_bins": len(have_hs)}
+
+
+# ---- re-score (#245): today's evidence code over the archived recordings, versioned ------------
+# Proposals applied before the evidence fixes (#49 #50 #63 #68) were refined from bins those bugs
+# shaped. Cole, 2026-11-09: keep what was applied, re-score the archive as a VERSIONED run, compare,
+# and he approves any replacement (ADR-0003). A run is its own row: it never writes perf_bins (so
+# `propose()` keeps reading the archive as it was) and never touches the boat. Approving a run only
+# files an ordinary `proposed` row; the boat changes when a person applies that in Learnings.
+_SAME_MULT = 0.01        # a cell whose multiplier moves less than 1% reads "same"
+
+
+def archived_recordings(boat_id):
+    """Every recording the boat's archive holds a debrief of: the latest debrief per (race id,
+    recording window start), oldest recording first."""
+    c = _conn()
+    try:
+        rows = c.execute(
+            """SELECT d.id, d.race_id, d.race_name, d.window_start, d.track_source, d.elapsed_hours,
+                      d.polar_pct, d.created_at FROM debriefs d JOIN (
+                 SELECT race_id, window_start, MAX(id) AS did FROM debriefs
+                 WHERE boat_id IS ? GROUP BY race_id, window_start) latest
+               ON d.id = latest.did ORDER BY COALESCE(d.window_start, 0), d.race_id""",
+            (boat_id,)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        c.close()
+
+
+def applied_model(boat_id):
+    """What the boat sails on NOW (the profile is the truth) plus the proposal it came from, whose
+    per-cell evidence is the 'before' side of a comparison. Read-only."""
+    from . import boats
+    b = boats.get_boat(boat_id) or {}
+    out = {"helm_factor": float(b.get("helm_factor", 1.0)),
+           "polar_adjustments": [{"tws": float(a["tws"]), "twa": float(a["twa"]),
+                                  "mult": float(a["mult"])}
+                                 for a in (b.get("polar_adjustments") or [])
+                                 if a.get("mult") is not None],
+           # the EFFECTIVE coefficients (overlay over the env priors): the bins' pct_flat is only
+           # valid while these are what the boat uses; approval and apply both check them
+           "wave_coeffs": _current_wave_coeffs(boat_id),
+           # the boat's own overlay as scoring reads it (None = env priors)
+           "boat_wave_coeffs": boats.wave_coeffs(b),
+           "proposal_id": None, "proposal_adjustments": [], "proposal_overall_pct": None}
+    c = _conn()
+    try:
+        r = c.execute("""SELECT * FROM proposals WHERE boat_id IS ? AND status='applied'
+                         AND COALESCE(kind,'boat_model')='boat_model'
+                         ORDER BY decided_at DESC, id DESC LIMIT 1""", (boat_id,)).fetchone()
+    finally:
+        c.close()
+    if r:
+        p = _row_to_proposal(r)
+        out.update({"proposal_id": p["id"], "proposal_decided_at": p.get("decided_at"),
+                    "proposal_adjustments": p.get("adjustments") or [],
+                    "proposal_overall_pct": p.get("overall_pct"),
+                    "proposal_n_samples": (p.get("summary") or {}).get("n_samples")})
+    return out
+
+
+def _cell_key(a):
+    return (round(float(a["tws"]), 1), round(float(a["twa"]), 1))
+
+
+def compare(against, result, wave=None):
+    """Applied vs re-scored, per cell: every applied cell and every newly proposed one, with the
+    evidence behind both sides. Status: same / changes / dropped (back to the plain polar) / new."""
+    if not (result or {}).get("ok"):
+        return {"available": False, "note": (result or {}).get("note") or "nothing to compare"}
+    applied = {_cell_key(a): a for a in against.get("polar_adjustments") or []}
+    before = {_cell_key(a): a for a in against.get("proposal_adjustments") or []}
+    proposed = {_cell_key(a): a for a in result.get("adjustments") or []}
+    evidence = {_cell_key(c): c for c in result.get("cells") or []}
+    rows = []
+    for k in sorted(set(applied) | set(proposed)):
+        now = float(applied[k]["mult"]) if k in applied else None
+        new = float(proposed[k]["mult"]) if k in proposed else None
+        if now is not None and new is None:
+            status = "dropped"
+        elif now is None:
+            status = "new"
+        elif abs(new - now) < _SAME_MULT:
+            status = "same"
+        else:
+            status = "changes"
+        b, e = before.get(k) or {}, evidence.get(k) or {}
+        rows.append({"tws": k[0], "twa": k[1], "now": now, "new": new,
+                     "change": round((new if new is not None else 1.0)
+                                     - (now if now is not None else 1.0), 3),
+                     "status": status,
+                     # why a dropped cell dropped: under the sample gate, inside the ±4% deadband,
+                     # or no measured data at all in the re-score
+                     "why": (e.get("outcome") or "no_data") if new is None else None,
+                     "now_pct": b.get("cell_pct"), "now_samples": b.get("samples"),
+                     "now_races": b.get("races"),
+                     "new_pct": e.get("cell_pct"), "new_samples": e.get("samples"),
+                     "new_races": e.get("races"),
+                     # Cole unchecked some cells of the applied proposal; say so if one comes back
+                     "left_out_before": (k in before and k not in applied)})
+    counts = {s: sum(1 for r in rows if r["status"] == s)
+              for s in ("same", "changes", "dropped", "new")}
+    h_now, h_new = float(against.get("helm_factor", 1.0)), result.get("helm_proposed")
+    out = {"available": True, "rows": rows, "counts": counts, "applied_cells": len(applied),
+           "helm": {"now": h_now, "new": h_new,
+                    "change": (round(h_new - h_now, 3) if h_new is not None else None)},
+           "overall_pct": {"now": against.get("proposal_overall_pct"),
+                           "new": result.get("overall_pct")},
+           "samples": {"now": against.get("proposal_n_samples"),
+                       "new": (result.get("summary") or {}).get("n_samples")}}
+    if wave is not None:
+        cur = against.get("wave_coeffs") or {}
+        out["wave"] = ({"available": True,
+                        "keys": {k: {"now": cur.get(k), "new": (wave.get("proposed") or {}).get(k)}
+                                 for k in ("hs_deadband", "k_up", "k_reach", "k_down", "floor")}}
+                       if wave.get("ok") else {"available": False, "note": wave.get("note")})
+    return out
+
+
+def save_rescore(boat_id, evidence_version, recordings, bins, against=None):
+    """File one re-score run: the re-scored bins, the proposal math over them, the wave fit, and the
+    comparison with what the boat sails on now. Writes ONLY its own row."""
+    against = against if against is not None else applied_model(boat_id)
+    # The helm and overlay are refined on the wave coefficients IN USE (each bin's pct_flat was
+    # scored with them), so the suggestion this run can file fits the boat as it sails now. The
+    # wave fit is shown, never filed from here: a helm refined on one set of coefficients and a
+    # wave proposal applied (or rejected) separately would make an inconsistent model (Codex on
+    # #297). New wave coefficients go through Learnings' own wave fit.
+    result = refine(bins, None, against["helm_factor"]) if bins else {
+        "ok": False, "note": "No recording could be scored again."}
+    wave = fit_waves(bins, against.get("wave_coeffs") or _current_wave_coeffs(boat_id))
+    comparison = compare(against, result, wave)
     c = _conn()
     try:
         row = c.execute(
-            """INSERT INTO proposals (created_at,boat_id,status,kind,helm_current,helm_proposed,
-               overall_pct,n_debriefs,n_bins,adjustments_json,summary_json,wave_json)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (time.time(), boat_id, "proposed", "wave_coeffs", None, None, None,
-             len(races), len(have_hs), json.dumps([]), json.dumps(summary), json.dumps(proposed)))
+            """INSERT INTO rescore_runs (created_at,boat_id,evidence_version,status,against_json,
+               recordings_json,bins_json,result_json,wave_json,comparison_json)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (time.time(), boat_id, evidence_version, "ready", json.dumps(against),
+             json.dumps(recordings), json.dumps(bins), json.dumps(result), json.dumps(wave),
+             json.dumps(comparison)))
         c.commit()
-        return {"ok": True, **get_proposal(row.lastrowid)}
+        rid = row.lastrowid
+    finally:
+        c.close()
+    return get_rescore(rid)
+
+
+def _row_to_rescore(r, with_bins=False):
+    d = dict(r)
+    for k in ("against_json", "recordings_json", "bins_json", "result_json", "wave_json",
+              "comparison_json"):
+        v = d.pop(k, None)
+        if k == "bins_json" and not with_bins:
+            d["n_bins"] = len(json.loads(v)) if v else 0
+            continue
+        d[k.replace("_json", "")] = json.loads(v) if v else None
+    return d
+
+
+def get_rescore(run_id, with_bins=False):
+    c = _conn()
+    try:
+        r = c.execute("SELECT * FROM rescore_runs WHERE id=?", (run_id,)).fetchone()
+        return _row_to_rescore(r, with_bins) if r else None
+    finally:
+        c.close()
+
+
+def latest_rescore(boat_id):
+    c = _conn()
+    try:
+        r = c.execute("SELECT * FROM rescore_runs WHERE boat_id IS ? ORDER BY id DESC LIMIT 1",
+                      (boat_id,)).fetchone()
+        return _row_to_rescore(r) if r else None
+    finally:
+        c.close()
+
+
+def rescore_propose(run_id, note=""):
+    """A person approved a re-score run → file it as an ordinary `proposed` boat-model refinement.
+    Nothing reaches the boat here: the proposal is applied, or not, through `apply_proposal` like
+    any other (ADR-0003). The wave fit is not filed (see `save_rescore`)."""
+    from . import boats
+    run = get_rescore(run_id)
+    if not run:
+        return {"ok": False, "note": "unknown re-score"}
+    if run["status"] != "ready":
+        return {"ok": False, "note": f"re-score already {run['status']}"}
+    res = run.get("result") or {}
+    if not res.get("ok"):
+        return {"ok": False, "note": res.get("note") or "this re-score has nothing to suggest"}
+    boat = boats.get_boat(run["boat_id"]) or {}
+    if _current_wave_coeffs(run["boat_id"]) != (run.get("against") or {}).get("wave_coeffs"):
+        # the helm and overlay were refined on the sea-state model of the time; on another one
+        # they would not predict what the boat sailed
+        return {"ok": False, "note": "The wave settings changed since this ran. Score again."}
+    helm_now = float(boat.get("helm_factor", 1.0))
+    tag = {"rescore_run": run_id, "evidence_version": run.get("evidence_version"),
+           "wave_coeffs_in_use": (run.get("against") or {}).get("wave_coeffs")}
+    now = time.time()
+    c = _conn()
+    try:
+        # claim the run first: two clicks must not file two proposals
+        if c.execute("UPDATE rescore_runs SET status='proposed',decided_at=?,decided_note=? "
+                     "WHERE id=? AND status='ready'", (now, note, run_id)).rowcount != 1:
+            c.rollback()
+            return {"ok": False, "note": "re-score already decided"}
+        pid = c.execute(
+            """INSERT INTO proposals (created_at,boat_id,status,helm_current,helm_proposed,overall_pct,
+               n_debriefs,n_bins,adjustments_json,summary_json) VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (now, run["boat_id"], "proposed", helm_now, res["helm_proposed"], res["overall_pct"],
+             res["n_debriefs"], res["n_bins"], json.dumps(res["adjustments"]),
+             json.dumps({**res["summary"], **tag}))).lastrowid
+        c.execute("UPDATE rescore_runs SET proposal_id=? WHERE id=?", (pid, run_id))
+        c.commit()
+    finally:
+        c.close()
+    return {"ok": True, "proposal_id": pid}
+
+
+def rescore_reject(run_id, note=""):
+    c = _conn()
+    try:
+        r = c.execute("SELECT status FROM rescore_runs WHERE id=?", (run_id,)).fetchone()
+        if not r:
+            return {"ok": False, "note": "unknown re-score"}
+        if c.execute("UPDATE rescore_runs SET status='rejected',decided_at=?,decided_note=? "
+                     "WHERE id=? AND status='ready'", (time.time(), note, run_id)).rowcount != 1:
+            return {"ok": False, "note": f"re-score already {r['status']}"}
+        c.commit()
+        return {"ok": True}
     finally:
         c.close()
 
