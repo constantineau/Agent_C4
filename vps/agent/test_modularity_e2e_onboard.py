@@ -173,7 +173,7 @@ def test_sail_call_targets_are_bravos_or_none(sail_call):
     """Either Bravo's own target speed, or a plain 'no sail model' — never another boat's."""
     out = sail_call[0]
     if not out.get("available"):
-        assert out.get("note")
+        assert re.search(r"sail|polar|boat", out.get("note") or "", re.I), out
         return
     btv = (out.get("targets") or {}).get("btv")
     lo, hi = sorted((SPOL.lookup(POLAR, 10, 60), SPOL.lookup(POLAR, 12, 60)))   # either TWS row

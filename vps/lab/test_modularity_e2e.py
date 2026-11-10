@@ -372,7 +372,7 @@ def test_orin_routes_bravo(orin_bravo):
 
 def test_orin_says_no_chart(orin_bravo):
     """No chart aboard → the route says the shore isn't checked (plain today)."""
-    assert any("shore" in w.lower() for w in orin_bravo[0].get("warnings") or [])
+    assert any("check the shore" in w.lower() for w in orin_bravo[0].get("warnings") or [])
 
 
 @xfail("#304", "Orin re-route labels Bravo's sails from sr33's crossover file")
