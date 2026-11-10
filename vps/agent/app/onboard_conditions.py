@@ -215,12 +215,23 @@ def get_strip():
     }
 
 
+def source_stale_s(paths):
+    """How long a source may go unheard before the DATA tile calls it stale (#291): the failover
+    limit of the fastest channel it sends (`shared/staleness.py`: 5 s for the fast channels
+    aboard, 10 s for the slow ones). A source's last-seen time is its newest message on any
+    channel, so its fastest channel sets its cadence. Unknown paths: the table's default."""
+    if not paths:
+        return staleness.failover_s("")
+    return min(staleness.failover_s(p) for p in paths)
+
+
 def get_sources(max_age_minutes: int = 10):
     """Active sensor sources onboard: what's reporting and how fresh (no curated notes onboard)."""
     out = []
     for s in datasource.active().sources(max_age_minutes):
         out.append({"source": s["source"], "last_seen_s": _age(s["last_epoch"]),
                     "paths": s["paths"], "samples": s["samples"],
+                    "stale_after_s": source_stale_s(s.get("path_names")),
                     "device": None, "reliability": "unknown", "note": None})
     return {"count": len(out), "sources": out,
             "note": "Onboard source list (curated reliability notes live in the cloud DB)."}

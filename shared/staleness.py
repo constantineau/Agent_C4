@@ -56,6 +56,99 @@ ALERT_DANGER_S = {"onboard": 60, "cloud": 300}
 # The collision watch's own fix: the GPS dead limit aboard, 60 s in the cloud (decided).
 COLLISION_FIX_S = {"onboard": 10, "cloud": 60}
 
+# The chartplotter feed's own fix (gpsout, n2kout): 5 s aboard (docs/STALENESS.md). n2kout polls
+# the engine at 1 Hz, so 5 s is four missed polls; 10 s at 8 kn put the boat 40 m off on the
+# plotter. Aboard only: the cloud has no plotter. n2kout can't import shared/ (its image holds
+# three files), so it keeps its own 5 and a test pins it to this one.
+CHARTPLOTTER_FIX_S = 5
+
+# Consumers whose limit on the NEWEST reading differs from the channel's dead limit (the
+# channel x consumer table, #291): (onboard, cloud) seconds. They read a window of history and
+# judge a trend or a mean, not one live value, so a few seconds' gap costs nothing; past this the
+# window is old wind passed off as now, and the read disappears.
+CONSUMER_S = {
+    "trend": (30, 120),       # wind trend: newest TWS/TWD ("No live wind")
+    "fatigue": (30, 120),     # helm fatigue: newest heading, heel, STW
+    "eta_wind": (30, 120),    # navigator ETA: newest TWS/TWD of its 20-min wind window
+}
+
+# A windowed read needs at least this share of its window holding data, counted in 30 s buckets
+# so the cloud's 15 s aggregates fill every bucket (tactics, the matcher's % of polar).
+MIN_WINDOW_COVERAGE = 0.5
+COVERAGE_BUCKET_S = 30.0
+
+
+def consumer_s(name, at=None):
+    """A consumer's limit (s) on the newest reading, from CONSUMER_S."""
+    on, cloud = CONSUMER_S[name]
+    return on if (at or where()) == "onboard" else cloud
+
+
+def coverage(times, window_s, end):
+    """Share of the window (`window_s` long, ending at `end`) with at least one sample per
+    COVERAGE_BUCKET_S bucket. `times` are epoch seconds."""
+    n = max(1, int(window_s // COVERAGE_BUCKET_S))
+    filled = {int((end - t) // COVERAGE_BUCKET_S) for t in times
+              if 0 <= end - t < n * COVERAGE_BUCKET_S}
+    return len(filled) / n
+
+
+# Every number above is a DEFAULT, measured on one boat's instruments. Another boat's sensors
+# send at other rates, so an install may override any of them with STALENESS_OVERRIDES: inline
+# JSON, or the path of a JSON file, e.g.
+#   {"onboard": {"depth": [5, 10, 30]}, "cloud": {"tws": [60, 60, 180]},
+#    "consumer": {"trend": [45, 120]}, "chartplotter_fix_s": 5}
+# Channels take [late, failover, dead]; consumers take [onboard, cloud]. A bad entry is skipped
+# with a log line and the default stays: a typo must not take the limits away.
+def apply_overrides(cfg):
+    """Merge an override dict into the tables (see above). Returns the list of skipped entries."""
+    global CHARTPLOTTER_FIX_S
+    bad = []
+    if not isinstance(cfg, dict):
+        return ["not a JSON object"]
+
+    def nums(v, n):
+        ok = (isinstance(v, (list, tuple)) and len(v) == n
+              and all(isinstance(x, (int, float)) and not isinstance(x, bool) and x > 0 for x in v))
+        return tuple(float(x) for x in v) if ok else None
+
+    for at, table in (("onboard", ONBOARD), ("cloud", CLOUD)):
+        for ch, v in (cfg.get(at) or {}).items():
+            t = nums(v, 3)
+            if t is None or not t[0] <= t[2]:
+                bad.append(f"{at}.{ch}")
+            else:
+                table[ch] = t
+    for name, v in (cfg.get("consumer") or {}).items():
+        t = nums(v, 2)
+        if t is None or name not in CONSUMER_S:
+            bad.append(f"consumer.{name}")
+        else:
+            CONSUMER_S[name] = t
+    if "chartplotter_fix_s" in cfg:
+        t = nums([cfg["chartplotter_fix_s"]], 1)
+        if t is None:
+            bad.append("chartplotter_fix_s")
+        else:
+            CHARTPLOTTER_FIX_S = t[0]
+    return bad
+
+
+def _load_env_overrides():
+    raw = os.environ.get("STALENESS_OVERRIDES", "").strip()
+    if not raw:
+        return
+    try:
+        import json
+        if not raw.startswith("{"):
+            with open(raw, encoding="utf-8") as f:
+                raw = f.read()
+        bad = apply_overrides(json.loads(raw))
+    except Exception as e:  # noqa: BLE001 - a broken override keeps the defaults
+        bad = [f"unreadable ({e})"]
+    if bad:
+        print(f"[staleness] STALENESS_OVERRIDES skipped: {', '.join(bad)}", flush=True)
+
 
 def where():
     """'onboard' or 'cloud', from DATA_SOURCE (read each call: tests and the engine set it)."""
@@ -142,3 +235,6 @@ def dead_groups(ages, at=None):
         out.append({"group": gid, "label": label, "channels": [c for c, _a in dead],
                     "age_s": round(age), "severity": "danger" if age > danger else "warn"})
     return out
+
+
+_load_env_overrides()

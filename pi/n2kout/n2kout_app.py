@@ -51,8 +51,10 @@ FIX_TIMEOUT_S = float(os.environ.get("N2KOUT_FIX_TIMEOUT_S", "0.5"))
 # the engine approves every new leg against land / islands / zones (n2kout holds none)
 LEG_CHECK_URL = os.environ.get("N2KOUT_LEG_CHECK_URL", "http://127.0.0.1:8200/gps/leg-check")
 LEG_CHECK_TIMEOUT_S = float(os.environ.get("N2KOUT_LEG_CHECK_TIMEOUT_S", "2"))
-# older than this → no live nav sent. 10 s: GPS writes at 1-10 Hz; a few missed polls are fine
-FIX_MAX_AGE_S = float(os.environ.get("N2KOUT_FIX_MAX_AGE_S", "10"))
+# older than this → no live nav sent. 5 s (#291): the chartplotter limit in shared/staleness.py
+# (CHARTPLOTTER_FIX_S). This image can't import shared/, so the default is repeated here and
+# test_n2kout_app.py pins the two together; an install that overrides the table sets this env too.
+FIX_MAX_AGE_S = float(os.environ.get("N2KOUT_FIX_MAX_AGE_S", "5"))
 ROUTE_TTL_S = float(os.environ.get("N2KOUT_ROUTE_TTL_S", str(6 * 3600)))
 HEARTBEAT_S = 60.0
 MAX_WPTS = 250                    # Garmin's per-route limit (to confirm dockside)

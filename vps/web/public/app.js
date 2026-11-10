@@ -245,6 +245,15 @@ function closeChannels() {
   document.getElementById('scrim').classList.remove('show');
   document.getElementById('channels').classList.remove('open');
 }
+/* A reading's age mark (#291), from the agent's per-channel limits (shared/staleness.py; in the
+   cloud late 45 s, dead 120 s): late → ⚠, dead → its age ("⚠ 3 min old"). An agent too old to
+   send `state` gets the cloud defaults. */
+function staleMark(r) {
+  const a = r.age_s;
+  const st = r.state || (a == null ? 'ok' : a > 120 ? 'dead' : a > 45 ? 'late' : 'ok');
+  if (st === 'dead' || st === 'gone') return ` ⚠ ${a >= 120 ? Math.round(a / 60) + ' min' : Math.round(a) + ' s'} old`;
+  return st === 'late' ? ' ⚠' : '';
+}
 async function renderChannels() {
   const body = document.getElementById('channelsBody');
   try {
@@ -253,7 +262,7 @@ async function renderChannels() {
     const rows = Object.entries(c.channels).sort((a, b) => a[0].localeCompare(b[0])).map(([name, ch]) => {
       const pref = ch.preferred || {};
       const srcs = ch.readings.map(r =>
-        `${r.source.split('.').pop()} ${r.value}${r.age_s > 30 ? ' ⚠' : ''}`).join(' · ');
+        `${r.source.split('.').pop()} ${r.value}${staleMark(r)}`).join(' · ');
       const dis = ch.disagreement ? ' disagree' : '';
       const fb = ch.fell_back ? ' ↩backup' : '';
       return `<div class="chrow${dis}">

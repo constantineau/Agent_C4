@@ -166,9 +166,12 @@ def get_current_conditions(max_age_minutes: int = 5):
     for r in rows:
         ch, unit, conv = PRESENT[r["path"]]
         channels.setdefault(ch, {"unit": unit, "readings": []})
+        age = _age(r["time"])
+        # ok / late / dead against the channel's limits (#291): the web page marks each reading
+        # by it (cloud: late 45 s, dead 120 s) instead of its own 30 s.
         channels[ch]["readings"].append(
             {"source": r["source"], "value": round(conv(r["value"]), 3),
-             "age_s": _age(r["time"])}
+             "age_s": age, "state": staleness.state(ch, age)}
         )
     for ch, c in channels.items():
         vals = [x["value"] for x in c["readings"]]
