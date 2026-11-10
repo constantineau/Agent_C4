@@ -785,7 +785,7 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, deadline=None,
             mlat, mlon = _advance(node["lat"], node["lon"], h1, s)
             if obstacles and obstacles.crosses(node["lat"], node["lon"], mlat, mlon):
                 continue
-            t_mid = node["t"] + t1 * 3600
+            t_mid = node["t"] + t1 * 3600 + (PEEL_COST_S if peel1 and PEEL_COST_S > 0 else 0.0)
             if cur is not None and cur.current_at(mlat, mlon, t_mid)[1] > 0.01:
                 continue                                 # current at the tack point: not offered
             # the tack point is a node the boat sails on from: it needs wind of its own (#203),
