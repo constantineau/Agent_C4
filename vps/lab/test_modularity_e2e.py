@@ -200,7 +200,8 @@ def _known_fail_line(request):
 
 
 def xfail(ticket, why):
-    return pytest.mark.xfail(strict=True, reason=f"{why} ({ticket})")
+    # only a failed assertion is the known gap: any other error (a crash) fails CI
+    return pytest.mark.xfail(strict=True, raises=AssertionError, reason=f"{why} ({ticket})")
 
 
 # ==== 1. Lab route (the Optimize button) =========================================================

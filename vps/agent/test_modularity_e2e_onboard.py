@@ -81,7 +81,8 @@ def _known_fail_line(request):
 
 
 def xfail(ticket, why):
-    return pytest.mark.xfail(strict=True, reason=f"{why} ({ticket})")
+    # only a failed assertion is the known gap: any other error (a crash) fails CI
+    return pytest.mark.xfail(strict=True, raises=AssertionError, reason=f"{why} ({ticket})")
 
 
 with open(os.path.join(REPO, "vps", "lab", "boats", "bravo.json")) as _f:
@@ -177,7 +178,7 @@ def test_sail_call_targets_are_bravos_or_none(sail_call):
         return
     btv = (out.get("targets") or {}).get("btv")
     lo, hi = sorted((SPOL.lookup(POLAR, 10, 60), SPOL.lookup(POLAR, 12, 60)))   # either TWS row
-    assert btv is None or lo - 0.05 <= btv <= hi + 0.05, (btv, out.get("targets"))
+    assert isinstance(btv, (int, float)) and lo - 0.05 <= btv <= hi + 0.05, out.get("targets")
 
 
 @xfail("#305", "sail names are fixed to sr33's (J1/A3/S1…): an A2 is not recognised")
