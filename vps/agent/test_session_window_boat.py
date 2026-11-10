@@ -35,7 +35,7 @@ OLD = {"id": 4, "race_id": "r", "kit": "sr33", "start_ts": T, "end_ts": T + 3600
 check("a marker from before #320 is the kit's boat", main._sailed(OLD) == main._sailed(A))
 
 # the Lab split them: both tagged sr33 on the iPad, the second edited to bravo in the Lab
-B2 = dict(B, boat_id="sr33", sailed_override="bravo")
+B2 = dict(B, boat_id="sr33", sailed_override="id:bravo")
 check("a Lab edit splits two same-tag markers into two boats' windows",
       main._window_for(A, [A, B2], motion)["end_ts"] <= B2["start_ts"]
       and main._window_for(B2, [A, B2], motion)["start_ts"] >= A["end_ts"])
@@ -46,6 +46,10 @@ K2 = {"id": 9, "race_id": "r", "kit": "bravo", "boat_id": "bravo", "start_ts": T
 check("another kit's session never cuts this kit's window",
       main._window_for(A, [A, K2], motion)["end_ts"] >= A["end_ts"])
 
+N = dict(B, boat_id=None, boat_name="sr33")                     # an Other boat typed "sr33"
+check("an Other boat typed like a profile id is still another boat",
+      main._sailed(N) != main._sailed(A)
+      and main._window_for(A, [A, N], motion)["end_ts"] <= N["start_ts"])
 import inspect  # noqa: E402
 src = inspect.getsource(main.racelog_sessions)
 check("only this agent's kit's markers are listed (its track and motion are this kit's)",

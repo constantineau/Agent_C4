@@ -102,8 +102,8 @@ def sessions_path() -> str:
     import json
     import urllib.parse
     edits = labstate.get(KEY) or {}
-    m = {k: (e.get("boat_id") or "name:" + str(e.get("name") or "")) for k, e in edits.items()
-         if isinstance(e, dict)}
+    m = {k: ("id:" + e["boat_id"] if e.get("boat_id") else "name:" + str(e.get("name") or ""))
+         for k, e in edits.items() if isinstance(e, dict)}
     if not m:
         return "/racelog/sessions"
     return "/racelog/sessions?boats=" + urllib.parse.quote(json.dumps(m, separators=(",", ":")))

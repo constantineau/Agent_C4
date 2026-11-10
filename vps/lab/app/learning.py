@@ -205,7 +205,7 @@ WITHDRAWN = "withdrawn:"
 STALE_NOTE = "A session's boat changed. Its evidence left this boat. Build it again."
 
 
-def withdraw_recording(race_id, window_start, keep_boat=None):
+def withdraw_recording(race_id, window_start, keep_boat=None):  # noqa: ARG001 (any race)
     """A session's boat was changed in the Lab (#320): its debriefs filed under any OTHER boat are
     taken out of that boat's learning. Their bins were scored against the wrong boat's polar.
     Nothing is deleted: `boat_id` becomes "withdrawn:<old id>" on the debrief and its bins, so
@@ -217,9 +217,10 @@ def withdraw_recording(race_id, window_start, keep_boat=None):
     c = _conn()
     try:
         rows = c.execute(
-            "SELECT id, boat_id FROM debriefs WHERE race_id IS ? AND window_start IS NOT NULL "
+            # any race id: a session can be debriefed under a race other than its marker's
+            "SELECT id, boat_id FROM debriefs WHERE window_start IS NOT NULL "
             "AND ABS(window_start - ?) < 1.0 AND boat_id IS NOT NULL AND boat_id NOT LIKE ?",
-            (race_id, float(window_start), WITHDRAWN + "%")).fetchall()
+            (float(window_start), WITHDRAWN + "%")).fetchall()
         ids = [(r["id"], r["boat_id"]) for r in rows if r["boat_id"] != keep_boat]
         now = time.time()
         for did, bid in ids:

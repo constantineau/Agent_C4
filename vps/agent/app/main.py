@@ -314,9 +314,14 @@ def _motion_series(t0, t1, bucket_s=300):
 def _sailed(ses):
     """Which boat a session was sailed on, as the marker says (#320): its boat id, else its typed
     name, else the kit that recorded it (a marker from before #320)."""
-    if ses.get("sailed_override"):          # the Lab's edit of the session's boat
+    if ses.get("sailed_override"):          # the Lab's edit: "id:<boat id>" | "name:<name>"
         return (ses.get("kit"), ses["sailed_override"])
-    return (ses.get("kit"), ses.get("boat_id") or ses.get("boat_name") or ses.get("kit"))
+    # a profile id and a typed name live apart: an Other boat typed "sr33" is not the sr33 profile
+    if ses.get("boat_id"):
+        return (ses.get("kit"), "id:" + str(ses["boat_id"]))
+    if ses.get("boat_name"):
+        return (ses.get("kit"), "name:" + str(ses["boat_name"]))
+    return (ses.get("kit"), "id:" + str(ses.get("kit")))
 
 
 def _window_for(s, sessions, motion):
@@ -383,7 +388,7 @@ def racelog_sessions(derive: bool = True, boats: str | None = None):
         d["kit"] = r.get("boat_id")
         out.append(d)
     # `boats`: the Lab's own edits of which boat a session was sailed on (#320), as JSON
-    # {"<kit>@<start_ts %.3f>": "<boat key>"}: windows are derived per boat with those applied
+    # {"<kit>@<start_ts %.3f>": "id:<boat id>" | "name:<name>"}: windows derived per boat
     try:
         edits = _json.loads(boats) if boats else {}
     except ValueError:

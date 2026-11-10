@@ -140,7 +140,7 @@ check("the recordings list shows the Lab's edit", recs[3]["boat_id"] == "bravo"
 import urllib.parse  # noqa: E402
 _q = json.loads(urllib.parse.unquote(sessionboat.sessions_path().split("boats=", 1)[1]))
 check("the boat log is asked with the Lab's edits, so windows are derived per edited boat",
-      _q == {sessionboat.key_of("sr33", S_OTHER): "bravo"})
+      _q == {sessionboat.key_of("sr33", S_OTHER): "id:bravo"})
 
 print("5) a wrong pick fixed: the old boat's debrief leaves that boat's learning")
 _c = learning._conn()
@@ -296,6 +296,11 @@ check("the judge asked for Bravo and never read the active boat",
       "bravo" in seen.get("asked", []) and out["note"] == "unknown race")
 check("a session boat with no profile → said plainly", judge.run_judge(
     "no-such-race", boat_id="nope")["note"] == "No profile for this session's boat.")
+
+_rep = dict(report(1_791_000_000.0), race_id="another-race")
+learning.archive_debrief(_rep, "sr33")
+check("a session debriefed under another race than its marker's is withdrawn too",
+      learning.withdraw_recording(None, 1_791_000_000.0, "bravo") == 1)
 
 print("ALL OK" if ok else "SOME CHECKS FAILED")
 raise SystemExit(0 if ok else 1)
