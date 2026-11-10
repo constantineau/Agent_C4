@@ -372,7 +372,7 @@ def test_orin_routes_bravo(orin_bravo):
 
 def test_orin_says_no_chart(orin_bravo):
     """No chart aboard → the route says the shore isn't checked (plain today)."""
-    assert any("check the shore" in w.lower() for w in orin_bravo[0].get("warnings") or [])
+    assert any("doesn't check the shore" in w.lower() for w in orin_bravo[0].get("warnings") or [])
 
 
 @xfail("#304", "Orin re-route labels Bravo's sails from sr33's crossover file")
@@ -390,7 +390,9 @@ def test_orin_unconfigured_boat_never_falls_back_to_sr33():
     """No REROUTE_BOAT set: either the job refuses plainly, or it routes Bravo as Bravo."""
     try:
         job = _orin_job(None)
-    except Exception:          # noqa: BLE001 — a required setting refusing to start is fine
+    except Exception as exc:   # noqa: BLE001 — refusing to start without the setting is fine,
+        if "REROUTE_BOAT" not in str(exc):    # but only a refusal that names it
+            raise
         return
     out, seen = _orin_run(job)
     assert seen == []
