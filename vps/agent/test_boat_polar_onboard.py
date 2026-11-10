@@ -131,6 +131,9 @@ print("5) the store refuses a bad polar")
 check("another boat's polar", deploy(BRAVO, P33)[0] is False)
 check("a tampered polar", deploy(BRAVO, dict(PB, label="x"))[0] is False)
 check("a polar without a profile", deploy(None, PB)[0] is False)
+_badg = dict(P33, speed_guide={"10": [{"twa": 90, "sail": 7}]})
+_badg["version"] = BP._version(_badg)
+check("a speed guide with a bad row (sail not text), even correctly versioned", deploy(SR33, _badg)[0] is False)
 check("summary names the polar", orinassets.summary({"boat": BRAVO, "polar": PB})["polar"]
       == BP.summary(PB))
 

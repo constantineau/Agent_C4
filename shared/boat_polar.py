@@ -216,10 +216,15 @@ def crossovers_ok(xo) -> bool:
     return True
 
 
+def _row_ok(r):
+    return (isinstance(r, dict) and _n(r.get("twa")) and isinstance(r.get("sail"), str)
+            and all(r.get(k) is None or _n(r.get(k)) for k in ("btv", "vmg", "awa", "heel")))
+
+
 def _guide_ok(sg) -> bool:
     return isinstance(sg, dict) and all(
-        isinstance(rows, list) and all(isinstance(r, dict) and _n(r.get("twa")) for r in rows)
-        for rows in sg.values())
+        _f(k) is not None and isinstance(rows, list) and all(_row_ok(r) for r in rows)
+        for k, rows in sg.items())
 
 
 def _load_envelope(path):
