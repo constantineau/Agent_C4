@@ -153,8 +153,13 @@ RUN = _c.execute("SELECT max(id) FROM rescore_runs").fetchone()[0]
 _c.close()
 before = [d["window_start"] for d in learning.archived_recordings("sr33")]
 r = client.post("/api/debrief/session-boat", headers=TEAM, json={
-    "kit": "sr33", "start_ts": S_OLD, "boat_id": "bravo", "race_id": RID, "recording": S_OLD})
-check("edited, one debrief withdrawn", r.status_code == 200 and r.json()["withdrawn"] == 1)
+    "kit": "sr33", "start_ts": S_OLD, "boat_id": "bravo"})
+check("edited, one debrief withdrawn (recording + race read from the boat log, not the client)",
+      r.status_code == 200 and r.json()["withdrawn"] == 1)
+r = client.post("/api/debrief/session-boat", headers=TEAM, json={
+    "kit": "sr33", "start_ts": 12345.0, "boat_id": "bravo"})
+check("a session the boat log doesn't have → refused, nothing edited", r.status_code == 409
+      and sessionboat.key_of("sr33", 12345.0) not in (labstate.get(sessionboat.KEY) or {}))
 after = [d["window_start"] for d in learning.archived_recordings("sr33")]
 check("sr33's re-score no longer counts it", S_OLD in before and S_OLD not in after)
 check("nothing deleted: the record says whose it was",
@@ -226,6 +231,20 @@ for _bid, _want in (("sr33", set()), ("bravo", {S_BRAVO, S_OLD, S_OTHER})):
           and (bool(starts) == bool(_want)))
 monitor.agent_json = _aj
 check("one cached build per boat", obspolar._cache("sr33") != obspolar._cache("bravo"))
+_art = {"race_cells": [], "race_curves": [], "curve": [], "refused_thin": [], "cells": [],
+        "grid": {"min_seconds": 60}, "build_version": obspolar.BUILD_VERSION,
+        "session_rev": sessionboat.revision()}
+os.makedirs(os.path.dirname(obspolar._cache("bravo")), exist_ok=True)
+with open(obspolar._cache("bravo"), "w") as f:
+    json.dump(_art, f)
+check("a build cached at today's session-boat revision is served",
+      "refresh_error" not in obspolar.build(boat_id="bravo"))
+sessionboat.set_boat("sr33", S_BRAVO, "bravo")
+monitor.agent_json = _agent
+_b = obspolar.build(boat_id="bravo")
+monitor.agent_json = _aj
+check("…a session-boat edit since then makes it stale (rebuilt; here the rebuild fails, said)",
+      "refresh_error" in _b)
 check("building and applying a suggestion take the boat-edit lock",
       all(getattr(f, "__wrapped__", None) for f in (learning.propose, learning.apply_proposal,
                                                     learning.rescore_propose)))

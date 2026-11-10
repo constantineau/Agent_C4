@@ -1048,11 +1048,36 @@ def _recordings(race_id=None):
 
 @app.post("/api/debrief/session-boat")
 async def debrief_session_boat(body: dict):
-    """Edit the boat a recorded session was sailed on (#320): {kit, start_ts, boat_id | boat_name,
-    race_id?, recording?}. A wrong pick on the iPad, or an "Other boat" that has a profile now.
+    """Edit the boat a recorded session was sailed on (#320): {kit, start_ts, boat_id | boat_name}.
+    The session's recording and race are read from the boat log here, before the edit. A wrong pick on the iPad, or an "Other boat" that has a profile now.
     Debriefs of that recording filed under another boat leave that boat's learning (kept, marked
     withdrawn); debrief it again to count it for this boat."""
     b = body or {}
+
+    def _old_recording():
+        """The session's recording key and race as they are NOW (before the edit), from the boat
+        log: the debriefs to withdraw are filed under these. Never left to the client."""
+        try:
+            ses = (monitor.agent_json(sessionboat.sessions_path(), timeout=30) or {}).get(
+                "sessions") or []
+        except Exception:  # noqa: BLE001
+            return None
+        try:
+            want = sessionboat.key_of(b.get("kit"), b.get("start_ts"))
+        except (TypeError, ValueError):
+            return None
+        for x in ses:
+            if x.get("start_ts") is not None and \
+                    sessionboat.key_of(x.get("kit"), x["start_ts"]) == want:
+                w = x.get("window") or {}
+                return (w.get("start_ts") if w.get("start_ts") is not None else x["start_ts"],
+                        x.get("race_id"))
+        return None
+
+    old = await run_in_threadpool(_old_recording)
+    if old is None:
+        return JSONResponse({"detail": "Couldn't find this session on the boat log. Try again."},
+                            status_code=409)
 
     def _change():
         # one step under the archive lock: a debrief finishing now either filed before this (and
@@ -1062,10 +1087,7 @@ async def debrief_session_boat(body: dict):
                                            b.get("boat_name"))
             if not ok:
                 return ok, res, 0
-            n = 0
-            if b.get("recording") is not None:
-                n = learning.withdraw_recording(b.get("race_id"), b.get("recording"),
-                                                res.get("boat_id"))
+            n = learning.withdraw_recording(old[1], old[0], res.get("boat_id"))
             return ok, res, n
 
     ok, res, n = await run_in_threadpool(_change)

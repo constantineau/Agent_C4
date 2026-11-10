@@ -298,13 +298,17 @@ def build(force=False, boat_id=_ACTIVE):
             # in force. Treat it as a miss.
             if all(k in art for k in ("race_cells", "race_curves", "curve", "refused_thin")) \
                     and "min_seconds" in (art.get("grid") or {}) \
-                    and art.get("build_version") == BUILD_VERSION:
+                    and art.get("build_version") == BUILD_VERSION \
+                    and art.get("session_rev") == sessionboat.revision():
+                # (#320: a session-boat edit since the build moves sessions between boats)
                 return art
         except (OSError, ValueError):
             pass
     try:
+        rev = sessionboat.revision()
         art = compute(boat_id=boat_id)
         art["boat_id"] = boat_id
+        art["session_rev"] = rev
     except Exception as exc:
         try:                                     # stale beats broken, but say so
             with open(cache) as fh:
@@ -314,6 +318,8 @@ def build(force=False, boat_id=_ACTIVE):
         except (OSError, ValueError):
             return {"cells": [], "races": [], "configs": [], "tws_buckets": [],
                     "error": f"agent unreachable and no cached build: {exc}"}
+    if sessionboat.revision() != rev:
+        return art          # a boat edit landed while this ran: serve it, don't cache it
     os.makedirs(os.path.dirname(cache), exist_ok=True)
     atomicio.write_json(cache, art)
     return art
