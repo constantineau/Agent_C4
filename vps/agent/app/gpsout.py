@@ -31,6 +31,8 @@ import time
 import urllib.error
 import urllib.request
 
+from shared import staleness
+
 from . import datasource, deviation, landchart, orinroute, reoptimize, routing
 from . import navigator as NAV
 
@@ -57,8 +59,9 @@ PI_CROSSES_LAND = "Pi route crosses land. Not sent to GPS."
 CROSSES_LAND = "Route crosses land. Not sent to GPS."
 NO_FIX = "No GPS fix. Not sent to GPS."
 NOT_ACTIVE = "Route isn't the active course. Switch to it first."
-# a fix older than this is no fix (n2kout applies the same limit to its live nav data)
-FIX_MAX_AGE_S = float(os.environ.get("GPSOUT_FIX_MAX_AGE_S", "10"))
+# a fix older than this is no fix (n2kout applies the same limit to its live nav data): the
+# chartplotter limit in `shared/staleness.py`, 5 s (#291; 10 s before, 40 m at 8 kn)
+FIX_MAX_AGE_S = float(os.environ.get("GPSOUT_FIX_MAX_AGE_S", "") or staleness.CHARTPLOTTER_FIX_S)
 
 
 def _fix_with_source(now=None):

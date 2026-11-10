@@ -28,6 +28,7 @@ from collections import Counter
 from datetime import datetime, timezone
 
 from shared import polar as SPOL
+from shared import staleness
 from shared import units
 
 from . import datasource
@@ -236,6 +237,19 @@ def _compute():
     if not heading:
         return {"available": False, "status": "no_helm_data",
                 "note": "No heading data yet."}
+    # The newest heading, heel and STW must be live (#291, `staleness.consumer_s("fatigue")`: 30 s
+    # aboard, 120 s in the cloud). Before, a dead sensor's window just thinned out and the index
+    # kept being computed from the minutes before it stopped. No live heading: no index. A dead
+    # heel or STW drops out on its own, and its components with it.
+    limit = staleness.consumer_s("fatigue")
+    age = lambda s: now - max(t for t, _ in s)       # noqa: E731
+    if age(heading) > limit:
+        return {"available": False, "status": "stale",
+                "note": "No live heading. Can't judge the helm.",
+                "heading_age_s": round(age(heading))}
+    for name in ("heel", "stw"):
+        if chans[name] and age(chans[name]) > limit:
+            chans[name] = []
     base_span_min = (t_split - min(t for t, _ in heading)) / 60.0
     recent_span_min = (max(t for t, _ in heading) - t_split) / 60.0
     if base_span_min < MIN_BASELINE_MIN or recent_span_min < MIN_RECENT_MIN:

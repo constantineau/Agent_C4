@@ -1022,11 +1022,12 @@ class OnboardSource:
         for s, paths in live_paths.items():
             cur = agg.get(s)
             if cur is None:
-                agg[s] = {"source": s, "last_epoch": live_last[s],
-                          "paths": len(paths), "samples": len(paths)}
+                agg[s] = cur = {"source": s, "last_epoch": live_last[s],
+                                "paths": len(paths), "samples": len(paths)}
             else:
                 cur["last_epoch"] = max(cur["last_epoch"], live_last[s])
                 cur["paths"] = max(cur["paths"], len(paths))
+            cur["path_names"] = sorted(paths)        # which channels it sends (its stale limit)
         return sorted(agg.values(), key=lambda r: r["source"])
 
 

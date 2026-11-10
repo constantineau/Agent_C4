@@ -3,8 +3,13 @@
 **Status: decided by Cole, 2026-11-09.** The table lives in code as `shared/staleness.py`; every
 consumer reads its limit from there. Built in #289: failover, the strip and `/conditions`, the
 sail call, tactics, plan gap, the navigator, the collision watch, the bank tile, the per-group
-stale alert (cloud alert and the iPad DATA tile), and the red age / "—" on the iPad. The rows
-marked **#291** below are not built yet.
+stale alert (cloud alert and the iPad DATA tile), and the red age / "—" on the iPad. Built in
+#291: the matcher, fatigue, wind trend, the navigator's ETA wind, the chartplotter feed, the DATA
+tile's source rule, the cloud web page and the forecast tile's "Now" wind (rows marked **(#291)**).
+
+Every number here is a **default**. It was measured on one boat's instruments; another boat's
+sensors send at other rates. An install overrides any channel or consumer limit with
+`STALENESS_OVERRIDES` (inline JSON or a file path; see `shared/staleness.py`).
 
 ## The rule (Cole, 2026-11-09)
 
@@ -64,7 +69,7 @@ Aboard that is 5 s for the fast channels and 10 s for the slow ones; the cloud k
 ## Channel × consumer
 
 "Before" is what the code did before #289. **Bold** = it differed from the decided limit.
-**(#291)** after a consumer = not built yet. Limits are onboard / cloud, in seconds.
+**(#291)** after a consumer = built in #291, not #289. Limits are onboard / cloud, in seconds.
 
 | Channel | Consumer | Limit (s) | Before | What disappears | What stays | Evidence |
 |---|---|---|---|---|---|---|
@@ -86,7 +91,9 @@ Aboard that is 5 s for the fast channels and 10 s for the slow ones; the cloud k
 | Depth | Depth alarm | 15 / 120; an active shoal alarm holds while blind | **5 min** (strip window) | a new alarm can't be raised or cleared on old depth; "Depth lost" instead | depth with age | worst gap 3.8 s; a 4-min-old depth must not clear an alarm |
 | Every channel | Stale-data alert | per sensor group (wind, heading, GPS, heel, boat speed, depth, bank): warn at dead, danger at 60 / warn 120, danger 300 (bank: twice its dead limit); keep 30 s debounce. Aboard it is the DATA tile; in the cloud an alert per group. The whole-boat "data stale" alert stays. A group's alert outlives its number ("—" at 30 min) for up to 24 h since its last reading | **freshest of all channels**, warn 60, danger 180 (`alerts.py:38`, `onboard_conditions.py:149`) | – (this is the alert) | – | today one live GPS hides a dead depth or wind |
 | Every channel | iPad number tiles | age red at dead; "—" after 30 min (wind tile, bank tile, the "where each number comes from" table). Age shown at late: (#291) | **only the poll age shows** (7 s, `dashboard.js:96`); a reading older than 5 min vanishes from the strip | nothing on the number tiles (raw) | the number and its age | Cole's rule: raw stays with its age |
-| Every channel | iPad data / sensor-health tile ("went silent") | follows failover: 5 / 45 (10 for slow channels). "Went silent" is built; the tile's own "one stale" source rule: (#291) | **45** (`dashboard.js:1025`, `source_policy.py:33`) | – | source list | 45 s onboard is ~60× the worst fast gap |
+| Every channel | iPad data / sensor-health tile ("went silent", "one stale") | follows failover: 5 / 45 (10 for slow channels). A source's "one stale" limit is the failover limit of the fastest channel it sends (#291) | **45** (`dashboard.js:1025`, `source_policy.py:33`) | – | source list | 45 s onboard is ~60× the worst fast gap |
+| Every channel | Cloud web page, all-channels sheet (#291) | ⚠ at late (45), "⚠ N min old" at dead (120) | **⚠ after 30 s** (`app.js:256`) | – | every reading | per channel from the agent's `state` |
+| TWS, TWD | iPad FORECAST tile "Now" (#291) | the strip's dead limit (15 / 120) | **wind log's newest point, up to 60 s** (`observedAt(0)`) | the "Now" wind | the −60 / −120 min history | the log kept a stopped wind as "Now" with no age |
 | Ranked channels | Source failover | 5 (fast), 10 (slow) / 45 | **45 / 45** (`source_policy.py:33`, `tools.py:66`) | the lead source is passed over | the next rank's reading | a dead masthead leaves TWD on a dead sensor for 45 s today |
 | Position | Chartplotter feed (Garmin) (#291) | 5 / n/a | **10** (`gpsout.py:61`, `n2kout_app.py:55`) | 129283/129284 live leg | route list (129285) | n2kout polls at 1 Hz; 10 s at 8 kn is 40 m |
 | Heading, COG | Sensor health: heading vs COG | pairs within 2 s | same (`sensor_health.py:142`) | – | – | both 10 Hz; 2 s pairs every sample |

@@ -20,8 +20,8 @@ Signals resolved (all existing Tier-1 reads; a signal with no live value simply 
   polar_pct                         — live % of the rated polar, WINDOWED (mean over the last
                                        ~10 min of STW vs the polar target at each sample's own
                                        TWS/TWA) so a tack's momentary dip can't reset a play's
-                                       30-min sustain; instantaneous fallback when the archive
-                                       window is thin
+                                       30-min sustain; None on a dead STW/TWS/TWA or a window
+                                       less than half filled (#291)
   current_leg                       — the leg the boat is on, from the navigator's next mark:
                                        leg N is the leg ARRIVING at the loaded course's marks[N]
                                        (1-based == the next mark's index in the ordered marks).
@@ -50,6 +50,7 @@ import os
 import time
 
 from shared import polar as SPOL
+from shared import staleness
 
 from . import buoys
 from . import datasource
@@ -67,6 +68,12 @@ SUSTAIN_SCALE = float(os.environ.get("MATCHER_SUSTAIN_SCALE", "1.0"))
 # polar_pct window: long enough to ride through a tack, short enough to track a real slowdown
 POLAR_PCT_WINDOW_MIN = float(os.environ.get("MATCHER_POLAR_WINDOW_MIN", "10"))
 POLAR_PCT_MIN_SAMPLES = int(os.environ.get("MATCHER_POLAR_MIN_SAMPLES", "6"))
+# ...and the window must be live and filled (#291): the newest STW, TWS and TWA each within their
+# channel's dead limit (`shared/staleness.py`: 15 s aboard, 120 s in the cloud), and at least half
+# of the window holding all three (30 s buckets, as tactics). Before, 6 samples anywhere in the
+# 10 min were enough, so a dead wind sensor kept a play armed for up to 10 min.
+_POLAR_PATHS = ("navigation.speedThroughWater", "environment.wind.speedTrue",
+                "environment.wind.angleTrueWater")
 
 # watchlist: quiet plays at least this close to arming are worth the crew's attention
 WATCHLIST_CLOSENESS = float(os.environ.get("MATCHER_WATCHLIST_CLOSENESS", "0.5"))
@@ -163,12 +170,6 @@ def _target_stw(pol, tws_kn, twa_deg):
     return SPOL.target(pol, tws_kn, twa_deg) or None
 
 
-def _scalar(v):
-    if isinstance(v, (tuple, list)):
-        v = v[0] if v else None
-    return float(v) if v is not None else None
-
-
 def _nearest_in(times, values, epoch, tol_s=20.0):
     """Value at the timestamp nearest `epoch` within tol; series is time-ordered."""
     if not times:
@@ -182,21 +183,25 @@ def _nearest_in(times, values, epoch, tol_s=20.0):
     return values[best] if best is not None else None
 
 
-def _polar_pct():
+def _polar_pct(now=None):
     """Live % of the rated polar: mean over the window of STW / target(tws, twa) per sample —
-    windowed so a tack's dip doesn't reset a 30-min sustain. Falls back to one instantaneous
-    read when the archive window is thin (fresh boot / bench). None when it can't be known."""
+    windowed so a tack's dip doesn't reset a 30-min sustain. None when it can't be known: no
+    polar, a dead STW/TWS/TWA, or less than half the window filled (fresh boot, a sensor just
+    back). There is no one-sample fallback any more: it is exactly the thin window this rule
+    refuses (#291)."""
     pol = _polar_table()
     if not pol:
         return None
     src = datasource.active()
     try:
-        stw = src.series("navigation.speedThroughWater", POLAR_PCT_WINDOW_MIN)
-        tws = src.series("environment.wind.speedTrue", POLAR_PCT_WINDOW_MIN)
-        twa = src.series("environment.wind.angleTrueWater", POLAR_PCT_WINDOW_MIN)
+        stw, tws, twa = (src.series(p, POLAR_PCT_WINDOW_MIN) or [] for p in _POLAR_PATHS)
     except Exception:
-        stw = tws = twa = []
-    pcts = []
+        return None
+    now = time.time() if now is None else now
+    for path, rows in zip(_POLAR_PATHS, (stw, tws, twa)):
+        if not rows or staleness.is_dead(path, now - max(t for t, _ in rows)):
+            return None
+    pcts, joined = [], []
     if stw and tws and twa:
         tws_t, tws_v = [t for t, _ in tws], [v for _, v in tws]
         twa_t, twa_v = [t for t, _ in twa], [v for _, v in twa]
@@ -205,24 +210,18 @@ def _polar_pct():
             w, a = _nearest_in(tws_t, tws_v, e), _nearest_in(twa_t, twa_v, e)
             if v is None or w is None or a is None:
                 continue
+            joined.append(e)
             w_kn = w * _MS_TO_KN
             if w_kn < 3.5:
                 continue                        # drifting air — the polar isn't meaningful
             tgt = _target_stw(pol, w_kn, a * _RAD_TO_DEG)
             if tgt and tgt > 0.5:
                 pcts.append(v * _MS_TO_KN / tgt * 100.0)
+    if staleness.coverage(joined, POLAR_PCT_WINDOW_MIN * 60, now) < staleness.MIN_WINDOW_COVERAGE:
+        return None
     if len(pcts) >= POLAR_PCT_MIN_SAMPLES:
         return round(sum(pcts) / len(pcts), 1)
-    try:                                        # instantaneous fallback — one read beats blind
-        v = _scalar(src.latest_value("navigation.speedThroughWater"))
-        w = _scalar(src.latest_value("environment.wind.speedTrue"))
-        a = _scalar(src.latest_value("environment.wind.angleTrueWater"))
-    except Exception:
-        return None
-    if v is None or w is None or a is None or w * _MS_TO_KN < 3.5:
-        return None
-    tgt = _target_stw(pol, w * _MS_TO_KN, a * _RAD_TO_DEG)
-    return round(v * _MS_TO_KN / tgt * 100.0, 1) if tgt and tgt > 0.5 else None
+    return None
 
 
 # ---------------------------------------------------------------------------- current leg
