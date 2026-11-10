@@ -174,6 +174,17 @@ check("Deploy carries Bravo's own polar block", pay["polar"]["boat_id"] == "brav
 leaked = sorted(set(opened) & SR33_FILES)
 check(f"no sr33 polar file opened for Bravo (opened: {leaked or 'none'})", not leaked)
 
+orinassets.build_chart = lambda *a, **k: (None, None)
+pay3, probs3 = orinassets.build(COURSE, "x", bundle={"boat_model": {"boat_id": "bravo"},
+                                                     "routing": {"polar": {"version": "0" * 12}}})
+pay4, probs4 = orinassets.build(COURSE, "x", bundle={"boat_model": {"boat_id": "bravo"},
+                                                     "routing": {"polar": BP.summary(PB)}})
+orinassets.build_chart = _bc
+check("Deploy: a playbook routed on another polar → no polar sent, step says rebuild",
+      pay3["polar"] is None and orinassets.POLAR_CHANGED in probs3)
+check("Deploy: the playbook's own polar → sent", pay4["polar"]["version"] == PB["version"]
+      and orinassets.POLAR_CHANGED not in probs4)
+
 print("5) a boat with no polar: Polar tab, Deploy and track scoring say so")
 boats.save_boat(dict(NOPOLAR))
 boats.set_active("nopolar")

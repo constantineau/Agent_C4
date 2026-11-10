@@ -43,6 +43,7 @@ BUILD_FAILED = "Chart build failed. Try again."
 NO_DEPTHS = "Depth chart didn't load. No chart built. Try again."
 DRAFT_CHANGED = "Boat draft changed since this playbook. Build it again."
 NO_DEPLOY_BOAT = "DEPLOY_BOAT_ID is not set. Chart and profile not sent."
+POLAR_CHANGED = "Boat polar changed since this playbook. Build it again."
 
 
 def boat_id(bundle=None):
@@ -127,6 +128,12 @@ def build(definition, course_id, now=None, bundle=None):
     polar = boats.polar_for(boat) if boat is not None else None
     if boat is not None and polar is None:
         problems.append(NO_POLAR)
+    pb_polar = (((bundle or {}).get("routing") or {}).get("polar") or {}).get("version")
+    if polar is not None and pb_polar and pb_polar != polar.get("version"):
+        # the playbook was routed on another polar; the boat's targets and re-route would then
+        # disagree with the signed homework. Send no polar, say why (like a changed draft, #149)
+        problems.append(POLAR_CHANGED)
+        polar = None
     payload = {"schema": SCHEMA, "boat_id": bid, "race_id": (definition or {}).get("race_id"),
                "course_id": course_id, "built_at": int(time.time() if now is None else now),
                "chart": chart, "boat": boat,
