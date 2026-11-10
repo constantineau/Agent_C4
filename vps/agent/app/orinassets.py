@@ -247,7 +247,7 @@ def for_run(definition, course_id):
             "received_at": rec.get("received_at")}
 
 
-_POLAR_MEMO = {"key": None, "polar": None}
+_POLAR_MEMO = {"memo": None}      # (file key, polar block), replaced as one tuple
 
 
 def boat_polar():
@@ -262,8 +262,9 @@ def boat_polar():
         key = (st.st_ino, st.st_mtime_ns, st.st_size)
     except OSError:
         return None
-    if _POLAR_MEMO["key"] == key:
-        return _POLAR_MEMO["polar"]
+    memo = _POLAR_MEMO["memo"]
+    if memo is not None and memo[0] == key:
+        return memo[1]
     pol = None
     rec = _read()
     if rec:
@@ -277,6 +278,6 @@ def boat_polar():
                 # a push from a Lab before #304 (no polar key): the profile's inline cert only,
                 # no files aboard. An explicit null is the Lab's word: no polar (Codex on #319)
                 pol = BP.resolve(boat, dirs=())
-    _POLAR_MEMO.update(key=key, polar=pol)
+    _POLAR_MEMO["memo"] = (key, pol)
     return pol
 
