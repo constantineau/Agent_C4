@@ -92,6 +92,13 @@ check(f"refine() gives the same helm ({pure.get('helm_proposed')} vs {prop.get('
 check("…and the same overlay cells",
       [(a["tws"], a["twa"], a["mult"]) for a in pure["adjustments"]]
       == [(a["tws"], a["twa"], a["mult"]) for a in prop["adjustments"]])
+# worked by hand from the bins above (inferred 8 kn/70° left out): 405 samples at 94.07% overall
+check("…and both match the values worked by hand (helm 0.941; 4/135 ×1.15, 6/52 ×0.85, "
+      "10/110 ×0.85, 12/37 ×1.063, 16/36 ×1.106)",
+      pure["helm_proposed"] == 0.941
+      and [(a["tws"], a["twa"], a["mult"]) for a in pure["adjustments"]]
+      == [(4.0, 135.0, 1.15), (6.0, 52.0, 0.85), (10.0, 110.0, 0.85), (12.0, 37.0, 1.063),
+          (16.0, 36.0, 1.106)])
 check("refine() also reports every cell's evidence and why it was or wasn't proposed",
       {c["outcome"] for c in pure["cells"]} >= {"proposed"} and all("samples" in c for c in pure["cells"]))
 
@@ -184,8 +191,9 @@ os.replace(T._path(RID, W18), T._path(RID))            # the pre-2026-09-15 layo
 seen.clear()
 run3 = RS.run("sr33", fetch_track=fake_fetch, score=fake_score)
 gpx = [r for r in run3["recordings"] if r["window_start"] is None]
-check(f"the GPX debrief whose track is gone is left out (got {gpx and gpx[0].get('note')})",
-      gpx and gpx[0]["status"] == "left_out")
+check(f"the GPX debrief is left out, never scored from whatever file is there now "
+      f"(got {gpx and gpx[0].get('note')})",
+      gpx and gpx[0]["status"] == "left_out" and "uploaded track" in gpx[0]["note"])
 check("the legacy-path Jul 18 track is still scored once", sum(1 for s in seen if s[0] == round(W18, 1)) == 1)
 check("log_body_for finds the session by its derived window",
       RS.log_body_for(W15, [{"id": 1, "start_ts": W15 - 300, "window": {"start_ts": W15}}])

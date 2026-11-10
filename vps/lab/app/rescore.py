@@ -34,14 +34,14 @@ def log_body_for(window_start, sessions):
 def _track_for(rec, fetch_track):
     """(track, how) for one archived recording, or (None, why)."""
     ws, rid = rec.get("window_start"), rec["race_id"]
-    t = track.load_track(rid, ws)
-    if t is not None and (ws is None) == (track.recording_of(t) is None) and (
-            ws is None or track._near(track.recording_of(t), ws)):
-        return t, "stored"
     if ws is None:
-        # the bare race path now holds a boat-log recording (the pre-2026-09-15 layout), so the
-        # uploaded track this debrief scored is gone
-        return None, "the uploaded track is no longer stored"
+        # An uploaded GPX/YB track has no recording window, so nothing ties the stored file to
+        # the one that debrief scored (a later upload replaces it). It also carries no
+        # instrument wind: its cells are forecast-based and never teach the boat model.
+        return None, "uploaded track: no instrument wind, never used for the boat model"
+    t = track.load_track(rid, ws)
+    if t is not None and track._near(track.recording_of(t), ws):
+        return t, "stored"
     if fetch_track is None:
         return None, "not stored in the Lab"
     try:
