@@ -133,6 +133,8 @@ Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 [Install]
 WantedBy=multi-user.target
 ```
+Plus the drop-in `/etc/systemd/system/ollama.service.d/sr33-oom.conf` (`OOMScoreAdjust=500`, from
+`pi/systemd/ollama.service.d/`): if memory runs out anyway, the kernel kills Ollama first. See §10.
 
 ### `/etc/systemd/system/jetson-clocks.service`
 `nvpmodel` mode **persists** across reboot, but `jetson_clocks` (which pins clocks to the
@@ -305,3 +307,65 @@ a rollback to the tag would not undo them.
 
 **Rollback to the stdlib dashboard runner:** `sudo systemctl disable --now sr33-orin-copilot &&
 sudo systemctl enable --now sr33-orin-copilot-dashboard` (both bind :8300, so only one at a time).
+
+---
+
+## 10. Load shed (#248): narration first, then plume, then re-route
+
+**Decided by Cole, 2026-11-09:** under memory, heat or power pressure the Orin sheds **narration
+first, then the plume, then re-route**. The engine, recording and the iPad display live on the Pi
+and are never shed. No Pi memory limits for now.
+
+`sr33-orin-shed.service` runs `pi/orin/shed/guard.py` (stdlib, system `python3`). Every 5 s it reads
+`MemAvailable` (`/proc/meminfo`), the junction temperature (thermal zone `tj-thermal`) and the
+over-current throttle counters (hwmon `soctherm_oc`, `oc*_event_cnt`), and writes the level to
+`/run/sr33-shed/state.json`:
+
+| Level | What stops | Who checks |
+|---|---|---|
+| 0 | nothing | |
+| 1 | narration: the copilot makes no LLM calls; the crew gets the engine's text (`/health` mode `deterministic`, `shed.detail` says why) | `copilot/llm.py` |
+| 2 | also the plume: each timer pass exits at once ("pass skipped: Plume paused: ...") | `plume/onboard_plume.py` |
+| 3 | also re-route: a new run gets 503 "Re-route paused: Orin low on memory." (the iPad shows it); a run already going finishes | `reroute/service.py` |
+
+Thresholds (defaults; override in `/etc/sr33/shed.env`, then restart the guard):
+
+| Signal | Level 1 | Level 2 | Level 3 | Leaves the level above |
+|---|---|---|---|---|
+| MemAvailable (`SHED_MEM_MB` / `SHED_MEM_CLEAR_MB`) | < 750 MB | < 600 MB | < 500 MB | 950 / 850 / 750 MB |
+| tj (`SHED_TJ_C` / `SHED_TJ_CLEAR_C`) | ≥ 85 °C | ≥ 90 °C | ≥ 95 °C | 80 / 85 / 90 °C |
+| over-current counters rising (`SHED_POWER_LEVEL`) | yes | | | (0 turns it off) |
+
+Why these: with the prompt cache capped (#280) the copilot alone leaves ~1 GB available, so level 1
+stays clear of normal running. The worst seen with copilot + plume + re-route together was 340 MB
+(#253); a plume pass peaks ~320 MB and a re-route ~280 MB, so re-route stops while there's still
+room for one. Under full load tj levelled at 70 °C; the hardware's own throttle trip is 95 °C.
+
+Hysteresis: a signal leaves a level only past its clear value, and the overall level drops only
+after `SHED_HOLD_S` (300 s) with nothing asking for it. On entering a memory level the guard asks
+Ollama to unload its model (`SHED_UNLOAD_MODEL=1`): with narration paused nothing would use it, and
+Ollama would hold the ~5 GB for its 5 min keep-alive. The hold stops the unload/reload from
+flapping; a reload after recovery takes ~2.5 min. Heat and power don't unload.
+
+**Fail open:** if the state file is missing or older than 30 s (guard stopped or dead), everything
+runs as before. The guard can only take load away. Transitions are in `journalctl -u sr33-orin-shed`.
+
+**OOM order:** `ollama.service` gets `OOMScoreAdjust=500` (drop-in above) and the guard `-500`. The
+kernel already tends to pick Ollama as the biggest process, but most of the model sits in GPU
+(nvmap) memory, so this makes it certain. Ollama restarts itself and the copilot falls back to the
+engine's text meanwhile, which is the same as shedding narration. There's no swap and no
+`systemd-oomd` on this kernel, so the kernel killer is the only backstop.
+
+Install (owner, with his go):
+```bash
+sudo cp ~/Agent_C4/pi/systemd/sr33-orin-shed.service /etc/systemd/system/
+sudo mkdir -p /etc/systemd/system/ollama.service.d
+sudo cp ~/Agent_C4/pi/systemd/ollama.service.d/sr33-oom.conf /etc/systemd/system/ollama.service.d/
+sudo systemctl daemon-reload
+sudo systemctl enable --now sr33-orin-shed
+sudo systemctl restart ollama sr33-orin-copilot sr33-orin-reroute   # pick up the drop-in and the new code
+cat /run/sr33-shed/state.json        # expect "level":0 and today's readings
+curl -s localhost:8300/health | python3 -c 'import json,sys;print(json.load(sys.stdin)["shed"])'
+```
+The plume needs no restart (each pass is a new process). Remove: `sudo systemctl disable --now
+sr33-orin-shed` (everything then runs unshed) and delete the unit and the drop-in.

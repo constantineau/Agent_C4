@@ -11,9 +11,11 @@ Runs in the Lab image (it has eccodes/cfgrib): tools/ci/run.sh, or
 """
 import datetime as dt
 import importlib.util
+import json
 import os
 import sys
 import tempfile
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
@@ -461,6 +463,26 @@ _a = ob.resolve_spec(dict(_long, points=[{"lat": 44, "lon": -87, "t": _t0}, {"la
 _b = ob.resolve_spec(dict(_long, points=[{"lat": 44, "lon": -87, "t": _t0}, {"lat": 45.5, "lon": -86, "t": _t0 + 3600}]), None, NOW)
 check("long ids keep distinct store keys under 120 chars",
       _a and _b and len(_a["key"]) <= 120 and len(_b["key"]) <= 120 and _a["key"] != _b["key"])
+
+print("load shed level 2 (#248): the pass is skipped, a dead guard skips nothing:")
+_shed = os.path.join(_tmp, "shed-state.json")
+os.environ["SHED_STATE"] = _shed
+_ran = []
+_orig_run_once = ob.run_once
+ob.run_once = lambda *a, **k: _ran.append(1) or {}
+try:
+    with open(_shed, "w") as f:
+        json.dump({"level": 2, "cause": "memory", "updated": time.time()}, f)
+    check("level 2 → exit 0, no pass", ob.main() == 0 and _ran == [])
+    with open(_shed, "w") as f:
+        json.dump({"level": 1, "cause": "memory", "updated": time.time()}, f)
+    check("level 1 (narration only) → the pass runs", ob.main() == 0 and _ran == [1])
+    with open(_shed, "w") as f:
+        json.dump({"level": 3, "cause": "heat", "updated": time.time() - 600}, f)
+    check("stale state (guard dead) → the pass runs", ob.main() == 0 and _ran == [1, 1])
+finally:
+    ob.run_once = _orig_run_once
+    os.environ.pop("SHED_STATE")
 
 print("\nALL OK" if ok else "\nFAILURES")
 raise SystemExit(0 if ok else 1)

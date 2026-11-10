@@ -28,6 +28,9 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# the load-shed guard's reader (pi/orin/shed, #248): stdlib, next to this folder
+sys.path.insert(0, os.path.dirname(HERE))
+from shed import guard as shed  # noqa: E402
 STATE_DIR = os.environ.get("REROUTE_DIR", os.path.join(os.path.expanduser("~"), "c4-reroute"))
 BIND = os.environ.get("REROUTE_BIND", "10.10.10.2")
 PORT = int(os.environ.get("REROUTE_PORT", "8210"))
@@ -100,7 +103,7 @@ class Jobs:
     """One run at a time. `runner(job_dir) -> Popen-like` starts a run (tests swap it)."""
 
     def __init__(self, state_dir=STATE_DIR, runner=None, timeout_s=JOB_TIMEOUT_S, clock=time.time,
-                 groups=None):
+                 groups=None, paused=None):
         self.dir = state_dir
         self.jobs_dir = os.path.join(state_dir, "jobs")
         os.makedirs(self.jobs_dir, exist_ok=True)
@@ -110,6 +113,8 @@ class Jobs:
         self.stopping = None          # the last run's group, until it's gone
         self.timeout_s = timeout_s
         self.clock = clock
+        # level 3 of the load shed (#248): None = may run, else the crew-facing sentence why not
+        self.paused = paused or (lambda: shed.paused("reroute"))
         self.lock = threading.Lock()
         self.current = None
         self.last = _read_json(os.path.join(state_dir, "last.json"))
@@ -140,6 +145,11 @@ class Jobs:
                 _kill_group(self.stopping, signal.SIGKILL)
                 return 409, {"ok": False, "busy": True, "detail": STOPPING, "job_id": None,
                              "progress": None}
+            why = self.paused()
+            if why:
+                # the Orin is short of memory/cooling/power: no new run on top (one going finishes)
+                _log(f"run refused: {why}")
+                return 503, {"ok": False, "paused": True, "detail": why}
             job_id = time.strftime("%Y%m%dT%H%M%S", time.gmtime(self.clock())) + "-" + \
                 uuid.uuid4().hex[:6]
             job_dir = os.path.join(self.jobs_dir, job_id)
