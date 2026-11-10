@@ -114,7 +114,7 @@ docker compose -f compose.dev.yml up -d --build          # cloud dev stack
 python3 vps/db/seed/fake_telemetry.py                    # fake raw readings → /ingest/raw (boat id demo-boat)
 python3 vps/db/seed/ais_inject.py                        # deterministic AIS scenario (demo-boat; own ship + closing target)
 # seeds refuse a real boat id or a non-local URL without --allow-real; BOAT_ID=demo-boat to see them
-# web http://localhost:8090 (pw sr33-dev) · lab http://localhost:8103 (pw lab-dev)
+# web http://localhost:8090 (pw: your BOAT_PASSWORD) · lab http://localhost:8103 (pw lab-dev)
 ```
 
 **Bench Pi stack is DOWN by default** (policy 2026-07-08 — its archiver records the sample
@@ -180,7 +180,7 @@ its four artifacts after a cert update: `python3 vps/agent/knowledge/build_speed
   baseline; maneuver-aware; `fresh/watch/rotate_soon/rotate_now`; `FATIGUE_*` tunables.
 - **Web auth** (`auth.py`): one shared boat password → stateless signed bearer
   (HMAC-SHA256, `AUTH_TTL_HOURS` 720); middleware gates all REST but `/health`+`/auth`;
-  `/ws` checks `?token=`. Dev pw `sr33-dev`. TLS: nginx+certbot webroot scaffolding with an
+  `/ws` checks `?token=`. Crew pw: `BOAT_PASSWORD`, no default. TLS: nginx+certbot webroot scaffolding with an
   entrypoint template selector — prod starts HTTP-first and flips HTTPS once the cert lands.
 - **Race-mode gate** (`race_mode.py`, migration 005): server-side, **fail-closed** (missing
   state ⇒ RACING; `RACE_MODE_DEFAULT` dev=practice, prod omits ⇒ race). `GATED_TOOLS`
