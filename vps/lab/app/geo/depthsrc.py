@@ -26,6 +26,7 @@ from __future__ import annotations
 import array
 import hashlib
 import json
+import math
 import os
 import subprocess
 import sys
@@ -196,7 +197,8 @@ class GridSource:
             if v is None or v != v or cover[i] != 255.0:
                 out.append(None)
                 continue
-            out.append(round(-v if z == "elevation" else v, 2))
+            # to the cm, rounded DOWN (shallower): rounding never opens a cell (Codex on #300)
+            out.append(math.floor((-v if z == "elevation" else v) * 100) / 100)
         # rows came north-first from GDAL; the field counts rows from the south
         rows = [out[r * nx:(r + 1) * nx] for r in range(ny)]
         flat = [v for row in reversed(rows) for v in row]
