@@ -229,7 +229,6 @@ def test_route_says_no_depth_chart(route):
     assert any(re.search(r"no depth|depths? not checked", p.lower()) for p in probs), probs
 
 
-@xfail("#303", "route opens sr33's crossover file for Bravo's leg sails")
 def test_route_opens_no_sr33_file(route):
     assert route[1] == []
 
@@ -244,7 +243,6 @@ def test_route_says_no_waves(route):
     assert says_missing(route[0], "wave", "sea state")
 
 
-@xfail("#303", "a boat with no polar is routed on sr33's polar, no note")
 def test_boat_without_polar_refuses_plainly():
     """A profile with no polar must not borrow sr33's: the run says there is no polar."""
     from app import routerun
@@ -277,12 +275,10 @@ def test_playbook_bundle_is_bravos(bundle):
     assert (bundle[0].get("boat_model") or {}).get("boat_id") == "bravo"
 
 
-@xfail("#303", "playbook routes, sail what-ifs and the bundle's sail model read sr33's files")
 def test_playbook_opens_no_sr33_file(bundle):
     assert bundle[1] == []
 
 
-@xfail("#303", "bundle's boat_model carries sr33's crossovers / polar source")
 def test_playbook_text_has_no_sr33_or_bayview(bundle):
     assert not no_sr33_text(bundle[0])
 
@@ -306,12 +302,10 @@ def test_debrief_scores_bravo(scored):
     assert s.get("perf_bins"), "the speed half scored nothing"
 
 
-@xfail("#303", "debrief scores Bravo's speed against sr33's polar")
 def test_debrief_opens_no_sr33_file(scored):
     assert scored[1] == []
 
 
-@xfail("#303", "debrief's polar targets for Bravo are sr33's numbers")
 def test_debrief_targets_are_bravos(scored):
     from shared import polar as SPOL
     pts = [tuple(map(float, p)) for p in BRAVO["cert_polar"]]
@@ -333,7 +327,6 @@ def test_debrief_tactics_run(tactics):
     assert tactics[0].get("available"), tactics[0].get("note")
 
 
-@xfail("#303", "debrief's best-route oracle routes Bravo on sr33's polar")
 def test_debrief_tactics_open_no_sr33_file(tactics):
     assert tactics[1] == []
 
@@ -386,7 +379,6 @@ def test_orin_says_no_chart(orin_bravo):
     assert any("doesn't check the shore" in w.lower() for w in orin_bravo[0].get("warnings") or [])
 
 
-@xfail("#304", "Orin re-route labels Bravo's sails from sr33's crossover file")
 def test_orin_opens_no_sr33_file(orin_bravo):
     assert orin_bravo[1] == []
 
