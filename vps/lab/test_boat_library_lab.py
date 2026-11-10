@@ -186,7 +186,16 @@ check("boat changed meanwhile → not filed, said", "archived_id" not in rep
 rep = judge.run_judge(RID, boat_id="bravo", archive_guard=lambda: contextlib.nullcontext((True, None)))
 check("unchanged → filed under the session's boat", rep.get("archived_id")
       and len(learning.list_debriefs("bravo", None)) == n0 + 1)
+_r0 = sessionboat.revision()
+sessionboat.set_boat("sr33", S_BRAVO, "bravo")
+check("every session-boat edit moves the revision a running debrief checks",
+      sessionboat.revision() == _r0 + 1)
 src = open(os.path.join(HERE, "app", "main.py")).read()
+check("the debrief notes the revision before fetching and re-checks it under the lock",
+      src.index("rev = sessionboat.revision()") < src.index("load_log_track(b)",
+                                                            src.index("rev = sessionboat.revision()"))
+      < src.index("archive_guard=_guard")
+      and "sessionboat.revision() == rev" in src)
 check("the boat edit and the debrief's archive step take the same lock",
       src.count("sessionboat.ARCHIVE_LOCK") >= 2)
 

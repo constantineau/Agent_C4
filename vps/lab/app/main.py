@@ -924,6 +924,7 @@ async def debrief_run(body: dict):
     boat_id, why = sessionboat.for_debrief(b)
     if why:
         return {"ok": False, "note": why}
+    rev = sessionboat.revision()           # before the track is fetched (see _guard)
 
     def _work(progress):
         rec = b.get("recording")
@@ -942,9 +943,12 @@ async def debrief_run(body: dict):
     @contextlib.contextmanager
     def _guard():
         # the session's boat, re-read under the lock the boat edit takes: unchanged → file it
+        # ...and no session's boat edited since this started: an edit of a session stitched
+        # into this window changes what the window holds even if this session's boat didn't
         with sessionboat.ARCHIVE_LOCK:
             now_id, _why = sessionboat.for_debrief(b)
-            yield (now_id == boat_id, None if now_id == boat_id else sessionboat.BOAT_CHANGED)
+            same = now_id == boat_id and sessionboat.revision() == rev
+            yield (same, None if same else sessionboat.BOAT_CHANGED)
 
     return jobs.start("debrief", _work, result_key="report",
                       meta={"race_id": race_id, "recording": b.get("recording"),

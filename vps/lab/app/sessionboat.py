@@ -23,6 +23,7 @@ ARCHIVE_LOCK = threading.RLock()
 BOAT_CHANGED = "This session's boat changed while it ran. Not filed. Debrief it again."
 
 KEY = "session_boats"
+REV_KEY = "session_boats_rev"
 NAME_MAX = 40
 OTHER_NO_PROFILE = "This session's boat has no profile. Set its boat first."
 
@@ -80,7 +81,18 @@ def set_boat(kit, start_ts, boat_id=None, boat_name=None, now=None):
         return False, "Pick a boat or type a name."
     rec = {"boat_id": bid, "name": name, "at": int(time.time() if now is None else now)}
     labstate.set_in(KEY, k, rec)
+    labstate.set(REV_KEY, revision() + 1)
     return True, rec
+
+
+def revision() -> int:
+    """Bumped on every session-boat edit. A debrief notes it before it fetches its track and files
+    nothing if it moved: an edit of ANOTHER session stitched into this one's window changes what
+    the window holds, though this session's own boat is unchanged (Codex on #321)."""
+    try:
+        return int(labstate.get(REV_KEY) or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def for_debrief(body):
