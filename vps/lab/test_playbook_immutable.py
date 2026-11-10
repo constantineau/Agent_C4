@@ -63,7 +63,9 @@ D._post_json = fake_post
 
 def freeze(**kw):
     b = dict({"race_id": "r1", "course_id": "north", "start_epoch": 100, "generated_at": 1,
-              "variants": [{"id": "a"}], "plays": []}, **kw)
+              "variants": [{"id": "a"}], "plays": [],
+              # route checks passed (#242)
+              "safety": {"ok": True, "problems": [], "overrides": []}, "consensus": {"safety": {"ok": True, "problems": [], "overrides": []}}}, **kw)
     b = synthesis.sign_bundle(b)
     return pbstore.save(b), b
 
@@ -117,7 +119,8 @@ check("after Activate, Push sends the new one", res["ok"] and sent[-1]["signatur
 
 print("an old <race>__<start> file still resolves, byte for byte:")
 legacy = synthesis.sign_bundle({"race_id": "r1", "course_id": "north", "start_epoch": 200,
-                                "generated_at": 0, "variants": [{"id": "old"}], "plays": []})
+                                "generated_at": 0, "variants": [{"id": "old"}], "plays": [],
+                                "safety": {"ok": True, "problems": [], "overrides": []}, "consensus": {"safety": {"ok": True, "problems": [], "overrides": []}}})
 legacy_bytes = json.dumps(legacy, indent=2).encode()
 lid = pbstore.legacy_id(legacy)
 with open(os.path.join(pbstore.PLAYBOOK_DIR, lid + ".json"), "wb") as f:

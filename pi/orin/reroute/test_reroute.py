@@ -484,8 +484,37 @@ with open(job.chart_path("huron", "c"), "w") as fh:
     json.dump(dict(geo.field_to_dict(f_gate), kind=job.CHART_KIND,
                    fingerprint=geo.course_fingerprint(DEF, "c", DEPTH)), fh)
 fG, nG = lo(DEF)
-check("the land under a remaining mark is opened (pocket), the rest stays", nG is None
-      and not fG.blocked(44.9, -82.25) and fG.blocked(44.94, -82.17))
+# #242 (Cole): at marks the Orin uses only the Lab's signed chart overrides, never its own pocket
+check("no chart override: the land under a remaining mark stays land", nG is None
+      and fG.blocked(44.9, -82.25))
+dG, cG, _n = job.remaining_definition(DEF, "c", 2, 44.2, -82.2)
+fG2, nG2 = job.load_obstacles(dG, cG, DEF, "c", job._get_boat(),
+                              overrides=job.override_names({"overrides": [
+                                  {"mark": "Gate", "by": "Cole", "at": 5, "why": "chart"}]}))
+check("the Lab's signed override on that mark: opened (pocket), the rest stays", nG2 is None
+      and not fG2.blocked(44.9, -82.25) and fG2.blocked(44.94, -82.17))
+check("an override on another mark opens nothing here", job.load_obstacles(
+    dG, cG, DEF, "c", job._get_boat(),
+    overrides=job.override_names({"overrides": [{"mark": "North"}]}))[0].blocked(44.9, -82.25))
+check("bad overrides in the request: none", job.override_names({"overrides": "Gate"}) == frozenset()
+      and job.override_names({"overrides": [{"by": "x"}, "Gate"]}) == frozenset())
+# end to end: the request's `overrides` (from the Pi) reach the mask. The gate sits 0.2 nm
+# inside a land block's south edge, so only a pocket lets the route get to it at all.
+f_edge = geo.build_for_course(DEF, "c", (46.0, 42.5, -83.5, -81.5), coastline_on=False,
+                              use_cache=False, zones_on=False, islands_on=False)
+f_edge._fill_polygon([[(-82.35, 44.8967), (-82.15, 44.8967), (-82.15, 44.95), (-82.35, 44.95)]], 1,
+                     "coastline")
+f_edge.active = True
+with open(job.chart_path("huron", "c"), "w") as fh:
+    json.dump(dict(geo.field_to_dict(f_edge), kind=job.CHART_KIND,
+                   fingerprint=geo.course_fingerprint(DEF, "c", DEPTH)), fh)
+outG = job.run(dict(REQ, overrides=[{"mark": "Gate", "by": "Cole", "at": 5, "why": "chart"}]),
+               now=NOW, is_online=lambda: False)
+outN = job.run(REQ, now=NOW, is_online=lambda: False)
+check("a run with the override reaches the gate",
+      outG["available"] and outG["legs"] and outG["legs"][0]["reached"])
+check("…and without it, it doesn't (no pocket of its own)",
+      outN["available"] and not (outN["legs"] and outN["legs"][0]["reached"]))
 write_chart(DEF)
 REQ_Z = {"device": "iPad 1", "position": {"lat": 44.0, "lon": -81.994}, "next_index": 1,
          "definition": NEAR, "course_id": "c", "models": ["gfs"]}
@@ -558,7 +587,10 @@ check("(found water blocked only by Rock's barrier)", len(rock) > 0)
 check("chart path: a rounded island's barrier no longer blocks", not any(
     field.blocked(la, lo) for la, lo in rock))
 fb, note = job.load_obstacles(d4, c4, None, None, job._get_boat())
-check("fallback path: the same", note == job.NO_CHART and not any(fb.blocked(la, lo) for la, lo in rock))
+# (inside the fallback's own box, the remaining course: outside it nothing was checked, so it
+# reads blocked since #258)
+check("fallback path: the same", note == job.NO_CHART
+      and not any(fb.blocked(la, lo) for la, lo in rock if fb.inside(la, lo)))
 d5, c5, _n = job.remaining_definition(BAR, "c", 1, 43.2, -82.4)
 field5, _ = job.load_obstacles(d5, c5, BAR, "c", job._get_boat())
 check("before rounding Rock its barrier still applies", field5.layers["rounding_barrier"] > 0
@@ -786,6 +818,27 @@ check("no finish time, no total", out4["finish_eta"] is None and out4["total_hou
       and out4["complete"] is False)
 check("no gain vs the plan", out4["vs_plan"] == {"available": False, "note": "Route incomplete."})
 check("said plainly, first", out4["warnings"][0] == "Route incomplete.")
+
+
+
+def wrong_side(*a, **k):
+    r = _orig(*a, **k)
+    r["safety"] = {"ok": False, "problems": [
+        {"code": "depth", "mark": None, "text": "No depth chart. Depths not checked."},
+        {"code": "side", "mark": "Gate", "text": "Route leaves Gate on the wrong side."}]}
+    return r
+
+
+# #242 (Codex on #287): a route the verdict says leaves a mark on the wrong side isn't finished
+job.routerun.run_course = wrong_side
+out5 = job.run(REQ, now=NOW, is_online=lambda: False)
+job.routerun.run_course = _orig
+check("a mark on the wrong side: not complete, no finish claim", out5["complete"] is False
+      and out5["finish_eta"] is None and out5["vs_plan"]["available"] is False)
+check("…said plainly, first", out5["warnings"][:2] == ["Route incomplete.",
+                                                       "Route leaves Gate on the wrong side."])
+check("(depth not checked is not a reason on its own)",
+      "No depth chart. Depths not checked." not in out5["warnings"])
 try:
     job.run(dict(REQ, position={}), now=NOW, is_online=lambda: False)
     check("no position → refused", False)

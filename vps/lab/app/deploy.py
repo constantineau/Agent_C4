@@ -108,7 +108,8 @@ def bundle_problem(race_id, b, definition, lock=None):
     want = b.get("course_hash")
     if want and want != race_def.course_hash(definition or {}, b.get("course_id")):
         return PB_COURSE
-    return None
+    from . import routesafety
+    return routesafety.refusal(b)        # #242: a route not proven safe never goes to the boat
 
 
 # One push at a time (#182-10): two at once would interleave their course/assets/playbook posts

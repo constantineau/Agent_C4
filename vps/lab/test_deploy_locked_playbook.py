@@ -57,7 +57,8 @@ def fake_post(url, body, timeout=25):
 D._post_json = fake_post
 
 bundle = synthesis.sign_bundle({"race_id": "r1", "course_id": "c", "start_epoch": 100,
-                                "variants": [{"id": "a"}], "plays": []})
+                                "variants": [{"id": "a"}], "plays": [],
+                                "safety": {"ok": True, "problems": [], "overrides": []}, "consensus": {"safety": {"ok": True, "problems": [], "overrides": []}}})   # route checks passed (#242)
 pid = pbstore.save(bundle)
 D.lock_in("r1", pid)
 
