@@ -25,7 +25,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from shared import race_def, boat_profile
-from . import atomicio, auth, store, extract, boats, labstate, feedback, pbstore, deploy, monitor, judge, track, learning, fleetimport, report, retro, retrostore, share, racestart
+from . import atomicio, auth, store, extract, boats, labstate, feedback, pbstore, deploy, monitor, judge, track, learning, fleetimport, report, retro, retrostore, share, racestart, sessionboat
 
 INGESTED_DIR = os.environ.get("INGESTED_DIR", "/srv/ingested")
 
@@ -914,7 +914,7 @@ async def debrief_run(body: dict):
 
     Body: {race_id, playbook_id?, recording?, session_id?/start_ts?/use_marker?}. Naming a session
     makes this ONE button: the job fetches that recording off the boat log, then judges it."""
-    from . import jobs, sessionboat
+    from . import jobs
     b = body or {}
     race_id = b.get("race_id")
     if not race_id:
@@ -971,12 +971,11 @@ def _recordings(race_id=None):
     from . import monitor
     bid = (boats.active_boat() or {}).get("boat_id")
     try:
-        sessions = (monitor.agent_json("/racelog/sessions", timeout=30) or {}).get("sessions") or []
+        sessions = (monitor.agent_json(sessionboat.sessions_path(), timeout=30) or {}).get("sessions") or []
         agent = {"available": True}
     except Exception as exc:
         sessions, agent = [], {"available": False, "note": f"The boat is unreachable ({exc}). "
                                "Recordings already in the Lab are still listed."}
-    from . import sessionboat
     tracks = track.list_tracks(race_id) if race_id else []
     debriefs = learning.list_debriefs(bid, race_id) if race_id else []
     # a session is filed under the boat it was SAILED on (#320), not the active boat or the kit
@@ -1049,7 +1048,6 @@ async def debrief_session_boat(body: dict):
     race_id?, recording?}. A wrong pick on the iPad, or an "Other boat" that has a profile now.
     Debriefs of that recording filed under another boat leave that boat's learning (kept, marked
     withdrawn); debrief it again to count it for this boat."""
-    from . import sessionboat
     b = body or {}
 
     def _change():
@@ -1195,7 +1193,7 @@ def racelog_sessions():
     boat-log source list."""
     from . import monitor
     try:
-        return monitor.agent_json("/racelog/sessions")
+        return monitor.agent_json(sessionboat.sessions_path())
     except Exception as exc:
         return {"sessions": [], "note": f"agent unreachable: {exc}"}
 
@@ -1281,7 +1279,7 @@ def fetch_log_track(body, sessions=None):
     from . import monitor
     if sessions is None:
         try:
-            sessions = (monitor.agent_json("/racelog/sessions", timeout=30) or {}).get("sessions") or []
+            sessions = (monitor.agent_json(sessionboat.sessions_path(), timeout=30) or {}).get("sessions") or []
         except Exception as exc:
             return {"detail": f"agent unreachable: {exc}"}, 502
     win = resolve_log_window(body, sessions)
@@ -1325,7 +1323,7 @@ def rescore_fetch(race_id, window_start):
     """A recording the Lab no longer stores, straight from the boat log, in memory (#245)."""
     from . import monitor, rescore
     try:
-        sessions = (monitor.agent_json("/racelog/sessions", timeout=30) or {}).get("sessions") or []
+        sessions = (monitor.agent_json(sessionboat.sessions_path(), timeout=30) or {}).get("sessions") or []
     except Exception as exc:
         return None, f"boat log unreachable: {type(exc).__name__}"
     body = rescore.log_body_for(window_start, sessions)

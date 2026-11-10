@@ -920,7 +920,21 @@ def compare(against, result, wave=None):
     return out
 
 
-def save_rescore(boat_id, evidence_version, recordings, bins, against=None):
+def debrief_boats(ids):
+    """{debrief id: the boat it is filed under now} (a withdrawn one reads "withdrawn:<old>")."""
+    ids = [int(i) for i in ids if i is not None]
+    if not ids:
+        return {}
+    c = _conn()
+    try:
+        rows = c.execute(f"SELECT id, boat_id FROM debriefs WHERE id IN "
+                         f"({','.join('?' * len(ids))})", ids).fetchall()
+        return {r["id"]: r["boat_id"] for r in rows}
+    finally:
+        c.close()
+
+
+def save_rescore(boat_id, evidence_version, recordings, bins, against=None, status="ready"):
     """File one re-score run: the re-scored bins, the proposal math over them, the wave fit, and the
     comparison with what the boat sails on now. Writes ONLY its own row."""
     against = against if against is not None else applied_model(boat_id)
@@ -939,7 +953,7 @@ def save_rescore(boat_id, evidence_version, recordings, bins, against=None):
             """INSERT INTO rescore_runs (created_at,boat_id,evidence_version,status,against_json,
                recordings_json,bins_json,result_json,wave_json,comparison_json)
                VALUES (?,?,?,?,?,?,?,?,?,?)""",
-            (time.time(), boat_id, evidence_version, "ready", json.dumps(against),
+            (time.time(), boat_id, evidence_version, status, json.dumps(against),
              json.dumps(recordings), json.dumps(bins), json.dumps(result), json.dumps(wave),
              json.dumps(comparison)))
         c.commit()

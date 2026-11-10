@@ -103,4 +103,13 @@ def run(boat_id, fetch_track=None, score=None, on_progress=None):
                       # a failed instrument check refuses nothing: say so next to the numbers
                       "trust_checked": bool(tr.get("available")), "trust_line": tr.get("line")})
     log("comparing with the boat model in use…")
-    return learning.save_rescore(boat_id, EVIDENCE_VERSION, notes, bins, against=against)
+    # #320: a session's boat may have changed while this ran (its debriefs withdrawn from this
+    # boat). Checked and saved under the lock the boat edit takes, so a withdrawal is either seen
+    # here (the run is saved stale, never applicable) or happens after and marks it stale itself.
+    from . import sessionboat
+    with sessionboat.ARCHIVE_LOCK:
+        mine = learning.debrief_boats([n.get("debrief_id") for n in notes
+                                       if n.get("status") == "scored"])
+        moved = any(b != boat_id for b in mine.values())
+        return learning.save_rescore(boat_id, EVIDENCE_VERSION, notes, bins, against=against,
+                                     status="stale" if moved else "ready")

@@ -136,6 +136,10 @@ recs = {x["session_id"]: x for x in client.get(f"/api/debrief/recordings?race_id
                                                 headers=TEAM).json()["recordings"]}
 check("the recordings list shows the Lab's edit", recs[3]["boat_id"] == "bravo"
       and recs[3]["boat_source"] == "lab")
+import urllib.parse  # noqa: E402
+_q = json.loads(urllib.parse.unquote(sessionboat.sessions_path().split("boats=", 1)[1]))
+check("the boat log is asked with the Lab's edits, so windows are derived per edited boat",
+      _q == {sessionboat.key_of("sr33", S_OTHER): "bravo"})
 
 print("5) a wrong pick fixed: the old boat's debrief leaves that boat's learning")
 _c = learning._conn()

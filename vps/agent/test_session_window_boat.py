@@ -34,5 +34,11 @@ check("the same boat's two markers still stitch", w2["end_ts"] >= A2["end_ts"])
 OLD = {"id": 4, "race_id": "r", "kit": "sr33", "start_ts": T, "end_ts": T + 3600}
 check("a marker from before #320 is the kit's boat", main._sailed(OLD) == main._sailed(A))
 
+# the Lab split them: both tagged sr33 on the iPad, the second edited to bravo in the Lab
+B2 = dict(B, boat_id="sr33", sailed_override="bravo")
+check("a Lab edit splits two same-tag markers into two boats' windows",
+      main._window_for(A, [A, B2], motion)["end_ts"] <= B2["start_ts"]
+      and main._window_for(B2, [A, B2], motion)["start_ts"] >= A["end_ts"])
+
 print("ALL OK" if ok else "SOME CHECKS FAILED")
 raise SystemExit(0 if ok else 1)

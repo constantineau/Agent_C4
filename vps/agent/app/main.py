@@ -314,6 +314,8 @@ def _motion_series(t0, t1, bucket_s=300):
 def _sailed(ses):
     """Which boat a session was sailed on, as the marker says (#320): its boat id, else its typed
     name, else the kit that recorded it (a marker from before #320)."""
+    if ses.get("sailed_override"):          # the Lab's edit of the session's boat
+        return (ses.get("kit"), ses["sailed_override"])
     return (ses.get("kit"), ses.get("boat_id") or ses.get("boat_name") or ses.get("kit"))
 
 
@@ -344,7 +346,7 @@ def _clip_to_boat(w, ses, sessions):
 
 
 @app.get("/racelog/sessions")
-def racelog_sessions(derive: bool = True):
+def racelog_sessions(derive: bool = True, boats: str | None = None):
     """RACE-SESSION markers backfilled from the boat (`crew.session` readings) — the windows the
     owner recorded. Shore-side recall of own data (the Lab debrief's from-log source).
 
@@ -375,6 +377,20 @@ def racelog_sessions(derive: bool = True):
         # boat_id/boat_name (#320) say which boat was SAILED, and are null on older markers
         d["kit"] = r.get("boat_id")
         out.append(d)
+    # `boats`: the Lab's own edits of which boat a session was sailed on (#320), as JSON
+    # {"<kit>@<start_ts %.3f>": "<boat key>"}: windows are derived per boat with those applied
+    try:
+        edits = _json.loads(boats) if boats else {}
+    except ValueError:
+        edits = {}
+    if isinstance(edits, dict):
+        for d in out:
+            try:
+                k = "%s@%.3f" % (d.get("kit") or "", float(d["start_ts"]))
+            except (KeyError, TypeError, ValueError):
+                continue
+            if isinstance(edits.get(k), str):
+                d["sailed_override"] = edits[k][:160]
     if derive:
         for s in out:
             try:

@@ -99,3 +99,18 @@ def for_debrief(body):
     if b.get("boat_name"):
         return None, OTHER_NO_PROFILE
     return None, None
+
+
+def sessions_path() -> str:
+    """The agent's /racelog/sessions, carrying the Lab's boat edits so the boat log derives each
+    window per boat as edited (two sessions tagged one boat on the iPad and split here must not
+    stay stitched into one window; Codex on #321). Boat key: the profile id, or "name:<name>"."""
+    import json
+    import urllib.parse
+    edits = labstate.get(KEY) or {}
+    m = {k: (e.get("boat_id") or "name:" + str(e.get("name") or "")) for k, e in edits.items()
+         if isinstance(e, dict)}
+    if not m:
+        return "/racelog/sessions"
+    return "/racelog/sessions?boats=" + urllib.parse.quote(json.dumps(m, separators=(",", ":")))
+

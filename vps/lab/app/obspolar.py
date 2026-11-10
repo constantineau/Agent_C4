@@ -19,7 +19,7 @@ import math
 import os
 import time
 
-from . import monitor
+from . import monitor, sessionboat
 from . import atomicio
 from . import track as T
 
@@ -158,7 +158,7 @@ def compute(min_seconds=MIN_SECONDS):
     race_meta = []
     by_window = {}       # (start, end) -> its race_meta row
     seen_rec, seen_pool = {}, set()    # accepted fix seconds, per recording and pooled
-    for s in monitor.agent_json("/racelog/sessions")["sessions"]:
+    for s in monitor.agent_json(sessionboat.sessions_path())["sessions"]:
         w = s.get("window") or {}
         if not w.get("hours"):
             continue
