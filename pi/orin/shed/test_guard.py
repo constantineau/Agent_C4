@@ -174,6 +174,9 @@ def main():
     bad = guard.load_config({"SHED_MEM_MB": "500,600,750"})
     check("thresholds in the wrong order → defaults", bad["mem"] == [750.0, 600.0, 500.0])
     check("junk → defaults", guard.load_config({"SHED_TJ_C": "hot"})["tj"] == [85.0, 90.0, 95.0])
+    check("a bad interval (negative, nan, inf) → defaults",
+          all(guard.load_config({"SHED_INTERVAL_S": v})["interval_s"] == 5.0
+              for v in ("-1", "nan", "inf", "0")))
     check("a good override is used",
           guard.load_config({"SHED_MEM_MB": "900,700,550",
                              "SHED_MEM_CLEAR_MB": "1100,950,800"})["mem"] == [900.0, 700.0, 550.0])

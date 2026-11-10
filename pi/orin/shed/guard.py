@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import glob
 import json
+import math
 import os
 import sys
 import threading
@@ -201,8 +202,11 @@ def load_config(env=None):
         power = int(c["SHED_POWER_LEVEL"])
         if not 0 <= power <= 3:
             raise ValueError("SHED_POWER_LEVEL must be 0-3")
+        hold, interval = float(c["SHED_HOLD_S"]), float(c["SHED_INTERVAL_S"])
+        if not (math.isfinite(hold) and hold >= 0 and math.isfinite(interval) and 0 < interval <= 60):
+            raise ValueError("SHED_HOLD_S must be >= 0 and SHED_INTERVAL_S 0-60 s")
         return {"mem": mem, "mem_clear": memc, "tj": tj, "tj_clear": tjc, "power": power,
-                "hold_s": float(c["SHED_HOLD_S"]), "interval_s": float(c["SHED_INTERVAL_S"]),
+                "hold_s": hold, "interval_s": interval,
                 "unload": c["SHED_UNLOAD_MODEL"].strip() not in ("0", "false", "no", ""),
                 "ollama": c["OLLAMA_URL"].rstrip("/")}
 
