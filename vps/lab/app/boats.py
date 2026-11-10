@@ -67,10 +67,11 @@ def get_boat(bid):
     for f in _files():
         d = _load(f)
         if d and (d.get("boat_id") or os.path.splitext(os.path.basename(f))[0]) == bid:
-            if not d.get("polar_files") and not d.get("cert_polar") \
+            if "polar_files" not in d and not d.get("cert_polar") \
                     and os.path.dirname(f) != BUNDLED_DIR:
                 # an edited copy saved before the profile named its own polar files (#303): the
-                # boat's polar files come from its bundled seed, never from a default
+                # boat's polar files come from its bundled seed, never from a default. An
+                # explicit empty `polar_files` is the owner's word (no polar) and stands.
                 seed = _bundled(bid)
                 if seed and isinstance(seed.get("polar_files"), dict) and seed["polar_files"]:
                     d["polar_files"] = dict(seed["polar_files"])
