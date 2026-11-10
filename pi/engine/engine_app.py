@@ -992,7 +992,8 @@ def reroute_run(body: dict = None):
     """Ask the Orin for ONE full re-route (the Lab's multi-model optimizer, pi/orin/reroute) from
     the boat to the remaining marks. Body: {device?: "iPad 1"} — who asked, kept with the result.
     Runs only when called (the crew's Re-route button, #125); one at a time. 202 started, 409 busy
-    (with progress) or nothing to route, 503 when the Orin can't be reached. Legal in-race: own
+    (with progress) or nothing to route, 503 when the Orin can't be reached (`orin: "unreachable"`)
+    or is shedding load (`orin: "paused"`, #295; the iPad then offers the Pi). Legal in-race: own
     computers + public forecasts; the route is labelled "Off the playbook"."""
     code, out = orinroute.run((body or {}).get("device"))
     return JSONResponse(out, status_code=code)
