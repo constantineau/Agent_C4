@@ -118,6 +118,17 @@ check("nodata 0: the cell with an empty pixel is not covered, the others are",
       c0[0] is None and c0[1:] == [10.0, 10.0, 10.0], c0)
 ce = g0.cells((S + 0.1, S + 0.05, W + 0.025, W + 0.125), 0.05, 2, 1, None)
 check("a cell the raster's edge cuts through is not covered", ce == [10.0, None], ce)
+# the same grid in UTM: its lon/lat footprint is tilted, so it is refused, never half-checked
+subprocess.run(["gdal_translate", "-q", "-of", "GTiff", "-a_srs", "EPSG:32634", "-a_nodata", "0",
+                "-a_ullr", "500000", "1120000", "510000", "1110000", asc0,
+                os.path.join(TMP, "u.tif")], check=True)
+gu = D.GridSource({"name": "utm", "bbox": [10.2, 9.9, 20.9, 21.2], "z": "depth",
+                   "url": "file://" + os.path.join(TMP, "u.tif"), "version": "1"})
+try:
+    gu.cells((10.2, 9.9, 20.9, 21.2), 0.05, 6, 6, None)
+    check("a projected (tilted) grid is refused", False)
+except D.GridError as exc:
+    check("a projected (tilted) grid is refused", "north-up" in str(exc), str(exc))
 g1 = D.GridSource(dict(SPEC, version="2"))
 check("a new version: a new file and a new data version",
       g1.raster(None) != g.raster(None) and g1.data_version != g.data_version)

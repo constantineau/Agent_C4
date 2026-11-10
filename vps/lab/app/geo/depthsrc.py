@@ -229,7 +229,13 @@ class GridSource:
             nd = (info.get("bands") or [{}])[0].get("noDataValue")
             ring = info["wgs84Extent"]["coordinates"][0]
             xs, ys = [float(p[0]) for p in ring], [float(p[1]) for p in ring]
+            # the coverage test assumes the raster's footprint IS its lon/lat box: a rotated or
+            # projected grid (a tilted footprint) is refused, never half-checked (Codex on #300)
+            if len({round(x, 7) for x in xs}) != 2 or len({round(y, 7) for y in ys}) != 2:
+                raise GridError("only north-up lon/lat grids are read")
             return (float(nd) if nd is not None else None), (min(xs), min(ys), max(xs), max(ys))
+        except GridError:
+            raise
         except (OSError, ValueError, subprocess.TimeoutExpired, TypeError, KeyError,
                 IndexError) as exc:
             raise GridError(f"gdalinfo: {type(exc).__name__}") from None
