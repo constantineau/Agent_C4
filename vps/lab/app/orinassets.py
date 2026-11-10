@@ -14,7 +14,8 @@ with each re-route request. Built only when the owner presses Push: nothing here
 The chart and the profile go together, so the chart's no-go depth is always the carried boat's.
 The boat is the one the locked playbook was built with (its `boat_model.boat_id`), so the playbook
 and the re-route sail the same boat. Only when the bundle doesn't say (no playbook locked, an older
-bundle) is it `DEPLOY_BOAT_ID` (default sr33 = C4). Never whichever boat is active in the Lab now,
+bundle) is it `DEPLOY_BOAT_ID`, which has no default (#307): unset, the push says so and sends
+nothing. Never whichever boat is active in the Lab now,
 and never a different boat's profile when that one is missing.
 """
 import os
@@ -37,14 +38,16 @@ NO_BOAT = "No boat profile for {boat}. Chart and profile not sent."
 BUILD_FAILED = "Chart build failed. Try again."
 NO_DEPTHS = "Depth chart didn't load. No chart built. Try again."
 DRAFT_CHANGED = "Boat draft changed since this playbook. Build it again."
+NO_DEPLOY_BOAT = "DEPLOY_BOAT_ID is not set. Chart and profile not sent."
 
 
 def boat_id(bundle=None):
-    """The boat to carry: the one the playbook bundle was built with, else DEPLOY_BOAT_ID."""
+    """The boat to carry: the one the playbook bundle was built with, else DEPLOY_BOAT_ID, else
+    None (unknown: nothing is carried, and the push says so)."""
     bid = ((bundle or {}).get("boat_model") or {}).get("boat_id")
     if isinstance(bid, str) and bid.strip():
         return bid.strip()
-    return os.environ.get("DEPLOY_BOAT_ID", "sr33")
+    return os.environ.get("DEPLOY_BOAT_ID", "").strip() or None
 
 
 def build_chart(definition, course_id, boat, open_water=False, source=None):
@@ -90,8 +93,10 @@ def build(definition, course_id, now=None, bundle=None):
     boat then drops what it held, so an older chart or profile is never taken for this push's."""
     problems = []
     bid = boat_id(bundle)
-    boat = boats.get_boat(bid)
-    if boat is None:
+    boat = boats.get_boat(bid) if bid else None
+    if bid is None:
+        problems.append(NO_DEPLOY_BOAT)
+    elif boat is None:
         problems.append(NO_BOAT.format(boat=str(bid)[:40]))
     else:
         errs, _warns = boat_profile.validate(boat)

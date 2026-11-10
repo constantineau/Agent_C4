@@ -14,7 +14,10 @@ from fastapi.responses import JSONResponse
 
 from shared.tool_contracts import AGENT_TOOLS
 from shared import n2k_sources, race_window, source_policy
+from shared.boat_id import require as _require_setting
 from .db import pool
+
+_require_setting("DATABASE_URL")     # no default DSN: unset, the agent won't start (plain line)
 from . import (agent, tools, navigator, alerts, summarizer, auth, race_mode, datasource, watches,
                racegate)
 

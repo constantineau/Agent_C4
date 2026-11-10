@@ -49,7 +49,8 @@ from shared import staleness
 
 from . import datasource
 
-BOAT_ID = os.environ.get("BOAT_ID", "sr33")
+from shared.boat_id import require as _require_setting  # noqa: E402
+BOAT_ID = _require_setting("BOAT_ID")   # no default: another boat must never write as sr33 (#307)
 AIS_WINDOW_MIN = 5          # a target unheard this long is dropped
 _MS_TO_KN = 1.943844
 _EPS_KN = 0.05              # below this relative speed there's effectively no CPA

@@ -171,7 +171,7 @@ copyoff.py status --outbox D/outbox
 | Var | Default | Meaning |
 |-----|---------|---------|
 | `SIGNALK_WS` | `ws://localhost:3010/signalk/v1/stream?subscribe=all` | Signal K delta stream |
-| `BOAT_ID` | `sr33` | boat id stamped on every row |
+| `BOAT_ID` | required (no default) | boat id stamped on every row; missing → the archiver won't start |
 | `ARCHIVE_DB` | `/var/lib/sr33/archive/archive.db` | SQLite path (on the named volume) |
 | `ARCHIVE_FLUSH_ROWS` / `ARCHIVE_FLUSH_SECONDS` | `1000` / `2` | flush cadence (durability vs. throughput) |
 | `VPS_URL` / `INGEST_TOKEN` | `http://localhost:8101` / `dev-ingest-token` | backfill target |

@@ -142,7 +142,8 @@ HEADING_MIN_SAMPLES = int(os.environ.get("HEALTH_HEADING_MIN_SAMPLES", "8"))
 HEADING_PAIR_TOL_S = float(os.environ.get("HEALTH_HEADING_PAIR_TOL_S", "2"))
 
 # --- provenance / policy-in-force checks ------------------------------------
-BOAT_ID = os.environ.get("BOAT_ID", "sr33")
+from shared.boat_id import require as _require_setting  # noqa: E402
+BOAT_ID = _require_setting("BOAT_ID")   # no default: another boat must never write as sr33 (#307)
 # Sources that publish computed values rather than measuring anything. Not a fault — `derived`
 # is a legitimately ranked matcher for the true-wind channels — but the crew is entitled to know
 # which numbers on the iPad are measured and which are arithmetic.

@@ -396,12 +396,11 @@ def test_orin_says_no_current(orin_bravo):
     assert says_missing(orin_bravo[0], "current")
 
 
-@xfail("#307", "REROUTE_BOAT defaults to sr33: Bravo's Deploy is refused, sr33's profile used")
 def test_orin_unconfigured_boat_never_falls_back_to_sr33():
     """No REROUTE_BOAT set: either the job refuses plainly, or it routes Bravo as Bravo."""
     try:
         job = _orin_job(None)
-    except Exception as exc:   # noqa: BLE001 — refusing to start without the setting is fine,
+    except (Exception, SystemExit) as exc:   # noqa: BLE001 — refusing to start without the setting is fine,
         if "REROUTE_BOAT" not in str(exc):    # but only a refusal that names it
             raise
         return

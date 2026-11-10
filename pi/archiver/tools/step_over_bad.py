@@ -21,7 +21,8 @@ import urllib.request
 DB = "/var/lib/sr33/archive/archive.db"
 VPS = os.environ.get("VPS_URL", "http://100.88.252.115:8101")
 TOKEN = os.environ.get("INGEST_TOKEN", "dev-ingest-token")
-BOAT = os.environ.get("BOAT_ID", "sr33")
+BOAT = os.environ.get("BOAT_ID", "").strip() or sys.exit(
+    "BOAT_ID is not set. Run with BOAT_ID=<this boat's id>. Not starting.")   # no default (#307)
 UP_TO = int(sys.argv[1])          # advance the cursor to this id
 
 ro = sqlite3.connect(f"file:{DB}?mode=ro", uri=True, timeout=30)

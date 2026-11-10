@@ -7,7 +7,7 @@ services:
     image: timescale/timescaledb:latest-pg16
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-sr33}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sr33-dev}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: ${POSTGRES_DB:-sr33_dev}
     # localhost only. Note: ufw does not filter Docker-published ports, so never publish on 0.0.0.0.
     ports:
@@ -28,7 +28,7 @@ services:
       context: .
       dockerfile: vps/ingestion/Dockerfile
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql://sr33:sr33-dev@timescaledb:5432/sr33_dev}
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in .env}
       INGEST_TOKEN: ${INGEST_TOKEN:-dev-ingest-token}
     # localhost + Tailscale only: the boat's uplink posts to 100.88.252.115:8101.
     ports:
@@ -44,11 +44,11 @@ services:
       context: .
       dockerfile: vps/agent/Dockerfile
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql://sr33:sr33-dev@timescaledb:5432/sr33_dev}
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in .env}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-4-8}
-      BOAT_ID: ${BOAT_ID:-sr33}
-      BOAT_PASSWORD: ${BOAT_PASSWORD:-sr33-dev}   # shared-password web auth (Phase 7)
+      BOAT_ID: ${BOAT_ID:?set BOAT_ID in .env (this boat's id)}
+      BOAT_PASSWORD: ${BOAT_PASSWORD:?set BOAT_PASSWORD in .env}   # shared crew web password, no default
       AUTH_ENABLED: ${AUTH_ENABLED:-true}
       RACE_MODE_DEFAULT: ${RACE_MODE_DEFAULT:-practice}   # 9.2 gate: dev opens; prod omits -> fail-closed 'race'
     ports:
@@ -85,7 +85,8 @@ services:
       LAB_PASSWORD: ${LAB_PASSWORD:-lab-dev}
       LAB_AUTH_ENABLED: ${LAB_AUTH_ENABLED:-true}
       AGENT_URL: ${AGENT_URL:-http://agent:8000}        # Monitor: our-boat telemetry from the cloud agent
-      BOAT_PASSWORD: ${BOAT_PASSWORD:-sr33-dev}          # to auth to the agent for /conditions
+      BOAT_PASSWORD: ${BOAT_PASSWORD:?set BOAT_PASSWORD in .env}   # to auth to the agent for /conditions
+      DEPLOY_BOAT_ID: ${DEPLOY_BOAT_ID:?set DEPLOY_BOAT_ID in .env (the boat Deploy pushes to)}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}        # race-doc ingestion (Opus extraction)
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-4-8}          # single-model knob (extract/judge)
       ANTHROPIC_MODEL_CHAIN: ${ANTHROPIC_MODEL_CHAIN:-claude-fable-5-1,claude-opus-5}  # every Lab LLM call but race import: Fable 5.1 primary, Opus 5 fallback

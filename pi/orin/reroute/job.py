@@ -38,6 +38,7 @@ from app import boats, optimizer, routerun  # noqa: E402  (vps/lab on PYTHONPATH
 from app import plume as lab_plume  # noqa: E402
 from app.geo import obstacles as geo  # noqa: E402
 from shared import boat_profile, race_def  # noqa: E402
+from shared import boat_id as boat_id_setting  # noqa: E402
 
 SCHEMA = "c4.reroute/v1"
 LABEL = "Off the playbook"
@@ -45,7 +46,7 @@ STATE_DIR = os.environ["REROUTE_DIR"]
 CHART_DIR = os.environ.get("REROUTE_CHART_DIR", os.path.join(STATE_DIR, "chart"))
 MODELS = tuple(m.strip() for m in os.environ.get("REROUTE_MODELS", "gfs,hrrr").split(",")
                if m.strip())
-BOAT_ID = os.environ.get("REROUTE_BOAT", "sr33")
+BOAT_ID = boat_id_setting.require("REROUTE_BOAT")   # no default: never re-route as another boat (#307)
 ROUTE_BUDGET_S = float(os.environ.get("REROUTE_ROUTE_BUDGET_S", "300"))   # optimizer time cap
 RESOLUTION = os.environ.get("REROUTE_RESOLUTION", "auto")
 USE_CURRENT = os.environ.get("REROUTE_CURRENT", "0") == "1"   # LMHOFS: network only

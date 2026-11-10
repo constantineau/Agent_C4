@@ -17,6 +17,7 @@ Run in-container (make ci): PYTHONPATH=vps/agent:.:pi/archiver python3 vps/agent
 """
 import copy
 import os
+os.environ["BOAT_ID"] = "sr33"   # these checks are about sr33's own N2K devices (no default boat, #307)
 import sys
 import tempfile
 

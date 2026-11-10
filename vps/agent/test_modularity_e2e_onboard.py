@@ -212,7 +212,7 @@ for m in sys.argv[1:]:
     try:
         mod = importlib.import_module(m)
         out[m] = getattr(mod, "BOAT_ID", None)
-    except Exception as e:
+    except (Exception, SystemExit) as e:
         if "BOAT_ID" not in str(e):      # only a refusal that names the missing setting counts
             raise
         out[m] = "refused: " + type(e).__name__
@@ -239,7 +239,6 @@ def test_every_engine_module_takes_the_configured_boat():
     assert all(v in ("bravo", None) for v in ids.values()), ids
 
 
-@xfail("#307", "every engine module defaults BOAT_ID to 'sr33' when it isn't set")
 def test_no_engine_module_defaults_to_sr33():
     """BOAT_ID unset: each module refuses to start or has no boat id — never files as sr33."""
     ids = _module_boat_ids(None)

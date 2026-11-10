@@ -118,7 +118,8 @@ def sensor_health_ep():
 # A device that moved and was found again is a note (priority followed it). A mapped device
 # that is no longer on the bus while something else holds its address is a warning. Never
 # having read the list is "not checked": a note, never a pass and never a warning.
-BOAT_ID = os.environ.get("BOAT_ID", "sr33")
+from shared.boat_id import require as _require_setting  # noqa: E402
+BOAT_ID = _require_setting("BOAT_ID")   # no default: another boat must never write as sr33 (#307)
 N2K_RECHECK_S = 300.0       # after a good read
 N2K_RETRY_S = 30.0          # until the first good read (Signal K may start after the engine)
 _N2K = {"checked_at": None, "error": None, "moved": [], "static": None, "live": {},

@@ -66,12 +66,12 @@ def build():
     rows = []
     t = RACE_START
     while t <= RACE_END:                                    # under way at 6 kn on 020 the whole way
-        rows.append((iso(t), "sr33", GPS, SOG, 3.09, None))         # m/s
-        rows.append((iso(t), "sr33", GPS, COG, 0.349, None))        # rad = 20 deg
+        rows.append((iso(t), archiver.BOAT_ID, GPS, SOG, 3.09, None))         # m/s
+        rows.append((iso(t), archiver.BOAT_ID, GPS, COG, 0.349, None))        # rad = 20 deg
         t += 60
     # a day sail a week before the race — out of session, old: this one SHOULD go
     for k in range(30):
-        rows.append((iso(RACE_START - 7 * 86400 + k * 60), "sr33", GPS, SOG, 2.0, None))
+        rows.append((iso(RACE_START - 7 * 86400 + k * 60), archiver.BOAT_ID, GPS, SOG, 2.0, None))
     arc.executemany("INSERT INTO readings (time, boat_id, source, path, value, str_value) "
                     "VALUES (?, ?, ?, ?, ?, ?)", rows)
     arc.commit()
@@ -145,8 +145,8 @@ archiver._DERIVED_CACHE.clear()
 arcL, engL = build()
 early = archiver.session_windows(engL, conn=arcL, now=RACE_END + 600)
 arcL.executemany("INSERT INTO readings (time, boat_id, source, path, value) VALUES (?,?,?,?,?)",
-                 [(iso(RACE_END + k * 60), "sr33", GPS, SOG, 3.09) for k in range(1, 121)]
-                 + [(iso(RACE_END + k * 60), "sr33", GPS, COG, 0.349) for k in range(1, 121)])
+                 [(iso(RACE_END + k * 60), archiver.BOAT_ID, GPS, SOG, 3.09) for k in range(1, 121)]
+                 + [(iso(RACE_END + k * 60), archiver.BOAT_ID, GPS, COG, 0.349) for k in range(1, 121)])
 arcL.commit()
 later = archiver.session_windows(engL, conn=arcL, now=RACE_END + 3 * 3600)
 check("the two hours sailed after an early prune are kept by the next one "
@@ -164,8 +164,8 @@ archiver._DERIVED_CACHE.clear()
 arc3, eng3 = build()
 first = archiver.session_windows(eng3, conn=arc3)
 arc3.executemany("INSERT INTO readings (time, boat_id, source, path, value) VALUES (?,?,?,?,?)",
-                 [(iso(RACE_END + k * 60), "sr33", GPS, SOG, 3.09) for k in range(1, 61)]
-                 + [(iso(RACE_END + k * 60), "sr33", GPS, COG, 0.349) for k in range(1, 61)])
+                 [(iso(RACE_END + k * 60), archiver.BOAT_ID, GPS, SOG, 3.09) for k in range(1, 61)]
+                 + [(iso(RACE_END + k * 60), archiver.BOAT_ID, GPS, COG, 0.349) for k in range(1, 61)])
 arc3.commit()
 grown = archiver.session_windows(eng3, conn=arc3)
 # (The session is a month old, so its look-ahead is long past: rows appearing inside it now are
