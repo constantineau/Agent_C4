@@ -4273,7 +4273,8 @@ function optObstacleNote(r) {
    /api/polar/observed (app/obspolar.py): measured TWS/TWA/STW only, trust-gated, kite-gated —
    never GRIB, never the cert (the cert appears only as a dashed reference curve). */
 const Pol = { data: null, tws: null, config: "all", race: "all", split: "config",
-  busy: false, proposals: null, sources: null, use: null, msg: "", _maxV: null };
+  busy: false, proposals: null, sources: null, use: null, msg: "", _maxV: null,
+  rescore: null, rsJob: null, rsPoll: null, rsMsg: "" };
 
 // Colour follows the sail, never the filter: each sail wears its SAIL_COLORS colour, the same one
 // as the crossover chart and its legend (#240). A two-sail set is drawn in its first sail's colour
@@ -4345,6 +4346,8 @@ async function renderPolar() {
   catch (e) { Pol.proposals = []; }
   try { Pol.sources = ((await (await apiGet("/api/learning/bin-sources")).json()).sources || []); }
   catch (e) { Pol.sources = []; }
+  try { Pol.rescore = (await (await apiGet("/api/learning/rescore/latest")).json()).run || null; }
+  catch (e) { Pol.rescore = null; }
   if (stale("polar")) return;
   // every race teaches the model until a human says otherwise
   if (!Pol.use) {
@@ -4658,7 +4661,109 @@ function paintPolar() {
     <div class="card"><h3>Cells at ${Pol.tws} kn${Pol.race === "all" ? "" : " · " + esc(polRaceName(Pol.race))} <span class="muted" style="font-weight:400">— best speed held, at least ${minS} s of data each</span></h3>${tbl}
       ${thin.length ? `<div class="muted" style="font-size:11px;margin-top:6px">Not shown: <b>${thin.length}</b> cell(s) with under ${minS} s of data (${thin.slice().sort((x, y) => y.seconds - x.seconds).slice(0, 6).map((c) => `${c.twa}°${c.config ? " " + esc(c.config) : ""} ${c.seconds}s`).join(", ")}${thin.length > 6 ? `, +${thin.length - 6} more` : ""}). Too short to trust.</div>` : ""}</div>
     ${polDecisionsCard()}
+    ${polRescoreCard()}
   </div>`;
+}
+
+/* ---------- Re-score (#245) ----------
+   The saved races scored again with today's evidence code, next to what the boat sails on now.
+   A run changes nothing. Approving one makes an ordinary suggestion, applied (or not) in
+   Learnings — the boat only changes there (ADR-0003). */
+const RS_STATUS = { same: "same", changes: "changes", dropped: "back to polar", new: "new" };
+const RS_WHY = { thin: "too little data", deadband: "within 4%", no_data: "no data", few_races: "too few races" };
+function rsMult(v) { return v == null ? "—" : "×" + Number(v).toFixed(3); }
+function rsPct(v) { return (v > 0 ? "+" : "") + Math.round(v * 1000) / 10 + "%"; }
+function rsData(pct, n) { return n == null ? "—" : `${pct != null ? pct + "% · " : ""}${n}`; }
+
+function polRescoreCard() {
+  const run = Pol.rescore, job = Pol.rsJob;
+  const running = job && job.state === "running";
+  const head = `<h3>Re-score <span class="muted" style="font-weight:400">— saved races, today's scoring</span>
+    ${qhelp("Scores the saved races again with the fixed scoring and compares with what the boat uses now. Nothing changes until you approve it in Learnings.")}</h3>`;
+  const btn = `<button class="mini" onclick="polRescoreStart()" ${running ? "disabled" : ""}>${running ? "Scoring…" : run ? "Score again" : "Re-score"}</button>
+    <span class="muted" style="font-size:12px">${esc(running ? ((job.progress || []).slice(-1)[0] || "") : (Pol.rsMsg || ""))}</span>`;
+  if (!run) return `<div class="card">${head}<div class="muted" style="font-size:12px;margin-bottom:6px">Nothing changes on the boat.</div>${btn}</div>`;
+  const cmp = run.comparison || {};
+  const recs = (run.recordings || []).map((r) => {
+    const when = r.window_start ? new Date(r.window_start * 1000).toISOString().slice(0, 16).replace("T", " ") + "Z" : "uploaded track";
+    return r.status === "scored"
+      ? `<div class="muted" style="font-size:12px">${esc(when)} · ${r.hours != null ? r.hours + " h · " : ""}${r.measured_bins} measured cell(s) · ${r.samples} samples · ${r.polar_pct != null ? r.polar_pct + "% of polar" : "—"}${r.old_polar_pct != null ? " (was " + r.old_polar_pct + "%)" : ""} · ${r.track === "stored" ? "saved track" : "from the boat log"}${r.current_corrected ? "" : " · no current"}${r.wave_corrected ? "" : " · no waves"}</div>`
+      : `<div class="muted" style="font-size:12px">⊘ ${esc(when)} · left out: ${esc(r.note || "")}</div>`;
+  }).join("");
+  let body;
+  if (!cmp.available) {
+    body = `<div class="placeholder">${esc(cmp.note || "Nothing to compare.")}</div>`;
+  } else {
+    const c = cmp.counts || {}, h = cmp.helm || {};
+    const rows = (cmp.rows || []).map((r) => {
+      const moved = r.status !== "same";
+      return `<tr${moved ? "" : ' class="muted"'}><td>${r.tws} kn · ${r.twa}°</td>
+        <td>${rsMult(r.now)}</td><td>${moved ? "<b>" + rsMult(r.new) + "</b>" : rsMult(r.new)}</td>
+        <td>${r.status === "same" ? "—" : rsPct(r.change)}</td>
+        <td>${esc(RS_STATUS[r.status] || r.status)}${r.why ? " · " + esc(RS_WHY[r.why] || r.why) : ""}${r.left_out_before ? " · you left it out before" : ""}</td>
+        <td>${rsData(r.now_pct, r.now_samples)} → ${rsData(r.new_pct, r.new_samples)}</td></tr>`;
+    }).join("");
+    const w = cmp.wave || {};
+    const wave = w.available
+      ? `<div class="muted" style="font-size:12px;margin-top:6px">Waves: ${Object.entries(w.keys || {}).filter(([, v]) => v.now !== v.new).map(([k, v]) => `${esc(k)} ${v.now} → <b>${v.new}</b>`).join(" · ") || "no change"}</div>`
+      : `<div class="muted" style="font-size:12px;margin-top:6px">Waves: no change. ${esc(w.note || "")}</div>`;
+    body = `<div class="dep-row">Helm <b>${h.now}</b> → <b>${h.new}</b>${h.change ? " (" + (h.change > 0 ? "+" : "") + h.change + ")" : ""}
+        · ${c.changes || 0} of ${cmp.applied_cells || 0} cells change · ${c.dropped || 0} back to polar · ${c.new || 0} new · ${c.same || 0} same</div>
+      <div class="muted" style="font-size:12px">Overall ${cmp.overall_pct.now != null ? cmp.overall_pct.now + "%" : "—"} → ${cmp.overall_pct.new}% of polar · samples ${cmp.samples.now != null ? cmp.samples.now : "—"} → ${cmp.samples.new}</div>
+      <div class="pg-wrap" style="margin-top:6px"><table class="pg">
+        <tr><th>cell</th><th>now</th><th>new</th><th>change</th><th></th><th>data (% · samples)</th></tr>${rows}</table></div>${wave}`;
+  }
+  const decided = run.status === "proposed"
+    ? `<span class="pill ok">suggestion #${run.proposal_id} made</span> <a href="#learnings">review it in Learnings</a>`
+    : run.status === "rejected" ? `<span class="pill">rejected</span>` : "";
+  const act = run.status === "ready" && cmp.available
+    ? `<button class="mini" onclick="polRescoreDecide(${run.id},'propose')">Approve as suggestion</button>
+       <button class="mini" style="margin-left:8px" onclick="polRescoreDecide(${run.id},'reject')">Reject</button>
+       <div class="muted" style="font-size:11px;margin-top:4px">Approve makes a suggestion. The boat changes only when you apply it in Learnings.</div>`
+    : decided;
+  return `<div class="card">${head}
+    <div class="muted" style="font-size:12px;margin-bottom:6px">Run #${run.id} · ${isoDate(run.created_at)} · scoring ${esc(run.evidence_version || "")}. Nothing changes on the boat.</div>
+    ${recs}<div style="margin-top:6px">${body}</div>
+    <div style="margin-top:8px">${act}</div>
+    <div style="margin-top:8px">${btn}</div></div>`;
+}
+
+async function polRescoreStart() {
+  Pol.rsMsg = "";
+  try {
+    const r = await (await apiPost("/api/learning/rescore", {})).json();
+    if (!r.ok) { Pol.rsMsg = r.note || r.detail || "couldn't start"; return paintPolar(); }
+    Pol.rsJob = { state: "running", progress: [], job_id: r.job_id };
+    if (Pol.rsPoll) clearInterval(Pol.rsPoll);
+    Pol.rsPoll = setInterval(polRescorePoll, 3000);
+  } catch (e) { Pol.rsMsg = "couldn't start: " + (e.message || e); }
+  paintPolar();
+}
+
+async function polRescorePoll() {
+  const id = (Pol.rsJob || {}).job_id || "";
+  try { Pol.rsJob = await (await apiGet("/api/learning/rescore/status?job_id=" + encodeURIComponent(id))).json(); }
+  catch (e) { return; }
+  if (Pol.rsJob.state !== "running") {
+    if (Pol.rsPoll) { clearInterval(Pol.rsPoll); Pol.rsPoll = null; }
+    if (Pol.rsJob.state === "done") Pol.rescore = Pol.rsJob.result || Pol.rescore;
+    else Pol.rsMsg = Pol.rsJob.error || "re-score failed";
+  }
+  if (location.hash.replace("#", "") === "polar") paintPolar();
+}
+
+async function polRescoreDecide(id, what) {
+  if (what === "reject") {
+    const go = await askModal("Reject this re-score?", "The boat keeps what it uses now.",
+      [{ c: "no", label: "Cancel", cls: "ghost" }, { c: "yes", label: "Reject", cls: "primary" }], "no", "no");
+    if (go !== "yes") return;
+  }
+  try {
+    const r = await (await apiPost(`/api/learning/rescore/${id}/${what}`, {})).json();
+    Pol.rsMsg = r.ok ? (what === "propose" ? `Suggestion #${r.proposal_id} made. Apply it in Learnings.` : "Rejected.")
+                     : (r.note || "couldn't save");
+  } catch (e) { Pol.rsMsg = "couldn't save: " + (e.message || e); }
+  renderPolar();
 }
 
 async function polPropose() {
