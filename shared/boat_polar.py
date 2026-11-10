@@ -218,7 +218,7 @@ def crossovers_ok(xo) -> bool:
 
 def _row_ok(r):
     return (isinstance(r, dict) and _n(r.get("twa")) and isinstance(r.get("sail"), str)
-            and all(r.get(k) is None or _n(r.get(k)) for k in ("btv", "vmg", "awa", "heel")))
+            and all(k in r and (r[k] is None or _n(r[k])) for k in ("btv", "vmg", "awa", "heel")))
 
 
 def _guide_ok(sg) -> bool:
