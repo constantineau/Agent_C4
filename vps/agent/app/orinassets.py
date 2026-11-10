@@ -40,6 +40,13 @@ MAX_BYTES = 1536 * 1024              # well under the Orin's 2 MB request cap, w
 MAX_CELLS = 20_000_000              # = the Lab's obstacles.MAX_FIELD_CELLS
 RACING = racegate.RACING
 _LOCK = threading.Lock()
+_GEN = [0]          # bumped on every stored push: polar caches elsewhere re-read at once
+
+
+def generation():
+    """A counter that changes whenever a push replaces what's held (matcher/routing key their
+    polar caches on it, so the next boat's polar is used at once, never the last one's)."""
+    return _GEN[0]
 
 
 def _path():
@@ -182,6 +189,7 @@ def load(body, now=None):
         if racegate.race_session():
             return racegate.refused()
         _write(text)
+        _GEN[0] += 1
     return answer
 
 

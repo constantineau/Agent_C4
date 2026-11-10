@@ -144,15 +144,28 @@ POLAR_TTL_S = 300.0      # re-read a good table this often, so an applied polar 
 POLAR_RETRY_S = 30.0     # an empty/failed read retries sooner (was cached as [] for the process)
 
 
+_POLAR_GEN = None         # the Deploy push generation the table was read under (#304)
+
+
+def _deploy_generation():
+    """Changes when a Deploy push replaces the boat's polar (aboard); None on the shore."""
+    try:
+        from . import orinassets
+        return orinassets.generation()
+    except Exception:
+        return None
+
+
 def _polar_table():
     """The polar table, re-read every POLAR_TTL_S (POLAR_RETRY_S while empty). A FAILED read keeps
     the last good table rather than wiping it; a clean empty read (the deployed boat has no polar,
     #304) empties it, so plays are never priced on the previous boat's polar."""
-    global _POLAR_TABLE, _POLAR_AT
+    global _POLAR_TABLE, _POLAR_AT, _POLAR_GEN
     now = time.monotonic()
     ttl = POLAR_TTL_S if _POLAR_TABLE else POLAR_RETRY_S
-    if _POLAR_TABLE is None or now - _POLAR_AT >= ttl:
-        _POLAR_AT = now
+    gen = _deploy_generation()
+    if _POLAR_TABLE is None or now - _POLAR_AT >= ttl or gen != _POLAR_GEN:
+        _POLAR_AT, _POLAR_GEN = now, gen
         try:
             fresh = [(t, a, s) for (t, a, s) in datasource.active().polars_stw() if s is not None]
             failed = False

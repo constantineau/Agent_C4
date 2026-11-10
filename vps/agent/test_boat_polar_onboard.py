@@ -134,5 +134,23 @@ check("a polar without a profile", deploy(None, PB)[0] is False)
 check("summary names the polar", orinassets.summary({"boat": BRAVO, "polar": PB})["polar"]
       == BP.summary(PB))
 
+print("6) a new push reaches the matcher and the router at once, not after their cache times")
+from app import matcher, racegate, routing  # noqa: E402
+racegate.race_session = lambda: None
+matcher.datasource.active = lambda: DSO.OnboardSource.__new__(DSO.OnboardSource)
+routing.datasource.active = matcher.datasource.active
+body = {"schema": orinassets.SCHEMA, "race_id": "r", "course_id": "c", "chart": None,
+        "boat_id": "sr33", "boat": SR33, "boat_version": boat_profile.version(SR33), "polar": P33}
+check("sr33 pushed", orinassets.load(body).get("loaded"))
+t33, r33 = matcher._polar_table(), routing._polars()
+body_b = dict(body, boat_id="bravo", boat=BRAVO, boat_version=boat_profile.version(BRAVO),
+              polar=PB)
+check("Bravo pushed", orinassets.load(body_b).get("loaded"))
+check("the matcher reads Bravo's polar right away", matcher._polar_table() != t33
+      and len(matcher._polar_table()) == len(BRAVO["cert_polar"]))
+check("so does the router", routing._polars() != r33)
+check("Bravo pushed with no polar", orinassets.load(dict(body_b, polar=None)).get("loaded"))
+check("the matcher drops the old polar right away", matcher._polar_table() == [])
+
 print("ALL OK" if ok else "SOME CHECKS FAILED")
 raise SystemExit(0 if ok else 1)

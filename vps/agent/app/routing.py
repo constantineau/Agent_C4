@@ -33,12 +33,20 @@ _POLARS_AT = 0.0
 _POLARS_TTL_S = 60.0      # a Deploy push can replace the boat's polar (#304): re-read now and then
 
 
+_POLARS_GEN = None
+
+
 def _polars():
-    global _POLARS, _POLARS_AT
+    global _POLARS, _POLARS_AT, _POLARS_GEN
     now = time.monotonic()
-    if _POLARS is None or now - _POLARS_AT >= _POLARS_TTL_S:
+    try:                       # a Deploy push replaced the boat's polar → re-read now (#304)
+        from . import orinassets
+        gen = orinassets.generation()
+    except Exception:
+        gen = None
+    if _POLARS is None or now - _POLARS_AT >= _POLARS_TTL_S or gen != _POLARS_GEN:
         _POLARS = [(tws, twa, stw) for (tws, twa, stw) in datasource.active().polars_stw() if stw]
-        _POLARS_AT = now
+        _POLARS_AT, _POLARS_GEN = now, gen
     return _POLARS
 
 
