@@ -23,16 +23,12 @@ _tmp = tempfile.mkdtemp()
 os.environ["INGESTED_DIR"] = _tmp
 os.environ["PLAYBOOK_DIR"] = os.path.join(_tmp, "playbooks")
 HERE = os.path.dirname(os.path.abspath(__file__))
-for _seed in (os.path.join(HERE, "..", "db", "seed"), "/srv"):
-    if os.path.exists(os.path.join(_seed, "polars_sr33.sql")):
-        os.environ["POLARS_FILE"] = os.path.join(_seed, "polars_sr33.sql")
-        os.environ["SAIL_POLARS_FILE"] = os.path.join(_seed, "sr33_sail_polars.json")
-        os.environ["CROSSOVERS_FILE"] = os.path.join(_seed, "sr33_crossovers.json")
-        break
 os.environ.pop("ANTHROPIC_API_KEY", None)
 
 from app import judge as JD                      # noqa: E402
 from app import current as CURMOD, wave as WAVEMOD   # noqa: E402
+import polar_fixture  # noqa: E402
+polar_fixture.install()     # bare optimizer/sail-plan calls route on sr33's own polar (#303)
 
 JD.API_KEY = None
 
@@ -228,7 +224,7 @@ def fake_build(*a, **k):
 
 SYN.pb.build_playbook = fake_build
 SYN.race_def.course_hash = lambda *a, **k: "h"
-SYN._boat_model = lambda: {"boat_id": "c4"}
+SYN._boat_model = lambda *a, **k: {"boat_id": "c4"}
 SYN._opus_synthesis = lambda *a, **k: None
 SYN._deterministic_synthesis = lambda *a, **k: {"variants": {}, "recommended": None,
                                                 "decision_tree": [], "headline": ""}

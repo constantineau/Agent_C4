@@ -62,7 +62,11 @@ def run(boat_id, fetch_track=None, score=None, on_progress=None):
     does not store; `score(track, wave_coeffs, log)` defaults to `judge.score_recording`."""
     log = on_progress or (lambda *_: None)
     if score is None:
-        from .judge import score_recording as score
+        import functools
+        from . import boats
+        from .judge import score_recording
+        # scored on THIS boat's own polar (#303), not whichever boat is active in the Lab
+        score = functools.partial(score_recording, boat=boats.get_boat(boat_id) or {})
     # what the boat uses NOW, read once before scoring: the bins are scored on these wave
     # coefficients and the comparison is against this model, even if the boat changes meanwhile
     against = learning.applied_model(boat_id)

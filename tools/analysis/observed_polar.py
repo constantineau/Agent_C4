@@ -17,7 +17,7 @@ Run inside the lab image with the repo mounted:
 import argparse
 import json
 
-from app import obspolar
+from app import boats, obspolar
 from app import polars as POL
 
 
@@ -30,7 +30,7 @@ def main():
     a = ap.parse_args()
 
     art = obspolar.compute()
-    P = POL.polars_stw()
+    P = POL.polars_stw(boats.active_polar())     # the selected boat's own polar (#303)
 
     def cert_ref(tws, twa):
         if not P:

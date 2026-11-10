@@ -13,19 +13,12 @@ import os
 import importlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-# Resolve the seed dir wherever the test runs: the repo (vps/lab/../db/seed) OR docker-cp'd to /srv
-# (the lab image bakes the seed files there — POLARS_FILE=/srv/polars_sr33.sql). Only override the env
-# when the seed is actually found, so a bad guess never zeroes out the polars (which yields empty routes).
-for _seed in (os.path.join(HERE, "..", "db", "seed"), "/srv"):
-    if os.path.exists(os.path.join(_seed, "polars_sr33.sql")):
-        os.environ["POLARS_FILE"] = os.path.join(_seed, "polars_sr33.sql")
-        os.environ["SAIL_POLARS_FILE"] = os.path.join(_seed, "sr33_sail_polars.json")
-        os.environ["CROSSOVERS_FILE"] = os.path.join(_seed, "sr33_crossovers.json")
-        break
 
 from app import polars as POL          # noqa: E402
 from app import sailplan               # noqa: E402
 from app import optimizer as OPT       # noqa: E402
+import polar_fixture  # noqa: E402
+polar_fixture.install()     # bare optimizer/sail-plan calls route on sr33's own polar (#303)
 
 ok = True
 
@@ -38,7 +31,9 @@ def check(name, cond):
 
 def reload_with(sail_aware):
     os.environ["ROUTE_SAIL_AWARE"] = "1" if sail_aware else "0"
-    return importlib.reload(OPT)
+    mod = importlib.reload(OPT)
+    polar_fixture.install()
+    return mod
 
 
 # constant wind: TWS 12, TWD 0 (wind FROM the north). Heading 180 = dead downwind (run, TWA 180);

@@ -616,18 +616,21 @@ async def crossovers():
     for the Boat-model review panel. The per-TWA×TWS zones come from the ORC cert; the upwind jib
     change-downs (J1/J2/J3 by TWS) come from the active boat (the cert rates only the J1)."""
     from . import sailplan
-    m = sailplan.model()
     b = boats.active_boat() or {}
+    xo = sailplan.of(boats.polar_for(b))           # the selected boat's own table (#303)
+    m = sailplan.model(xo)
     jibs = b.get("jib_crossovers") or []
     cfg = {"code0": b.get("code0") or {}, "main_reefs": b.get("main_reefs") or {}}
     if b.get("sail_inventory"):
         m["inventory"] = b["sail_inventory"]        # the boat's real inventory (incl. J2/J3, C0)
     m["jib_crossovers"] = jibs
-    m["crossovers"] = sailplan.crossovers_specialized(jibs, cfg)  # real jib per TWS row + C0 carve
-    m["overlaps"] = sailplan.overlaps_specialized(jibs)       # toss-up bands, jib relabelled to match
+    m["crossovers"] = sailplan.crossovers_specialized(jibs, cfg, xo=xo)  # real jib per TWS row + C0
+    m["overlaps"] = sailplan.overlaps_specialized(jibs, xo=xo)  # toss-up bands, jib relabelled
+    if not xo:
+        m["note"] = "No sail crossovers for this boat."
     m["code0"] = cfg["code0"]                       # light-air reacher band (crew, not cert)
     m["main_reefs"] = cfg["main_reefs"]             # reef points (depower + A3 slot)
-    m["boat_id"] = b.get("boat_id") or m.get("boat_id")
+    m["boat_id"] = b.get("boat_id")
     return m
 
 
@@ -689,15 +692,18 @@ async def save_sail_config(body: dict):
 async def polars_grid():
     """The boat polar grid (TWS × TWA → target STW) for the Boat-model review panel."""
     from . import polars
-    # follow the selected boat: a fleet profile's cert_polar wins over the bundled own-boat files
-    rows = [tuple(p) for p in (boats.active_boat() or {}).get("cert_polar") or []] or polars.polars_stw()
+    from shared import boat_polar as BP
+    # the selected boat's own polar (#303): its polar files, else its ORC cert, else none
+    block = boats.active_polar()
+    rows = polars.polars_stw(block)
     tws = sorted({r[0] for r in rows})
     twa = sorted({r[1] for r in rows})
     k = lambda x: "%g" % x                 # match JS String() (4.0 -> "4", 45.3 -> "45.3")
     grid = {k(t): {k(a): None for a in twa} for t in tws}
     for t, a, stw in rows:
         grid[k(t)][k(a)] = stw
-    return {"tws_buckets": tws, "twa_buckets": twa, "grid": grid, "n_points": len(rows)}
+    return {"tws_buckets": tws, "twa_buckets": twa, "grid": grid, "n_points": len(rows),
+            "polar": BP.summary(block), "note": None if rows else BP.NO_POLAR}
 
 
 def _playbook_params(body):
@@ -728,7 +734,8 @@ async def playbook_synthesize(body: dict):
     kw = dict(jib_crossovers=_active_jibs(), sail_config=_active_sails(), helm_factor=boats.active_helm_factor(),
               polar_adjustments=_active_adjustments(), wave_coeffs=_active_wave(),
               use_waves=(body or {}).get("use_waves", True),
-              fan_depth=(body or {}).get("fan_depth", "standard"), chart=_playbook_chart())
+              fan_depth=(body or {}).get("fan_depth", "standard"), chart=_playbook_chart(),
+              boat_polar=boats.active_polar())
     if (body or {}).get("sync"):
         # legacy synchronous path (fits the gateway only for small fans) — the UI uses the job
         try:
@@ -781,7 +788,8 @@ async def playbook_freeze(body: dict):
                                          wave_coeffs=_active_wave(),
                                          use_waves=body.get("use_waves", True),
                                          fan_depth=body.get("fan_depth", "standard"),
-                                         chart=_playbook_chart())
+                                         chart=_playbook_chart(),
+                                         boat_polar=boats.active_polar())
         if not bundle.get("variants"):
             return JSONResponse({"detail": "nothing to freeze — no variants",
                                  "bundle": bundle}, status_code=422)

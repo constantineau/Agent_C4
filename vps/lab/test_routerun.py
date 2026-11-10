@@ -20,12 +20,6 @@ import time
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-for _seed in (os.path.join(HERE, "..", "db", "seed"), "/srv"):
-    if os.path.exists(os.path.join(_seed, "polars_sr33.sql")):
-        os.environ["POLARS_FILE"] = os.path.join(_seed, "polars_sr33.sql")
-        os.environ["SAIL_POLARS_FILE"] = os.path.join(_seed, "sr33_sail_polars.json")
-        os.environ["CROSSOVERS_FILE"] = os.path.join(_seed, "sr33_crossovers.json")
-        break
 _tmp = tempfile.mkdtemp()
 os.environ["INGESTED_DIR"] = _tmp
 os.environ["GRIB_CACHE"] = os.path.join(_tmp, "gribcache")
@@ -36,6 +30,8 @@ from app import main, boats, optimizer, current, wave, venue, modelskill  # noqa
 from app import wind as WIND  # noqa: E402
 from app.wind import grib, windfield, models  # noqa: E402
 from app.geo import obstacles as geo  # noqa: E402
+import polar_fixture  # noqa: E402
+polar_fixture.install()     # bare optimizer/sail-plan calls route on sr33's own polar (#303)
 
 ok = True
 
@@ -191,7 +187,10 @@ for label, kw in (("no current/sea state", dict(use_waves=False, use_current=Fal
     a = legacy_run(COURSE, "x", T0, ["gfs", "nam"], 0, avoid=False, on_progress=seen_a.append, **kw)
     b = main._run_optimize(COURSE, "x", T0, ["gfs", "nam"], 0, avoid=False,
                            on_progress=seen_b.append, **kw)
-    check(f"{label}: identical result", a.get("available") and dump(a) == dump(b))
+    # #303: the run now also names the polar it routed on (the boat's own); the rest is unchanged
+    check(f"{label}: identical result", a.get("available")
+          and dump(a) == dump({k: v for k, v in b.items() if k != "polar"}))
+    check(f"{label}: names sr33's own polar", (b.get("polar") or {}).get("boat_id") == "sr33")
     check(f"{label}: identical progress lines", seen_a == seen_b)
 SKILL["on"] = False
 check("the skill weights reached the wind field", "model-skill: huron via 45003" in " ".join(seen_b))

@@ -117,6 +117,9 @@ def _oracle_windfield(bbox, start, t_end, models, race_id, log):
     return wf, "archive"
 
 
+_ACTIVE = object()     # "read the active boat now" (callers that did not capture it at start)
+
+
 def run_judge(race_id, playbook_id=None, models=None, on_progress=None, recording=None):
     """Debrief one RECORDING of a race.
 
@@ -163,7 +166,7 @@ def run_judge(race_id, playbook_id=None, models=None, on_progress=None, recordin
     cur, wv = _own_speed_fields(t, tac, gun, start, log)
     log("scoring the boat's track…")
     scored = _score_actual_track(t, tac.get("oracle") or {}, tac.get("marks") or [], start,
-                                 tac.get("wf"), cur, wv, wave_coeffs=wave_coeffs)
+                                 tac.get("wf"), cur, wv, wave_coeffs=wave_coeffs, boat=boat)
     report = {
         "available": True, "race_id": race_id, "race_name": d.get("name"),
         "playbook_id": pid if pb else None, "course_id": tac.get("course_id"),
@@ -187,7 +190,7 @@ def run_judge(race_id, playbook_id=None, models=None, on_progress=None, recordin
     return report
 
 
-def score_recording(t, wave_coeffs=None, on_progress=None):
+def score_recording(t, wave_coeffs=None, on_progress=None, boat=_ACTIVE):
     """The PERFORMANCE half alone, on today's evidence code: one recording → the scored track
     (polar %, perf_bins, trust, current/wave flags). The re-score (#245) runs this over the
     archived recordings; it needs no playbook and archives nothing. The current and sea-state
@@ -195,7 +198,7 @@ def score_recording(t, wave_coeffs=None, on_progress=None):
     log = on_progress or (lambda *_: None)
     start = ((t or {}).get("window") or {}).get("start_ts") or 0
     cur, wv = _own_speed_fields(t, {}, None, start, log)
-    return _score_actual_track(t, {}, [], start, None, cur, wv, wave_coeffs=wave_coeffs)
+    return _score_actual_track(t, {}, [], start, None, cur, wv, wave_coeffs=wave_coeffs, boat=boat)
 
 
 def _track_span(t, start_epoch):
@@ -256,7 +259,7 @@ def _own_speed_fields(t, tac, gun, start_epoch, log):
     return cur, wv
 
 
-def _regret_basis(cur, wv, boat_from="plan", plan_waves=True):
+def _regret_basis(cur, wv, boat_from="plan", plan_waves=True, polar_changed=False):
     """Which sea-state fields the oracle routed through (#244). Regret measures the strategy call
     only, so the oracle sails the same current and waves as the boat. When a field could not be
     built for the race time (outside the model domain, or the cycle is no longer served), the
@@ -274,6 +277,8 @@ def _regret_basis(cur, wv, boat_from="plan", plan_waves=True):
         notes.append(f"Time lost is without {' and '.join(missing)}: no data for the race time.")
     if boat_from != "plan":
         notes.append("Boat settings are today's: this plan didn't save its own.")
+    if polar_changed:
+        notes.append("Boat polar changed since this plan.")
     return {"current": has_cur, "waves": has_wv, "boat": boat_from,
             "current_source": getattr(cur, "source", None) if has_cur else None,
             "waves_source": getattr(wv, "source", None) if has_wv else None,
@@ -301,6 +306,8 @@ def _oracle_boat_kwargs(boat, pb):
               "jib_crossovers": (boat or {}).get("jib_crossovers") or None,
               "sail_config": boats.sail_config(boat)}
         boat_from = "now"
+    # the race boat's OWN polar (#303), never a default; the plan names the one it was routed on
+    kw["boat_polar"] = boats.polar_for(boat)
     chart = pb.get("chart") or {}
     if chart.get("source"):
         kw["source"] = chart["source"]
@@ -365,7 +372,10 @@ def _tactics(d, race_id, pb, models, log, boat=None):
         oracle_wv = ZeroWave()     # the boat's own speed is still scored on `wv`
     oracle = optimizer.optimize_course(d, course_id, start, wf, avoid=True, cur=cur,
                                        waves=oracle_wv, **boat_kw)
-    basis = _regret_basis(cur, wv, boat_from, plan_waves)
+    plan_polar = ((pb.get("routing") or {}).get("polar") or {}).get("version")
+    now_polar = (boat_kw.get("boat_polar") or {}).get("version")
+    basis = _regret_basis(cur, wv, boat_from, plan_waves,
+                          polar_changed=bool(plan_polar and now_polar and plan_polar != now_polar))
     if not oracle.get("available", True) and oracle.get("note"):
         return {"available": False, "start_epoch": start, "wf": wf, "cur": cur, "wave": wv,
                 "windfield": {**wf.status(), "basis": wind_basis},
@@ -416,11 +426,8 @@ def _tactics(d, race_id, pb, models, log, boat=None):
     }
 
 
-_ACTIVE = object()     # "read the active boat now" (callers that did not capture it at start)
-
-
 def _score_actual_track(t, oracle, marks, start_epoch, wf=None, cur=None, wave=None,
-                        wave_coeffs=_ACTIVE):
+                        wave_coeffs=_ACTIVE, boat=_ACTIVE):
     """Score the recording against the oracle line (helm execution) — and, with no oracle at all,
     against the boat's own polar alone. `cur` (the actual-current field) lets the polar%/bins use
     speed-through-water, so a measured >100% reflects real boat speed rather than a fair tide.
@@ -429,9 +436,14 @@ def _score_actual_track(t, oracle, marks, start_epoch, wf=None, cur=None, wave=N
     if not t or not t.get("fixes"):
         return {"available": False,
                 "note": "No boat track for this recording. Load the boat's log or upload a GPX."}
+    from . import polars as POL
+    from shared import boat_polar as BP
+    # the debrief boat's OWN polar (#303): "% of polar" against another boat's is meaningless
+    bpol = boats.polar_for(boats.active_boat() if boat is _ACTIVE else boat)
+    if not POL.polars_stw(bpol):
+        return {"available": False, "note": BP.NO_POLAR}
     try:
-        from . import polars as POL
-        scored = track.score_track(t, oracle, marks, start_epoch, wf=wf, polars=POL.polars_stw(),
+        scored = track.score_track(t, oracle, marks, start_epoch, wf=wf, polars=POL.polars_stw(bpol),
                                    cur=cur, wave=wave,
                                    wave_coeffs=(boats.active_wave_coeffs()
                                                 if wave_coeffs is _ACTIVE else wave_coeffs))

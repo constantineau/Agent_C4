@@ -25,9 +25,8 @@ Environment=REROUTE_DIR=/home/agent-c4/c4-reroute
 Environment=INGESTED_DIR=/home/agent-c4/c4-reroute/ingested
 Environment=BOATS_DIR=/home/agent-c4/Agent_C4/vps/lab/boats
 Environment=REROUTE_BOAT=sr33
-Environment=POLARS_FILE=/home/agent-c4/Agent_C4/vps/db/seed/polars_sr33.sql
-Environment=CROSSOVERS_FILE=/home/agent-c4/Agent_C4/vps/db/seed/sr33_crossovers.json
-Environment=SAIL_POLARS_FILE=/home/agent-c4/Agent_C4/vps/db/seed/sr33_sail_polars.json
+# The polar is the deployed boat's, carried by the Deploy push (#304). Only when the push carried
+# none does the run use the files the boat profile names, found in this checkout (shared/boat_polar.py).
 # Optional overrides (REROUTE_MODELS, budgets, ...) in /etc/sr33/reroute.env
 EnvironmentFile=-/etc/sr33/reroute.env
 ExecStart=/home/agent-c4/plume-venv/bin/python service.py

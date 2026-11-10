@@ -32,6 +32,7 @@ import math
 import os
 import time
 
+from shared import boat_polar as BPm
 from shared import race_def
 from . import forecast_ref
 from . import jobs
@@ -248,32 +249,31 @@ def _opus_synthesis(playbook: dict, definition, course_id, race_name):
 
 # ---------------------------------------------------------------------------- bundle assembly
 
-def _boat_model():
+def _boat_model(boat=None, boat_polar=None):
     """The reviewed boat sail/draft model frozen into the bundle — so the polars + sail crossovers
     the homework assumes travel onboard (the copilot/engine can surface the per-leg sail plan and the
-    crew can review what was loaded). Boat-scoped via the Lab's active BoatProfile."""
-    try:
-        from . import boats
-        b = boats.active_boat() or {}
-    except Exception:
-        b = {}
-    sm = sailplan.model()
+    crew can review what was loaded). Boat-scoped: the boat's profile and ITS polar block (#303);
+    a boat with no crossover table freezes no sail zones, never another boat's."""
+    b = boat or {}
+    xo = sailplan.of(boat_polar)
+    sm = sailplan.model(xo)
     draft_m = b.get("draft_m")
     return {
-        "boat_id": b.get("boat_id") or sm.get("boat_id"),
+        "boat_id": b.get("boat_id"),
         "name": b.get("name"),
         "draft_m": draft_m,
         "draft_ft": round(draft_m / 0.3048, 1) if draft_m is not None else None,
         "polars_source": sm.get("source"),
+        "polar": BPm.summary(boat_polar),          # which polar the homework was routed on
         # the boat's own inventory (incl. J2/J3) wins over the cert's single-headsail list
         "sail_inventory": b.get("sail_inventory") or sm.get("inventory", []),
         "sail_names": sm.get("sail_names", {}),
         # per-TWS×TWA zones with the upwind jib specialised to J1/J2/J3 by this boat's change-downs
         "crossovers": sailplan.crossovers_specialized(
             b.get("jib_crossovers") or [],
-            {"code0": b.get("code0") or {}, "main_reefs": b.get("main_reefs") or {}}),
+            {"code0": b.get("code0") or {}, "main_reefs": b.get("main_reefs") or {}}, xo=xo),
         # per-TWS toss-up bands (two sails within ~2% of target — the near-ties the zones can't show)
-        "overlaps": sailplan.overlaps_specialized(b.get("jib_crossovers") or []),
+        "overlaps": sailplan.overlaps_specialized(b.get("jib_crossovers") or [], xo=xo),
         "jib_crossovers": b.get("jib_crossovers", []),  # J1/J2/J3 by TWS (crew/sailmaker, not cert)
         # Code 0 band + main reef points — crew config the cert can't express (label overlays);
         # frozen so the copilot's sail-configuration calls are grounded in the reviewed model
@@ -557,13 +557,16 @@ _POS_TWA = {"beat": 45.0, "upwind": 45.0, "reach": 100.0, "reaching": 100.0,
             "run": 150.0, "downwind": 150.0}
 
 
-def _sail_guidance_plays(consensus, jib_crossovers, sail_config=None):
+def _sail_guidance_plays(consensus, jib_crossovers, sail_config=None, boat_polar=None):
     """Phase-C SAIL GUIDANCE plays (no route — a pre-authored call): for each nominal leg's sail,
     where is the crossover if the breeze runs above/below forecast, and what does the change buy?
     Grounded in the frozen boat model (crossovers + per-sail polars) — never invented."""
     from . import polars as POLm
     from . import sailplan
-    SP = POLm.sail_polars()
+    SP = POLm.sail_polars(boat_polar)           # the boat's own curves (#303); none → no gains
+    xo = sailplan.of(boat_polar)
+    if not xo:
+        return []                               # no crossover table → no sail calls to author
     seen, out = set(), []
     for i, leg in enumerate((consensus or {}).get("legs") or []):
         sail = leg.get("sail")
@@ -577,7 +580,7 @@ def _sail_guidance_plays(consensus, jib_crossovers, sail_config=None):
                 w2 = w + step * dw
                 if w2 < 3:
                     break
-                cand = sailplan.optimal_sail(w2, twa, jib_crossovers, sail_config)
+                cand = sailplan.optimal_sail(w2, twa, jib_crossovers, sail_config, xo=xo)
                 if cand and cand != sail:
                     s2, thr = cand, round(w2, 1)
                     break
@@ -661,7 +664,7 @@ def _reef_guidance_plays(consensus, sail_config):
 
 
 def _build_plays(playbook, definition, course_id, venue_stats=None, jib_crossovers=None,
-                 sail_config=None, chart=None):
+                 sail_config=None, chart=None, boat_polar=None):
     """The v2 plays: the external scenario fan + the internal fan (pace/gear-loss routes) + the
     sail GUIDANCE plays; registry predicates resolved against the route context + the venue's
     fleet-normal stats (percentile-framed, locked input #3); frontier narratives with the
@@ -669,7 +672,8 @@ def _build_plays(playbook, definition, course_id, venue_stats=None, jib_crossove
     from . import scenarios as scen
     v2 = playbook.get("v2") or {}
     entries = list(v2.get("scenario_routes") or [])
-    entries += _sail_guidance_plays(playbook.get("consensus"), jib_crossovers, sail_config)
+    entries += _sail_guidance_plays(playbook.get("consensus"), jib_crossovers, sail_config,
+                                    boat_polar)
     entries += _reef_guidance_plays(playbook.get("consensus"), sail_config)
     if not entries:
         return [], v2, None
@@ -750,7 +754,8 @@ def _build_plays(playbook, definition, course_id, venue_stats=None, jib_crossove
 
 def synthesize(definition, course_id, start_epoch, models, ensemble_members=0, time_budget_s=200,
                jib_crossovers=None, sail_config=None, helm_factor=1.0, use_waves=True,
-               polar_adjustments=None, wave_coeffs=None, fan_depth="standard", chart=None):
+               polar_adjustments=None, wave_coeffs=None, fan_depth="standard", chart=None,
+               boat_polar=None):
     """Lab-2a fan-out → Lab-2b synthesized bundle (UNSIGNED draft). Freeze (`sign_bundle`) before
     it's relied on / deployed onboard. Passes through the not-available case from 2a unchanged.
     `chart` = {"source", "safety_depth"} snapshot when the job starts (#149): every route uses it,
@@ -758,7 +763,15 @@ def synthesize(definition, course_id, start_epoch, models, ensemble_members=0, t
     routed_on = race_def.course_hash(definition, course_id)    # before routing touches anything
     # the boat the job STARTED on (#182-8): switching the Lab's active boat mid-run must not relabel
     # the bundle or change the boat profile Deploy sends with it
-    boat_model = _boat_model()
+    try:
+        from . import boats
+        boat = boats.active_boat() or {}
+    except Exception:
+        boat = {}
+    if boat_polar is None:              # the boat's OWN polar (#303), never a default
+        from . import boats
+        boat_polar = boats.polar_for(boat)
+    boat_model = _boat_model(boat, boat_polar)
     from .geo import obstacles as _obs_mod
     chart = dict(chart or {})          # unset → the defaults the obstacle builder would use
     chart = {"source": (chart.get("source") or _obs_mod.COASTLINE_SOURCE).strip().lower(),
@@ -769,7 +782,7 @@ def synthesize(definition, course_id, start_epoch, models, ensemble_members=0, t
                                  jib_crossovers=jib_crossovers, sail_config=sail_config,
                                  helm_factor=helm_factor, use_waves=use_waves,
                                  polar_adjustments=polar_adjustments, wave_coeffs=wave_coeffs,
-                                 fan_depth=fan_depth, chart=chart)
+                                 fan_depth=fan_depth, chart=chart, boat_polar=boat_polar)
     if not playbook.get("available"):
         return playbook
 
@@ -797,7 +810,8 @@ def synthesize(definition, course_id, start_epoch, models, ensemble_members=0, t
     venue_stats = _venue_stats()
     plays, v2meta, play_note = _build_plays(playbook, definition, course_id,
                                             venue_stats=venue_stats, jib_crossovers=jib_crossovers,
-                                            sail_config=sail_config, chart=chart)
+                                            sail_config=sail_config, chart=chart,
+                                            boat_polar=boat_polar)
     corridor = (v2meta.get("corridor") or {}) if v2meta else {}
     headline = syn.get("headline", "")
     if corridor.get("note"):
@@ -836,7 +850,8 @@ def synthesize(definition, course_id, start_epoch, models, ensemble_members=0, t
         # be sailed by the same boat (#244) even after the boat's settings change
         "routing": {"helm_factor": helm_factor, "polar_adjustments": polar_adjustments or [],
                     "wave_coeffs": wave_coeffs, "jib_crossovers": jib_crossovers or [],
-                    "sail_config": sail_config, "use_waves": bool(use_waves)},
+                    "sail_config": sail_config, "use_waves": bool(use_waves),
+                    "polar": BPm.summary(boat_polar)},
         # the chart and no-go depth every route above was built on (#149); Deploy sends this chart
         "chart": {"source": chart["source"], "safety_depth_m": chart["safety_depth"]},
         # the common forecast the plan was built on → the onboard forecast-drift branch trigger

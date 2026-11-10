@@ -387,7 +387,7 @@ def get_polar_target(tws: float, twa: float):
     there is no target (None)."""
     table = [r for r in datasource.active().polars_stw() if r[2] is not None]
     if not table:
-        return {"available": False, "note": "no polar data loaded"}
+        return {"available": False, "note": "No boat polar loaded."}
     stw = shared_polar.target(table, tws, twa)
     if not stw:
         return {"available": True, "query": {"tws": tws, "twa": twa}, "target_stw": None,

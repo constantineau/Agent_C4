@@ -21,12 +21,6 @@ import tempfile
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-for _seed in (os.path.join(HERE, "..", "db", "seed"), "/srv"):
-    if os.path.exists(os.path.join(_seed, "polars_sr33.sql")):
-        os.environ["POLARS_FILE"] = os.path.join(_seed, "polars_sr33.sql")
-        os.environ["SAIL_POLARS_FILE"] = os.path.join(_seed, "sr33_sail_polars.json")
-        os.environ["CROSSOVERS_FILE"] = os.path.join(_seed, "sr33_crossovers.json")
-        break
 _tmp = tempfile.mkdtemp()
 os.environ["INGESTED_DIR"] = _tmp
 os.environ["GRIB_CACHE"] = os.path.join(_tmp, "gribcache")
@@ -36,6 +30,8 @@ from app import main, boats, optimizer as OPT, current, wave, synthesis as SYN, 
 from app import wind as WIND  # noqa: E402
 from app.wind import grib, windfield  # noqa: E402
 from app.geo import obstacles as OB  # noqa: E402
+import polar_fixture  # noqa: E402
+polar_fixture.install()     # bare optimizer/sail-plan calls route on sr33's own polar (#303)
 
 ok = True
 

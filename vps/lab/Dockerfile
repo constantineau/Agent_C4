@@ -5,8 +5,7 @@ FROM python:3.12-slim
 WORKDIR /srv
 ENV PYTHONUNBUFFERED=1 PYTHONPATH=/srv \
     RACES_DIR=/srv/races BOATS_DIR=/srv/boats INGESTED_DIR=/srv/ingested WEB_DIR=/srv/web \
-    POLARS_FILE=/srv/polars_sr33.sql CROSSOVERS_FILE=/srv/sr33_crossovers.json \
-    SAIL_POLARS_FILE=/srv/sr33_sail_polars.json \
+    BOAT_DATA_DIR=/srv/boatdata \
     GRIB_CACHE=/srv/gribcache ENC_CACHE=/srv/enc
 
 # gdal-bin = the S-57 driver (ogr2ogr) used at PREP time to turn NOAA ENC charts into GeoJSON
@@ -26,12 +25,12 @@ COPY vps/lab/web/ ./web/
 COPY pi/console/dashboard/plume.js ./web/plume.js
 COPY vps/lab/races/ ./races/
 COPY vps/lab/boats/ ./boats/
-# the one canonical ORC polar (same source the onboard engine parses) for the optimizer
-COPY vps/db/seed/polars_sr33.sql ./polars_sr33.sql
-# the sail crossover model (per-TWS sail zones) for routing-fidelity 2b — per-leg sail plan
-COPY vps/db/seed/sr33_crossovers.json ./sr33_crossovers.json
-# the per-sail polar curves for routing-fidelity 2g — sail-aware routing (hold vs peel)
-COPY vps/db/seed/sr33_sail_polars.json ./sr33_sail_polars.json
+# Boat data: each boat profile names its OWN polar files (`polar_files`, #303) and they are looked
+# up here — the ORC polar envelope, per-sail curves (2g), the crossover table (2b) and the speed
+# guide (sent to the boat at Deploy). No boat's files are a default: a profile that names none
+# routes on its inline cert polar or not at all.
+COPY vps/db/seed/polars_*.sql vps/db/seed/*_sail_polars.json vps/db/seed/*_crossovers.json \
+     vps/agent/knowledge/*_speed_guide.md ./boatdata/
 
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

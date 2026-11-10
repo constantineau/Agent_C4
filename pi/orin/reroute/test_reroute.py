@@ -35,12 +35,6 @@ os.environ["DEPLOY_BOAT_ID"] = "sr33"  # prep_chart builds for the Deploy boat, 
 os.environ["PLUME_DIR"] = os.path.join(_tmp, "plume")
 os.environ["GRIB_ISOLATE_PARSE"] = "0"
 os.environ["INGESTED_DIR"] = os.path.join(_tmp, "ingested")
-for _seed in (os.path.join(REPO, "vps", "db", "seed"), "/srv"):
-    if os.path.exists(os.path.join(_seed, "polars_sr33.sql")):
-        os.environ["POLARS_FILE"] = os.path.join(_seed, "polars_sr33.sql")
-        os.environ["SAIL_POLARS_FILE"] = os.path.join(_seed, "sr33_sail_polars.json")
-        os.environ["CROSSOVERS_FILE"] = os.path.join(_seed, "sr33_crossovers.json")
-        break
 for _b in (os.path.join(REPO, "vps", "lab", "boats"), "/srv/boats"):
     if os.path.isdir(_b):
         os.environ["BOATS_DIR"] = _b
@@ -717,13 +711,19 @@ out9 = job.run(dict(REQ, models=["gfs", "nam"]), now=NOW, is_online=lambda: Fals
 check("missing: nam, said in a warning", out9["weather"]["missing"] == ["nam"]
       and "No forecast from nam." in out9["warnings"])
 
-print("3e5) no boat profile is said, not hidden")
+print("3e5) no boat profile → no polar → refused, never another boat's polar (#304)")
 _bid = job.BOAT_ID
 job.BOAT_ID = "no-such-boat"
-out10 = job.run(REQ, now=NOW, is_online=lambda: False)
+try:
+    job.run(REQ, now=NOW, is_online=lambda: False)
+    check("refused", False)
+except job.RunError as e:
+    check("refused: 'No polar for this boat.'", str(e) == job.NO_POLAR)
 job.BOAT_ID = _bid
-check("warning + no boat block", out10["boat"] is None and job.NO_BOAT in out10["warnings"])
 check("with the profile: which one it used", out["boat"]["boat_id"] == "sr33")
+check("…and which polar: sr33's own files, from the Orin's checkout, said",
+      out["polar"]["boat_id"] == "sr33" and out["polar"]["source"] == "files"
+      and out["polar"]["from"] == "orin" and job.NOT_DEPLOYED_POLAR in out["warnings"])
 
 print("3e6) the chart + boat profile carried by the Deploy push (#139, #140)")
 from shared import boat_profile  # noqa: E402
@@ -800,8 +800,59 @@ for name, field, value in (("polar_adjustments = 1", "polar_adjustments", 1),
 bb, info, note = job.pick_boat({"chart": None, "boat": None})
 check("the push carried no profile → the Orin's own, warned", info["source"] == "orin"
       and note == job.NOT_DEPLOYED_BOAT)
-for w_ in (job.NOT_DEPLOYED_BOAT, job.BAD_BOAT, job.OTHER_BOAT):
+for w_ in (job.NOT_DEPLOYED_BOAT, job.BAD_BOAT, job.OTHER_BOAT, job.NO_POLAR,
+           job.NOT_DEPLOYED_POLAR):
     check(f"short: {w_!r}", len(w_.split()) <= 12)
+
+print("3e7) the deployed boat's polar (#304)")
+from shared import boat_polar  # noqa: E402
+
+P33 = boat_polar.resolve(REVIEWED)
+check("the Deploy's profile without a polar block → the profile's own files, said",
+      out11["polar"]["from"] == "orin" and job.NOT_DEPLOYED_POLAR in out11["warnings"])
+out12 = job.run(dict(REQ, assets=dict(CARRY, polar=P33)), now=NOW, is_online=lambda: False)
+check("with the Deploy's polar: used and named (id, source, version)",
+      out12["available"] and out12["polar"] == dict(boat_polar.summary(P33), **{"from": "deploy"})
+      and job.NOT_DEPLOYED_POLAR not in out12["warnings"])
+check("…same route as the Orin's own copy of sr33's polar",
+      out12["total_hours"] == out11["total_hours"] and out12["points"] == out11["points"])
+pol, src = job.pick_polar(dict(CARRY, polar=dict(P33, label="x")), REVIEWED, {"source": "deploy"})
+check("a tampered polar block → not used, the profile's own", src == "orin")
+BRAVO = json.load(open(os.path.join(REPO, "vps", "lab", "boats", "bravo.json")))
+PB = boat_polar.resolve(BRAVO)
+pol, src = job.pick_polar(dict(CARRY, polar=PB), REVIEWED, {"source": "deploy"})
+check("another boat's polar block with sr33's profile → not used", src == "orin"
+      and pol["boat_id"] == "sr33")
+# Bravo deployed (its Orin's REROUTE_BOAT is bravo): routes on Bravo's cert, no sr33 file opened
+import builtins  # noqa: E402
+import io  # noqa: E402
+
+opened = []
+_open, _io = builtins.open, io.open
+
+
+def spy(file, *a, **k):
+    opened.append(os.path.basename(str(file)))
+    return _open(file, *a, **k)
+
+
+CARRY_B = {"chart": good, "boat": BRAVO, "boat_version": boat_profile.version(BRAVO),
+           "polar": PB, "received_at": NOW - 600}
+job.BOAT_ID = "bravo"
+builtins.open = io.open = spy
+try:
+    out13 = job.run(dict(REQ, assets=CARRY_B), now=NOW, is_online=lambda: False)
+finally:
+    builtins.open, io.open = _open, _io
+    job.BOAT_ID = _bid
+check("Bravo deployed: a route, on Bravo's own cert polar",
+      out13["available"] and out13["boat"]["boat_id"] == "bravo"
+      and out13["polar"]["boat_id"] == "bravo" and out13["polar"]["source"] == "cert"
+      and out13["polar"]["from"] == "deploy")
+check("…a different boat, a different route (Bravo's speeds, not sr33's)",
+      out13["finish_eta"] != out12["finish_eta"] and out13["points"] != out12["points"])
+leaked = sorted(set(opened) & set(REVIEWED["polar_files"].values()))
+check(f"…and no sr33 polar file opened (opened: {leaked or 'none'})", not leaked)
 
 print("3f) an incomplete route makes no finish claim")
 _orig = job.routerun.run_course

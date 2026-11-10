@@ -9,7 +9,7 @@ remaining marks. Issue #124. The crew's "Re-route now" button (#125) will call i
   overlays, optimizer). The Lab's Optimize button and this service both call it.
 - **One download layer.** It reads the onboard plume's GRIB cache (`pi/orin/plume`). Offline it uses
   what's cached. Online it may download what's missing, within a time budget.
-- **Legal in-race (RRS 41):** the boat's own computer, own position and polars, public forecasts.
+- **Legal in-race (RRS 41):** the boat's own computer, own position and its own polar, public forecasts.
   The result is labelled "Off the playbook", like the Pi's small re-route.
 
 The Pi's small re-router (`vps/agent/app/reoptimize.py`) stays as the fallback when the Orin is down.
@@ -49,8 +49,10 @@ wall off its meridian). The Lab still routes every leg on one course-wide mask (
    (`forecast_until`); a finish later than that warns "Forecast ends before the finish. Later legs
    use its last hour." The boat profile is the Lab's reviewed one from the Deploy push; `boat` names
    the one used (id, version, source). Without it the Orin's own copy is used and the result warns
-   "Boat profile not from Deploy. May be the raw polars."; with none at all, "Boat profile missing.
-   Route uses the raw polars."
+   "Boat profile not from Deploy."; with none at all the run is refused: "No polar for this boat.
+   Re-route not run." The polar is the deployed boat's own (#304), carried with the profile;
+   `polar` in the result names it (boat, source `files`/`cert`, version, and `from`: `deploy`, or
+   `orin` for the profile's own files in this checkout, with "Boat polar not from Deploy.").
 5. `routerun.run_course` routes it (Lab defaults; no Opus briefing, no map grids, no venue model
    skill, current and sea state off unless enabled and online).
 6. The result goes to `last_result.json`. The Pi fetches it once, stores it, and serves it to the
@@ -121,7 +123,9 @@ Result (`c4.reroute/v1`):
              "download_budget_spent": false, "box": "cache"},
  "chart": {"land": true, "source": "enc"},
  "boat": {"boat_id": "sr33", "version": "3f2a9c1b7d4e", "source": "deploy", "received_at": 0,
-          "helm_factor": 0.931, "polar_cells": 24, "draft_m": 2.1336}}
+          "helm_factor": 0.931, "polar_cells": 24, "draft_m": 2.1336},
+ "polar": {"boat_id": "sr33", "source": "files", "label": "polars_sr33.sql",
+           "version": "9c0e1d2a3b4f", "from": "deploy"}}
 ```
 
 `boat.version` is a short hash of the profile's content: any edit gives a new one. `source` is
@@ -153,6 +157,10 @@ iPad Re-route ──▶ Pi ──POST /run {…, definition, assets}──▶ Or
   draft), with its version, for the boat the locked playbook was built with (its
   `boat_model.boat_id`; `DEPLOY_BOAT_ID`, no default, only when the bundle doesn't say). If
   that boat has no profile, nothing is sent for it (never another boat's) and the step is red.
+- **Boat polar (#304):** that boat's own polar block (`shared/boat_polar.py`: envelope, per-sail
+  curves, crossover table, speed guide), resolved from its profile's `polar_files` or inline ORC
+  cert. A boat with no polar sends none and the step is red. The Pi engine's % of polar, targets
+  and sail dial read the same block; nothing polar is baked into the engine image.
 - **Grid checked first:** the Pi and the Orin derive the chart's grid from its box and cell size,
   require it to match the stated size and stay under 20 M cells, before anything is allocated.
 - The Pi keeps them (`orin-assets.json` next to the engine store, atomic replace) and puts them

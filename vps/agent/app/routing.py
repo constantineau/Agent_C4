@@ -29,12 +29,16 @@ _cache = {"key": None, "t": 0, "val": None}
 CACHE_TTL = 25
 
 _POLARS = None
+_POLARS_AT = 0.0
+_POLARS_TTL_S = 60.0      # a Deploy push can replace the boat's polar (#304): re-read now and then
 
 
 def _polars():
-    global _POLARS
-    if _POLARS is None:
+    global _POLARS, _POLARS_AT
+    now = time.monotonic()
+    if _POLARS is None or now - _POLARS_AT >= _POLARS_TTL_S:
         _POLARS = [(tws, twa, stw) for (tws, twa, stw) in datasource.active().polars_stw() if stw]
+        _POLARS_AT = now
     return _POLARS
 
 

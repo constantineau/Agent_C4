@@ -5,9 +5,12 @@ itself:
 
   * the course's LAND chart: the Orin has no GDAL and no shoreline data, so the Lab builds the
     land-only mask (format "land-v2") with a fingerprint of the course, zones and no-go depth;
-  * the reviewed BOAT PROFILE (helm factor, approved polar cells, draft) on the Lab's volume.
+  * the reviewed BOAT PROFILE (helm factor, approved polar cells, draft) on the Lab's volume;
+  * that boat's own POLAR (#304): envelope, per-sail curves, crossover table and speed guide,
+    resolved from its profile (shared/boat_polar.py). The Pi engine's % of polar, targets and
+    sail dial and the Orin's re-route read this, never polar files in their images.
 
-`build` makes both into one payload (`c4.orin-assets/v1`). The Deploy push posts it to the Pi
+`build` makes them into one payload (`c4.orin-assets/v1`). The Deploy push posts it to the Pi
 engine (`POST /reroute/assets`) right after the course; the Pi keeps it and hands it to the Orin
 with each re-route request. Built only when the owner presses Push: nothing here runs on its own.
 
@@ -35,6 +38,7 @@ LAND_LAYERS = ("coastline", "shoal", "obstruction")
 NO_MARKS = "Course has no mark positions. No chart built."
 NO_LAND = "No land in the chart. The shoreline didn't load."
 NO_BOAT = "No boat profile for {boat}. Chart and profile not sent."
+NO_POLAR = "No polar for this boat. The boat will show no polar."
 BUILD_FAILED = "Chart build failed. Try again."
 NO_DEPTHS = "Depth chart didn't load. No chart built. Try again."
 DRAFT_CHANGED = "Boat draft changed since this playbook. Build it again."
@@ -120,8 +124,13 @@ def build(definition, course_id, now=None, bundle=None):
             chart, why = None, BUILD_FAILED
         if why:
             problems.append(why)
+    polar = boats.polar_for(boat) if boat is not None else None
+    if boat is not None and polar is None:
+        problems.append(NO_POLAR)
     payload = {"schema": SCHEMA, "boat_id": bid, "race_id": (definition or {}).get("race_id"),
                "course_id": course_id, "built_at": int(time.time() if now is None else now),
                "chart": chart, "boat": boat,
-               "boat_version": boat_profile.version(boat) if boat else None}
+               "boat_version": boat_profile.version(boat) if boat else None,
+               # the boat's own polar block (null = none: the boat drops what it held)
+               "polar": polar}
     return payload, problems

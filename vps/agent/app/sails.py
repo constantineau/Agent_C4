@@ -1,30 +1,26 @@
-"""Sail-range advice from the SR33 ORC Speed Guide.
+"""Sail-range advice from the boat's speed guide.
 
-Parses the per-TWS tables in knowledge/sr33_speed_guide.md (each row carries the optimal
-Sail at that TWA) into contiguous sail ZONES per wind speed, then answers: given live TWS
-and TWA, which sail is optimal, where the boat sits within that sail's TWA band, and how
-far to the next crossover/peel. Feeds the iPad sail-range dial and the get_sail_advice tool.
+Reads the per-TWS speed-guide tables (each row carries the optimal Sail at that TWA) as contiguous
+sail ZONES per wind speed, then answers: given live TWS and TWA, which sail is optimal, where the
+boat sits within that sail's TWA band, and how far to the next crossover/peel. Feeds the iPad
+sail-range dial and the get_sail_advice tool.
 
-The inventory is jib (J1) upwind → A3 (reach) → S1 (run); the crossover TWAs shift with
-TWS, so zones are recomputed from the nearest TWS bucket. (The cert also rates an A2 the
-boat does NOT carry — build_speed_guide.py excludes it from every generated artifact.)
+The guide is the BOAT's (#304). Aboard (`DATA_SOURCE=onboard`) it is the deployed boat's, carried
+by the Lab's Deploy push with its polar (`orinassets.boat_polar()`); nothing in the image is read.
+On the shore agent it is the files named for its `BOAT_ID` (`knowledge/<boat>_speed_guide.md`,
+`<boat>_crossovers.json`). Neither → "No boat polar loaded.", never another boat's guide.
+
+The crossover TWAs shift with TWS, so zones are recomputed from the nearest TWS bucket.
 """
 import json
 import os
-import re
 
+from shared import boat_polar as BP
 from shared import units
 
 _HERE = os.path.dirname(__file__)
-_GUIDE = os.path.join(_HERE, "..", "knowledge", "sr33_speed_guide.md")
-# The crossover model (same file the Lab reads) carries the per-TWS "toss-up" overlap bands — two sails
-# within ~1.5% of target, the near-ties the winner-take-all zones hide. Baked into the agent/engine
-# image's knowledge/ dir; falls back to the repo seed path for local runs.
-_XOVER_CANDS = [
-    os.environ.get("CROSSOVERS_FILE"),
-    os.path.join(_HERE, "..", "knowledge", "sr33_crossovers.json"),
-    os.path.join(_HERE, "..", "..", "db", "seed", "sr33_crossovers.json"),
-]
+_KNOWLEDGE = os.path.join(_HERE, "..", "knowledge")
+_SEED = os.path.join(_HERE, "..", "..", "db", "seed")
 
 # Friendly order + colors (hex) used by the dial, keyed by sail family prefix.
 SAIL_ORDER = ["J1", "A3", "S1"]
@@ -33,13 +29,6 @@ SAIL_LABEL = {"J1": "Jib (J1)", "A3": "Asym A3", "S1": "Kite (S1)", "C0": "Code 
 # crew-config sails (rated bands come from the frozen boat model, not the cert)
 CREW_SAILS = ("J1", "J2", "J3", "C0", "SS", "A3", "S1")
 _CERT_EQUIV = {"J1": "J1", "J2": "J1", "J3": "J1", "A3": "A3", "S1": "S1"}
-
-
-def _num(s):
-    try:
-        return float(s.strip().rstrip("°"))
-    except (ValueError, AttributeError):
-        return None
 
 
 def _family(sail):
@@ -53,64 +42,89 @@ def _family(sail):
     return None
 
 
-def _parse_guide():
-    """{tws: [ {twa, sail, btv, vmg, awa, heel}, ... ]} sorted by twa."""
-    sections, tws = {}, None
+def _sections_of(guide):
+    """{"<tws>": [rows]} (a polar block's speed guide) → {tws: [{twa, sail(family), …}]}."""
+    out = {}
+    for k, rows in (guide or {}).items():
+        try:
+            tws = float(k)
+        except (TypeError, ValueError):
+            continue
+        rs = [dict(r, sail=_family(r.get("sail"))) for r in rows or ()
+              if isinstance(r, dict) and isinstance(r.get("twa"), (int, float))]
+        if rs:
+            out[tws] = sorted(rs, key=lambda r: r["twa"])
+    return out
+
+
+def _overlaps_of(xo):
+    """{tws_bucket:int -> [ {sails:[s1,s2], twa_min, twa_max}, … ]} from a crossover table, or {}."""
     try:
-        lines = open(_GUIDE).read().splitlines()
-    except OSError:
+        return {int(float(k)): v for k, v in ((xo or {}).get("overlaps") or {}).items()}
+    except (TypeError, ValueError, AttributeError):
         return {}
-    for line in lines:
-        m = re.match(r"##\s*TWS\s*([\d.]+)\s*kn", line)
-        if m:
-            tws = float(m.group(1))
-            sections[tws] = []
-            continue
-        if tws is None or not line.lstrip().startswith("|"):
-            continue
-        cells = [c.strip() for c in line.strip().strip("|").split("|")]
-        if len(cells) < 9 or not re.match(r"[\d.]+°?$", cells[0]):
-            continue  # header / separator / malformed
-        sections[tws].append({
-            "twa": _num(cells[0]), "btv": _num(cells[1]), "vmg": _num(cells[2]),
-            "awa": _num(cells[4]), "heel": _num(cells[5]), "sail": _family(cells[8]),
-        })
-    for rows in sections.values():
-        rows.sort(key=lambda r: r["twa"])
-    return sections
 
 
-_SECTIONS = _parse_guide()
+_MEMO = {"key": None, "guide": ({}, {})}
 
 
-def _load_overlaps():
-    """{tws_bucket:int -> [ {sails:[s1,s2], twa_min, twa_max}, … ]} from the crossover model, or {}."""
-    for p in _XOVER_CANDS:
-        if p and os.path.exists(p):
+def _shore_files():
+    bid = (os.environ.get("BOAT_ID") or "").strip()
+    if not bid or not BP.name_ok(f"{bid}_speed_guide.md"):
+        return None, None
+    guide = os.path.join(_KNOWLEDGE, f"{bid}_speed_guide.md")
+    xo = next((p for p in (os.path.join(_KNOWLEDGE, f"{bid}_crossovers.json"),
+                           os.path.join(_SEED, f"{bid}_crossovers.json")) if os.path.exists(p)),
+              None)
+    return (guide if os.path.exists(guide) else None), xo
+
+
+def _guide():
+    """(sections, overlaps) of THIS boat's speed guide (see the module doc); ({}, {}) when none."""
+    if os.environ.get("DATA_SOURCE", "").strip().lower() == "onboard":
+        from . import orinassets
+        block = orinassets.boat_polar()
+        key = ("deploy", (block or {}).get("version"))
+        if _MEMO["key"] != key:
+            _MEMO["key"] = key
+            _MEMO["guide"] = (_sections_of((block or {}).get("speed_guide")),
+                              _overlaps_of((block or {}).get("crossovers")))
+        return _MEMO["guide"]
+    g, x = _shore_files()
+    key = ("shore", g, x)
+    if _MEMO["key"] != key:
+        _MEMO["key"] = key
+        sections, overlaps = {}, {}
+        if g:
             try:
-                with open(p) as f:
-                    d = json.load(f)
-                return {int(k): v for k, v in (d.get("overlaps") or {}).items()}
-            except (OSError, ValueError, TypeError):
-                continue
-    return {}
-
-
-_OVERLAPS = _load_overlaps()
+                with open(g, encoding="utf-8") as f:
+                    sections = _sections_of(BP.parse_speed_guide(f.read()))
+            except OSError:
+                sections = {}
+        if x:
+            try:
+                with open(x) as f:
+                    overlaps = _overlaps_of(json.load(f))
+            except (OSError, ValueError):
+                overlaps = {}
+        _MEMO["guide"] = (sections, overlaps)
+    return _MEMO["guide"]
 
 
 def _overlaps_for(tws_bucket):
     """The toss-up bands for a TWS bucket (nearest key), TWA-sorted."""
-    if not _OVERLAPS or tws_bucket is None:
+    overlaps = _guide()[1]
+    if not overlaps or tws_bucket is None:
         return []
-    b = min(_OVERLAPS.keys(), key=lambda k: abs(k - tws_bucket))
-    return sorted(_OVERLAPS.get(b, []), key=lambda o: o.get("twa_min", 0))
+    b = min(overlaps.keys(), key=lambda k: abs(k - tws_bucket))
+    return sorted(overlaps.get(b, []), key=lambda o: o.get("twa_min", 0))
 
 
 def _nearest_tws(tws):
-    if not _SECTIONS:
+    sections = _guide()[0]
+    if not sections:
         return None
-    return min(_SECTIONS.keys(), key=lambda k: abs(k - tws))
+    return min(sections.keys(), key=lambda k: abs(k - tws))
 
 
 def _zones(rows):
@@ -152,8 +166,9 @@ def _crew_norm(sail):
 def _tws_band_for(fam, a_twa):
     """The TWS buckets where `fam` wins the zone at this TWA (cert model) — the over/under test."""
     ks = []
-    for k in sorted(_SECTIONS):
-        z = next((z for z in _zones(_SECTIONS[k]) if z["twa_min"] <= a_twa <= z["twa_max"]), None)
+    sections = _guide()[0]
+    for k in sorted(sections):
+        z = next((z for z in _zones(sections[k]) if z["twa_min"] <= a_twa <= z["twa_max"]), None)
         if z and z["sail"] == fam:
             ks.append(k)
     return ks
@@ -210,14 +225,15 @@ def _fit_and_change(crew, a_twa, tws, optimal, wrong, tossup_ok, boat_model):
 def get_sail_advice(tws: float = None, twa: float = None, hoisted: str = None, boat_model: dict = None):
     """Sail-range advice for the dial + agent. tws/twa are live values; hoisted is the
     crew-reported sail (J1/A3/S1) so we can flag flying the wrong one."""
-    if not _SECTIONS:
-        return {"available": False, "note": "Speed guide not loaded."}
+    sections = _guide()[0]
+    if not sections:
+        return {"available": False, "note": BP.NO_POLAR_ABOARD}
     if tws is None or twa is None:
         return {"available": False, "note": "Need live wind speed and angle.",
                 "have": {"tws": tws, "twa": twa}}
 
     key = _nearest_tws(tws)
-    rows = _SECTIONS[key]
+    rows = sections[key]
     zones = _zones(rows)
     # The record wraps TWA to 0–360 (a port beat at 36° arrives as 324°): take it signed first,
     # or abs() reads a beat as a run and flags the right jib wrong (#47).
