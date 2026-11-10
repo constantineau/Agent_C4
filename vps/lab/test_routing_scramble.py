@@ -51,8 +51,12 @@ Ofix = cfg(True);  leg_fix = Ofix.route_leg(Steady(), P, S, LON, 0.0, dla, dlo, 
 f_legacy, f_fix = board_flips(Oleg, leg_legacy, Steady()), board_flips(Ofix, leg_fix, Steady())
 print(f"  steady beat: legacy flips={f_legacy}/{leg_legacy['sailed_nm']}nm  fixed flips={f_fix}/{leg_fix['sailed_nm']}nm")
 check("steady beat converges to <=1 tack (no scramble)", f_fix <= 1, f"flips={f_fix}")
-check("fixed oversails less than legacy", leg_fix["sailed_nm"] <= leg_legacy["sailed_nm"] + 1e-6,
+# #66: the fixed prune now tacks on the layline (a hair past it), so it can sail a few hundredths
+# of a mile more than legacy while arriving sooner. Judge the miles with 1% slack, and the clock.
+check("fixed doesn't oversail legacy (1% slack)", leg_fix["sailed_nm"] <= leg_legacy["sailed_nm"] * 1.01,
       f"{leg_fix['sailed_nm']} vs {leg_legacy['sailed_nm']}")
+check("fixed is no slower than legacy", leg_fix["eta"] <= leg_legacy["eta"] + 1e-6,
+      f"{leg_fix['eta'] / 60:.1f} vs {leg_legacy['eta'] / 60:.1f} min")
 check("steady beat lays the mark", end_err(Ofix, leg_fix, dla, dlo) < 0.1)
 check("steady beat still tacks (not head-to-wind under-tack)", f_fix >= 1)
 

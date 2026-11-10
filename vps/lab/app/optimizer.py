@@ -56,6 +56,12 @@ LAYLINE_COMMIT = _flag("ROUTE_LAYLINE_COMMIT")
 # − current), not the ground wind. Default ON; a no-op wherever there's no current, so it's safe.
 WIND_OVER_WATER = _flag("ROUTE_WIND_OVER_WATER")
 LAYLINE_COMMIT_EPS = float(os.environ.get("ROUTE_LAYLINE_COMMIT_EPS", "2.0"))  # deg slack before committing
+# LAYLINE TACK (#66): also offer the step that tacks exactly on the layline (see route_leg).
+LAYLINE_TACK = _flag("ROUTE_LAYLINE_TACK")
+# BEAT TO-GO (#66): on a beat leg the prune ranks by distance to go along the VMG boards, not the
+# straight line to the mark (see _beat_dist_nm).
+BEAT_TOGO = _flag("ROUTE_BEAT_TOGO")
+LAYLINE_TACK_MARGIN = float(os.environ.get("ROUTE_LAYLINE_TACK_MARGIN_DEG", "0.5"))  # deg past the layline
 LAYLINE_COMMIT_NM = float(os.environ.get("ROUTE_LAYLINE_COMMIT_NM", "10.0"))   # only commit within this of the mark (final approach; play shifts farther out)
 # #2 CUMULATIVE TACK COST: the maneuver cost accrues along the whole path (not a one-step haircut), so
 # repeated alternation genuinely loses ground in the prune + ETA — not just a ~5% per-step nudge.
@@ -440,6 +446,39 @@ def _layline_fan(P, tws, twd, pos, bmark, fan):
     return committed or [bmark]   # never strand the node — keep the fetch heading
 
 
+def _beat_dist_nm(P, tws, twd, dmark, bmark):
+    """Distance to go on a beat, measured the way the boat must sail it (#66): with the mark inside
+    the boat's VMG cone it is the two VMG boards' length, d*cos(off)/cos(vmg angle); past the
+    layline it is the straight line, scaled by how much faster that angle sails than the VMG angle
+    (so it is time to go at VMG-board speed, continuous at the layline). Plain distance ranks a
+    boat that foots toward the mark ahead of one sailing the layline, though footing leaves it
+    under the layline and costs two more tacks. Angles and speeds come from the boat's polar."""
+    half = _vmg_twa_cached(P, tws, "beat")
+    if half is None or dmark <= 0:
+        return dmark
+    off = abs(_wrap180(bmark - twd))
+    if off < half:
+        return dmark * math.cos(math.radians(off)) / math.cos(math.radians(half))
+    v_half, v_off = _polar_speed(P, tws, half), _polar_speed(P, tws, off)
+    if v_half < 0.3 or v_off < 0.3:
+        return dmark
+    return dmark * v_half / v_off
+
+
+def _beat_tack_owed(P, tws, twd, bmark, hdg):
+    """Does a boat sailing `hdg` on a beat still owe a tack before it can fetch the mark (#66)? Yes
+    when the mark is inside its VMG cone (it isn't on a layline yet), or past the layline on the
+    other side of the wind. A board that tacked short of the layline and one sailing the layline
+    have made the same ground to windward; this is what tells them apart."""
+    half = _vmg_twa_cached(P, tws, "beat")
+    if half is None or hdg is None:
+        return False
+    off = _wrap180(bmark - twd)
+    if abs(off) < half:
+        return True          # even a hair inside the VMG angle can't be fetched on this board
+    return (off > 0) != (_wrap180(hdg - twd) > 0)
+
+
 # --- one leg -----------------------------------------------------------------
 def _nearby_wind(wf, lat, lon, epoch, max_nm=None):
     """The wind of the nearest point the forecast covers, within `max_nm` (default FILL_NM), or
@@ -655,29 +694,123 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, deadline=None,
             if monotone and MONOTONE and dmark_new > node.get("dmin", direct) + BACKTRACK_NM:
                 back += 1
                 continue
-            rng = _hav_nm(slat, slon, nlat, nlon)
-            # PRUNE KEY + SCORE. DMG_PRUNE (root-cause fix): rank by distance MADE GOOD toward the mark,
-            # bucketed by CROSS-TRACK LANE off the start→mark rhumb — one leading node per lane, so a beat
-            # lays the layline in one tack instead of ballooning sideways and weaving. Legacy paths:
-            # #3 position-cell near the mark, else the classic bearing-from-start sector; both score by
-            # distance-from-start. Score is net of the accumulated maneuver penalty (#2).
-            if DMG_PRUNE:
-                sec = ("dmg", round(_xtrack_nm(slat, slon, dlat, dlon, nlat, nlon) / LANE_NM))
-                score = (direct - dmark_new) - pen
-            elif MARK_POS_PRUNE and dmark_new <= MARK_PRUNE_NM:
-                cell = MARK_PRUNE_CELL_NM / 60.0
-                sec = ("p", round(nlat / cell), round(nlon / max(1e-6, cell * coslat)))
-                score = rng - pen
-            else:
-                sec = round(_bearing(slat, slon, nlat, nlon) / SECTOR)
-                score = rng - pen
-            if sec not in cand or score > cand[sec]["rng_eff"]:
-                cand[sec] = {"lat": nlat, "lon": nlon,
-                             "t": node["t"] + dt_h * 3600 + tack_s + peel_s,
-                             "parent": node, "hdg": hdg, "rng": rng, "rng_eff": score,
-                             "pen": pen, "tk": tk, "sail": sail, "pl": pl, "dmin": dmin}
+            place(cand, node, nlat, nlon, node["t"] + dt_h * 3600 + tack_s + peel_s, hdg,
+                  pen, tk, sail, pl, dmin, dmark_new, tws, twd, sp)
             placed += 1
         return placed, blocked, back
+
+    def place(cand, parent, nlat, nlon, t, hdg, pen, tk, sail, pl, dmin, dmark_new, tws, twd, sp):
+        """Offer one candidate node to this generation's prune (keeps the best per bucket)."""
+        rng = _hav_nm(slat, slon, nlat, nlon)
+        # PRUNE KEY + SCORE. DMG_PRUNE (root-cause fix): rank by distance MADE GOOD toward the mark,
+        # bucketed by CROSS-TRACK LANE off the start→mark rhumb — one leading node per lane, so a beat
+        # lays the layline in one tack instead of ballooning sideways and weaving. Legacy paths:
+        # #3 position-cell near the mark, else the classic bearing-from-start sector; both score by
+        # distance-from-start. Score is net of the accumulated maneuver penalty (#2).
+        if DMG_PRUNE:
+            sec = ("dmg", round(_xtrack_nm(slat, slon, dlat, dlon, nlat, nlon) / LANE_NM))
+            togo = dmark_new
+            if BEAT_TOGO and _pos0 == "beat":
+                bm = _bearing(nlat, nlon, dlat, dlon)
+                togo = _beat_dist_nm(P, tws, twd, dmark_new, bm)
+                if TACK_CUMULATIVE and _beat_tack_owed(P, tws, twd, bm, hdg):
+                    # the tack this node still owes, priced like one it made (#66)
+                    togo += sp * (TACK_PRUNE_S * maneuver_prune_mult / 3600.0)
+            score = (direct - togo) - pen
+        elif MARK_POS_PRUNE and dmark_new <= MARK_PRUNE_NM:
+            cell = MARK_PRUNE_CELL_NM / 60.0
+            sec = ("p", round(nlat / cell), round(nlon / max(1e-6, cell * coslat)))
+            score = rng - pen
+        else:
+            sec = round(_bearing(slat, slon, nlat, nlon) / SECTOR)
+            score = rng - pen
+        if sec not in cand or score > cand[sec]["rng_eff"]:
+            cand[sec] = {"lat": nlat, "lon": nlon, "t": t,
+                         "parent": parent, "hdg": hdg, "rng": rng, "rng_eff": score,
+                         "pen": pen, "tk": tk, "sail": sail, "pl": pl, "dmin": dmin}
+
+    def price(sail_in, node, tws, twa):
+        """(sail, realized speed, is_peel) for sailing `twa` from `node` carrying `sail_in`, priced
+        like a step in `expand`; None when the boat can't sail it."""
+        sp_env = _polar_speed(P, tws, twa)
+        if sp_env < 0.3:
+            return None
+        sail, sp, is_peel = sail_step(sail_in, tws, twa, sp_env)
+        if realized_on:
+            sp *= _realized_factor(_hs(node["lat"], node["lon"], node["t"]), twa, helm_factor, wave_coeffs)
+        return (sail, sp, is_peel) if sp >= 0.3 else None
+
+    def layline_tack(node, tws, twd, dt_h, cand):
+        """LAYLINE TACK (#66): on a beat, the fan's equal-time steps put the tack where a step ends,
+        not on the layline. Tacking a little short leaves the boat under the layline, and the mark
+        then drifts toward head-to-wind: two more tacks to fetch it. Overstanding costs distance.
+        So when this step's VMG board crosses the other board's layline, also offer the step that
+        tacks exactly there and spends the rest of the step on the other board's VMG heading. Same
+        clock and prune price as a fan step that tacks (the tack sits inside the step). The angle is
+        the boat's own VMG angle from its polar at this wind; nothing here is boat-specific. In a
+        current the laylines over the ground move, so the candidate isn't offered there."""
+        half = _vmg_twa(P, tws, "beat")
+        if half is None:
+            return
+        if cur is not None and cur.current_at(node["lat"], node["lon"], node["t"])[1] > 0.01:
+            return
+        dx = (dlon - node["lon"]) * 60.0 * math.cos(math.radians((dlat + node["lat"]) / 2.0))
+        dy = (dlat - node["lat"]) * 60.0
+        if math.hypot(dx, dy) < 0.05:
+            return
+        if node["hdg"] is None:
+            sides = (1.0, -1.0)
+        else:
+            sides = (1.0 if _wrap180(node["hdg"] - twd) > 0 else -1.0,)
+        for side in sides:
+            h1, h2 = (twd + side * half) % 360, (twd - side * half) % 360
+            # tack a hair past the layline: a node even 0.1° under it can't fetch at the VMG angle
+            h2m = (twd - side * (half + LAYLINE_TACK_MARGIN)) % 360
+            u1 = (math.sin(math.radians(h1)), math.cos(math.radians(h1)))
+            u2 = (math.sin(math.radians(h2m)), math.cos(math.radians(h2m)))
+            det = u1[0] * u2[1] - u1[1] * u2[0]
+            if abs(det) < 1e-6:
+                continue
+            s = (dx * u2[1] - dy * u2[0]) / det          # nm on h1 to the other board's layline
+            r = (u1[0] * dy - u1[1] * dx) / det          # nm from there to the mark on h2
+            if s <= 1e-3 or r <= 1e-3:
+                continue                                 # mark not between the laylines
+            a = price(node.get("sail"), node, tws, half)
+            if a is None:
+                continue
+            sail1, sp1, peel1 = a
+            t1 = s / sp1
+            if t1 >= dt_h:
+                continue                                 # the layline is beyond this step
+            b = price(sail1, node, tws, half)
+            if b is None:
+                continue
+            sail2, sp2, peel2 = b
+            pen = node.get("pen", 0.0)
+            tk, pl = node.get("tk", 0), node.get("pl", 0)
+            extra_s = 0.0
+            for peel, sp in ((peel1, sp1), (peel2, sp2)):
+                if peel and PEEL_COST_S > 0:
+                    pen += sp * (PEEL_PRUNE_S * maneuver_prune_mult / 3600.0)
+                    extra_s += PEEL_COST_S
+                    pl += 1
+            mlat, mlon = _advance(node["lat"], node["lon"], h1, s)
+            if obstacles and obstacles.crosses(node["lat"], node["lon"], mlat, mlon):
+                continue
+            pen += sp2 * (TACK_PRUNE_S * maneuver_prune_mult / 3600.0)
+            tk += 1
+            d2 = min(r, (dt_h - t1) * sp2)
+            nlat, nlon = _advance(mlat, mlon, h2, d2)
+            if obstacles and obstacles.crosses(mlat, mlon, nlat, nlon):
+                continue
+            dmark_mid = _hav_nm(mlat, mlon, dlat, dlon)
+            dmark_new = _hav_nm(nlat, nlon, dlat, dlon)
+            dmin = min(node.get("dmin", direct), dmark_mid, dmark_new)
+            mid = {"lat": mlat, "lon": mlon, "t": node["t"] + t1 * 3600,
+                   "parent": node, "hdg": h1, "sail": sail1, "pen": node.get("pen", 0.0),
+                   "tk": node.get("tk", 0), "pl": node.get("pl", 0), "dmin": dmin}
+            t_end = node["t"] + (t1 + d2 / sp2) * 3600 + TACK_COST_S + extra_s
+            place(cand, mid, nlat, nlon, t_end, h2, pen, tk, sail2, pl, dmin, dmark_new, tws, twd, sp2)
 
     def direct_lay(node, tws, twd, dmark, bmark):
         """The closing board straight to the mark, priced like any other step in `expand`: the held or
@@ -774,6 +907,8 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, deadline=None,
             if LAYLINE_COMMIT and _pos0 in ("beat", "run") and dmark <= LAYLINE_COMMIT_NM:
                 fan = _layline_fan(P, tws, twd, _pos0, bmark, fan)
             placed, blocked, back = expand(node, fan, tws, twd, gen_dt, cand)
+            if LAYLINE_TACK and TACK_CUMULATIVE and _pos0 == "beat":
+                layline_tack(node, tws, twd, gen_dt, cand)
             if placed == 0 and blocked > 0 and obstacles is not None:
                 placed, blocked, back = expand(node, headings + vmg, tws, twd, gen_dt, cand)
             if placed == 0 and back > 0:
