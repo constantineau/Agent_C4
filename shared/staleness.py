@@ -15,6 +15,7 @@ to ~36 s lag), not by the sensors.
 Onboard or cloud is DATA_SOURCE, the same switch the datasource uses (the Pi engine sets it).
 Pure stdlib: imported by the Pi engine, the VPS agent and the tests.
 """
+import math
 import os
 
 # channel -> (late, failover, dead), seconds.
@@ -109,7 +110,8 @@ def apply_overrides(cfg):
 
     def nums(v, n):
         ok = (isinstance(v, (list, tuple)) and len(v) == n
-              and all(isinstance(x, (int, float)) and not isinstance(x, bool) and x > 0 for x in v))
+              and all(isinstance(x, (int, float)) and not isinstance(x, bool)
+                      and math.isfinite(x) and x > 0 for x in v))
         return tuple(float(x) for x in v) if ok else None
 
     for at, table in (("onboard", ONBOARD), ("cloud", CLOUD)):

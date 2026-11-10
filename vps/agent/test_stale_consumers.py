@@ -220,6 +220,9 @@ staleness.CONSUMER_S.clear()
 staleness.CONSUMER_S.update(saved[1])
 staleness.CHARTPLOTTER_FIX_S = saved[2]
 check("non-object config is refused", staleness.apply_overrides([1]) == ["not a JSON object"])
+bad = staleness.apply_overrides({"onboard": {"tws": [2, 5, float("inf")]}})
+check("an infinite limit is refused (wind would never go dead)",
+      bad == ["onboard.tws"] and staleness.dead_s(TWS, "onboard") == 15)
 
 print("ALL OK" if ok else "FAILURES")
 sys.exit(0 if ok else 1)
