@@ -34,7 +34,10 @@ AUTH_TTL_HOURS = float(os.environ.get("AUTH_TTL_HOURS", "720"))
 AUTH_ENABLED = os.environ.get("AUTH_ENABLED", "true").strip().lower() not in ("0", "false", "no")
 # No default password: unset with auth on → stop at start with one plain line. An open bench
 # (AUTH_ENABLED=false) needs none.
-BOAT_PASSWORD = _require_setting("BOAT_PASSWORD") if AUTH_ENABLED else os.environ.get("BOAT_PASSWORD", "")
+# require() only checks it's there: the password itself is used exactly as set (spaces included).
+if AUTH_ENABLED:
+    _require_setting("BOAT_PASSWORD")
+BOAT_PASSWORD = os.environ.get("BOAT_PASSWORD", "")
 
 # Derive a default signing secret from the password (so changing the password invalidates old
 # tokens); allow an explicit override for defence in depth.

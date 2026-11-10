@@ -55,6 +55,11 @@ p = subprocess.run([sys.executable, "-c",
                    env={**{k: v for k, v in os.environ.items() if k != "BOAT_PASSWORD"},
                         "AUTH_ENABLED": "false"}, capture_output=True, text=True, timeout=120)
 check("the old dev password is not a default", p.stdout.strip() != "True")
+p = subprocess.run([sys.executable, "-c",
+                    "from app import auth; print(auth.check_password(' pw '), auth.check_password('pw'))"],
+                   env=dict(os.environ, BOAT_PASSWORD=" pw ", AUTH_ENABLED="true"),
+                   capture_output=True, text=True, timeout=120)
+check("the password is used exactly as set (not stripped)", p.stdout.strip() == "True False")
 
 print("ALL OK" if ok else "FAILURES")
 sys.exit(0 if ok else 1)

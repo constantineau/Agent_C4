@@ -47,7 +47,7 @@ check("another boat gets none (label-only), never sr33's", n2k_sources.devices_f
 print("no default boat or password anywhere:")
 SETTINGS = "BOAT_ID|REROUTE_BOAT|DEPLOY_BOAT_ID|BOAT_PASSWORD"
 PY_DEFAULT = re.compile(r"""environ\.get\(\s*["'](%s)["']\s*,\s*["'][^"']+["']""" % SETTINGS)
-COMPOSE_DEFAULT = re.compile(r"\$\{(%s):?-" % SETTINGS)
+COMPOSE_DEFAULT = re.compile(r"\$\{(%s):?-[^}]" % SETTINGS)   # an empty default is fine
 SKIP_DIRS = {".git", "node_modules", "__pycache__", "docs"}
 py_hits, compose_hits = [], []
 for d, dirs, files in os.walk(ROOT):
