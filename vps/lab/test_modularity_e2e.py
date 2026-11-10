@@ -406,8 +406,11 @@ def test_orin_unconfigured_boat_never_falls_back_to_sr33():
         return
     out, seen = _orin_run(job)
     assert seen == []
-    assert (out.get("boat") or {}).get("boat_id") in ("bravo", None)
     assert not no_sr33_text(out)
+    if out.get("available"):
+        assert (out.get("boat") or {}).get("boat_id") == "bravo" and out.get("legs"), out
+    else:
+        assert re.search(r"boat", out.get("note") or "", re.I), out
 
 
 # ==== 5. Race defaults (wave 2) ==================================================================
