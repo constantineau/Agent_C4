@@ -228,7 +228,8 @@ def _module_boat_ids(boat_id):
     env["PYTHONPATH"] = os.pathsep.join([os.path.join(REPO, "vps", "agent"), REPO, ENGINE_DIR])
     p = subprocess.run([sys.executable, "-c", _PROBE, *ENGINE_MODULES], env=env,
                        capture_output=True, text=True, timeout=120)
-    assert p.returncode == 0, p.stderr[-800:]
+    if p.returncode != 0:          # a crash, not a boat-id answer: never the known gap
+        raise RuntimeError(p.stderr[-800:])
     return json.loads(p.stdout.strip().splitlines()[-1])
 
 
