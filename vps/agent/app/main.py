@@ -362,9 +362,11 @@ def racelog_sessions(derive: bool = True, boats: str | None = None):
     `start_ts`/`end_ts` — a derived window that quietly disagrees with what the crew remembers
     pressing would be worse than none, so both are always served."""
     with pool.connection() as conn:
+        # this agent's kit only: the motion, track and trust reads below are BOAT_ID's record, so
+        # another kit's session would be scored on this kit's sailing (Codex on #321)
         rows = conn.execute(
             "SELECT str_value, boat_id FROM telemetry_raw WHERE path = 'crew.session' "
-            "ORDER BY time DESC LIMIT 100").fetchall()
+            "AND boat_id = %s ORDER BY time DESC LIMIT 100", (tools.BOAT_ID,)).fetchall()
     import json as _json
     out, seen = [], set()
     for r in rows:                      # dict rows (psycopg row factory)

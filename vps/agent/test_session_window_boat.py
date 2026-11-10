@@ -46,5 +46,10 @@ K2 = {"id": 9, "race_id": "r", "kit": "bravo", "boat_id": "bravo", "start_ts": T
 check("another kit's session never cuts this kit's window",
       main._window_for(A, [A, K2], motion)["end_ts"] >= A["end_ts"])
 
+import inspect  # noqa: E402
+src = inspect.getsource(main.racelog_sessions)
+check("only this agent's kit's markers are listed (its track and motion are this kit's)",
+      "AND boat_id = %s" in src and "(tools.BOAT_ID,)" in src)
+
 print("ALL OK" if ok else "SOME CHECKS FAILED")
 raise SystemExit(0 if ok else 1)
