@@ -180,6 +180,42 @@ def parse_speed_guide(text):
     return {k: v for k, v in sections.items() if v}
 
 
+def _zones_ok(zones, need_sails=False):
+    if not isinstance(zones, list):
+        return False
+    for z in zones:
+        if not isinstance(z, dict) or _f(z.get("twa_min")) is None or _f(z.get("twa_max")) is None:
+            return False
+        if need_sails and not (isinstance(z.get("sails"), list)
+                               and all(isinstance(x, str) for x in z["sails"])):
+            return False
+        if not need_sails and not isinstance(z.get("short") or z.get("sail"), str):
+            return False
+    return True
+
+
+def crossovers_ok(xo) -> bool:
+    """A crossover table every reader can walk: {tws_buckets: [n], crossovers: {"<tws>": [zone]},
+    overlaps?: {"<tws>": [{sails, twa_min, twa_max}]}} (a bad one is left out, never half-used)."""
+    if not isinstance(xo, dict):
+        return False
+    b, c, o = xo.get("tws_buckets"), xo.get("crossovers"), xo.get("overlaps", {})
+    if not isinstance(b, list) or not all(_f(x) is not None for x in b):
+        return False
+    if not isinstance(c, dict) or not all(_f(k) is not None and _zones_ok(v) for k, v in c.items()):
+        return False
+    if o is not None and not (isinstance(o, dict) and all(
+            _f(k) is not None and _zones_ok(v, need_sails=True) for k, v in o.items())):
+        return False
+    return True
+
+
+def _guide_ok(sg) -> bool:
+    return isinstance(sg, dict) and all(
+        isinstance(rows, list) and all(isinstance(r, dict) and _f(r.get("twa")) is not None
+                                       for r in rows) for rows in sg.values())
+
+
 def _load_envelope(path):
     text = _read(path)
     if path.lower().endswith(".json"):
@@ -248,8 +284,8 @@ def resolve(profile, dirs=None):
         sp = opt("sail_polars", lambda t: parse_sail_polars(json.loads(t))) or {}
         xo = opt("crossovers", json.loads)
         sg = opt("speed_guide", parse_speed_guide)
-        b = _block(bid, "files", pf["envelope"], env, sp, xo if isinstance(xo, dict) else None,
-                   sg, files={k: pf[k] for k in FILE_KEYS if pf.get(k)})
+        b = _block(bid, "files", pf["envelope"], env, sp, xo if crossovers_ok(xo) else None,
+                   sg if _guide_ok(sg) else None, files={k: pf[k] for k in FILE_KEYS if pf.get(k)})
         if len(_CACHE) >= _CACHE_MAX:
             _CACHE.clear()
         _CACHE[key] = b
@@ -286,12 +322,9 @@ def check(block, boat_id=None) -> list:
                                           and all(_f(x) is not None for x in q) for q in pts)
             for pts in sp.values()):
         errs.append("bad sail polars")
-    for k in ("crossovers", "speed_guide"):
-        if block.get(k) is not None and not isinstance(block.get(k), dict):
-            errs.append(f"bad {k}")
-    sg = block.get("speed_guide")
-    if isinstance(sg, dict) and not all(
-            isinstance(rows, list) and all(isinstance(r, dict) for r in rows) for rows in sg.values()):
+    if block.get("crossovers") is not None and not crossovers_ok(block["crossovers"]):
+        errs.append("bad crossovers")
+    if block.get("speed_guide") is not None and not _guide_ok(block["speed_guide"]):
         errs.append("bad speed_guide")
     if not errs and block.get("version") != _version(block):
         errs.append("polar version doesn't match")

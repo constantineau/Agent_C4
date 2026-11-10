@@ -64,7 +64,8 @@ check("a polar file name with a path is refused",
           dict(NOPOLAR, polar_files={"envelope": "../seed/polars_sr33.sql"})) is None)
 _bad = tempfile.mkdtemp()
 for _n, _t in (("bad_env.json", "42"), ("bad_sails.json", '{"sails": ["J1"]}'),
-               ("ok_env.json", "[[10, 90, 7.0]]")):
+               ("ok_env.json", "[[10, 90, 7.0]]"),
+               ("bad_xo.json", '{"tws_buckets": [6], "crossovers": []}')):
     with open(os.path.join(_bad, _n), "w") as _f:
         _f.write(_t)
 check("malformed JSON polar files → no polar / no sail curves, never a crash",
@@ -72,6 +73,13 @@ check("malformed JSON polar files → no polar / no sail curves, never a crash",
       and BP.resolve(dict(NOPOLAR, polar_files={"envelope": "ok_env.json",
                                                 "sail_polars": "bad_sails.json"}),
                      dirs=[_bad])["sail_polars"] == {})
+_bx = BP.resolve(dict(NOPOLAR, polar_files={"envelope": "ok_env.json", "crossovers": "bad_xo.json"}),
+                 dirs=[_bad])
+check("a malformed crossover table is left out (no sail calls), not a crash in routing",
+      _bx["crossovers"] is None and sailplan.optimal_sail(6, 90, xo=_bx["crossovers"]) is None)
+check("a carried block with a malformed crossover table is refused",
+      BP.check(dict(P33, crossovers={"tws_buckets": [6], "crossovers": []}), "sr33") != [])
+check("sr33's real crossover table passes", BP.crossovers_ok(P33["crossovers"]))
 check("the carried block checks clean and is versioned", BP.check(P33, "sr33") == []
       and BP.check(PB, "bravo") == [] and BP.check(PB, "sr33") != [])
 check("a tampered block fails its version", BP.check(dict(PB, label="x"), "bravo") != [])
@@ -149,10 +157,12 @@ try:
     plays = synthesis._sail_guidance_plays({"legs": [{"sail": "J1", "wind": {"tws": 12},
                                                       "point_of_sail": "beat"}]}, [], None, PB2)
     kw, _from = judge._oracle_boat_kwargs(BRAVO, {})
-    track = {"fixes": [{"t": T0 + i * 10, "lat": 43.9 + i * 1e-4, "lon": -82.4, "sog": 6.0,
-                        "cog": 0.0} for i in range(50)]}
-    scored = judge._score_actual_track(track, {}, [], T0, None, None, None, wave_coeffs=None,
-                                       boat=BRAVO)
+    # 6 kn due north for an hour, in a steady 12 kn easterly (a beam reach)
+    track = {"source": "gpx", "fixes": [{"lat": 43.9 + 0.1 * (i / 60.0), "lon": -82.4,
+                                         "sog": 6.0, "cog": 0.0, "t": T0 + 60 * i}
+                                        for i in range(61)]}
+    scored = judge._score_actual_track(track, {}, [], T0, Const(12.0, 90.0), None, None,
+                                       wave_coeffs=None, boat=BRAVO)
     boats.set_active("bravo")
     from app import main
     grid = asyncio.run(main.polars_grid())
@@ -173,8 +183,13 @@ check("bundle boat model: Bravo, its polar named, no sr33 zones",
       and not bm["overlaps"])
 check("sail-guidance plays: none without Bravo's own crossover table", plays == [])
 check("debrief oracle routes on Bravo's polar", kw["boat_polar"]["boat_id"] == "bravo")
-check("the track is scored (on Bravo's polar)", scored.get("available", True) is not False
-      or scored.get("note") != BP.NO_POLAR)
+scored33 = judge._score_actual_track(track, {}, [], T0, Const(12.0, 90.0), None, None,
+                                     wave_coeffs=None, boat=SR33)
+check(f"the track is scored on Bravo's polar ({scored.get('polar_pct')}% vs "
+      f"{scored33.get('polar_pct')}% on sr33's)",
+      isinstance(scored.get("polar_pct"), (int, float))
+      and isinstance(scored33.get("polar_pct"), (int, float))
+      and scored["polar_pct"] != scored33["polar_pct"])
 check("Polar tab shows Bravo's cert", grid["n_points"] == len(BRAVO["cert_polar"])
       and grid["polar"]["boat_id"] == "bravo")
 check("crossover view: none for Bravo, said plainly", not xo_view["crossovers"]
