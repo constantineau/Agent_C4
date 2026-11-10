@@ -3,8 +3,9 @@ complete before it is frozen, locked in, pushed to the boat or exported as GPX.
 
 Each route carries the optimizer's own verdict (`optimizer.route_safety`: land checked over the
 whole route, depths wherever ENC charts them, every mark reached, every port/starboard mark and
-island left on its side). Legs through water no ENC chart covers (Canada) are listed as notes
-("No depth data: check the paper chart"), never refused.
+island left on its side). Legs through water no chart covers are listed as notes, never refused:
+"No depth data: check the paper chart", or, where a depth grid that is not a chart gave the depth
+(`geo.depthsrc`, #292), which grid it was.
 A playbook bundle gets one verdict over every route it carries (the main route, the options and the
 plays with a route) and the chart overrides it was routed with. This module reads that verdict and
 records the overrides: a reviewed, per-mark exception for a chart artefact (a mark the chart puts

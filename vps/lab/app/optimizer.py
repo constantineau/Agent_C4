@@ -1623,9 +1623,11 @@ SAFE_BOX = "Route leaves the chart area."
 SAFE_BLOCKED = "{mark} is on land, in shallow water or in a no-go zone on the chart."
 SAFE_UNREACHED = "Route doesn't reach {mark}."
 SAFE_SIDE = "Route leaves {mark} on the wrong side."
-# not a problem (Cole's decision on #242): water no ENC chart gives a depth for (Canada; NOAA ENC
+# not a problem (Cole's decision on #242): water no chart or depth grid gives a depth for (NOAA ENC
 # is US-only). The route isn't refused there; the verdict marks the legs and the Lab shows this.
 SAFE_NO_DEPTH = "No depth data: check the paper chart."
+# depths from a depth grid that is not a chart (#292): checked, but the leg says which grid
+SAFE_GRID_DEPTH = "Depths from {label}, not a chart: check the paper chart."
 
 
 def route_safety(definition, course_id, marks, full_path, leg_end_idx, incomplete, obstacles,
@@ -1668,6 +1670,7 @@ def route_safety(definition, course_id, marks, full_path, leg_end_idx, incomplet
         return pts[a:leg_end_idx[k] + 1]
 
     no_depth_legs = []
+    grid_legs = {}                          # grid label -> legs whose depths came from it (#292)
     for k in range(len(leg_end_idx)):       # every reached leg inside its own field's box (#258)
         f = (leg_obstacles[k] if leg_obstacles and k < len(leg_obstacles) else obstacles)
         lp = leg_pts(k)
@@ -1680,6 +1683,13 @@ def route_safety(definition, course_id, marks, full_path, leg_end_idx, incomplet
             a = marks[k][1] if k < len(marks) else "?"
             b = marks[k + 1][1] if k + 1 < len(marks) else "?"
             no_depth_legs.append(f"{a} → {b}")
+        nn = getattr(f, "nonnav_labels", None)
+        if "depth" not in {p["code"] for p in problems} and nn is not None and lp:
+            labels = {lb for i in range(len(lp) - 1) for lb in nn(*lp[i], *lp[i + 1])}
+            a = marks[k][1] if k < len(marks) else "?"
+            b = marks[k + 1][1] if k + 1 < len(marks) else "?"
+            for lb in sorted(labels):
+                grid_legs.setdefault(lb, []).append(f"{a} → {b}")
 
     roundings = race_def.course_roundings(definition, course_id)
     for j in range(1, len(marks) - 1):      # a nav mark: the legs either side of it, touched
@@ -1703,6 +1713,8 @@ def route_safety(definition, course_id, marks, full_path, leg_end_idx, incomplet
                  for n, o in geo.chart_overrides(definition, course_id).items() if n in names]
     notes = ([{"code": "no_depth", "text": SAFE_NO_DEPTH, "legs": no_depth_legs}]
              if no_depth_legs else [])
+    notes += [{"code": "grid_depth:" + lb, "text": SAFE_GRID_DEPTH.format(label=lb), "legs": legs}
+              for lb, legs in sorted(grid_legs.items())]
     return {"ok": not problems, "problems": problems, "notes": notes, "overrides": overrides}
 
 

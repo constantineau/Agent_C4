@@ -25,6 +25,7 @@ import threading
 from shared import gridwalk
 
 from . import coastline
+from . import depthsrc
 from . import enc
 
 RES_DEG = float(os.environ.get("GEO_RES_DEG", "0.005"))      # mask cell size (~0.005° ≈ 550 m)
@@ -90,6 +91,12 @@ class ObstacleField:
         # with depth "ok": 1 = a cell no ENC depth area covers (Canadian water: NOAA ENC is
         # US-only). A route through one isn't refused; the verdict marks it (#242)
         self.nodepth = None
+        # depths a non-navigational grid gave (#292): [(label, mask)], 1 = that grid gave this
+        # cell's depth. A route through one says so, by the grid's label
+        self.nonnav = []
+        # grid sources that cover the box but didn't load: their water stays "no depth data",
+        # and the field is never cached (the next build tries again)
+        self.depth_gaps = []
 
     # --- cell <-> coord ------------------------------------------------------
     def _ix(self, lon):
@@ -134,6 +141,14 @@ class ObstacleField:
         return gridwalk.any_set(self.nodepth, self.nx, self.ny,
                                 (lon1 - self.w) / self.res, (lat1 - self.s) / self.res,
                                 (lon2 - self.w) / self.res, (lat2 - self.s) / self.res)
+
+    def nonnav_labels(self, lat1, lon1, lat2, lon2) -> list:
+        """The labels of the non-navigational grids that gave a depth this step touches (#292)."""
+        if self.depth != "ok" or not self.nonnav:
+            return []
+        args = (self.nx, self.ny, (lon1 - self.w) / self.res, (lat1 - self.s) / self.res,
+                (lon2 - self.w) / self.res, (lat2 - self.s) / self.res)
+        return [label for label, m in self.nonnav if gridwalk.any_set(m, *args)]
 
     # --- rasterization -------------------------------------------------------
     def _fill_polygon(self, rings, value: int, layer: str, mask=None):
@@ -275,6 +290,7 @@ class ObstacleField:
             "layers": self.layers,
             "source": self.source,
             "data_version": enc.DATA_VERSION if self.source == "enc" else coastline.DATA_VERSION,
+            "depth_grids": [label for label, _m in self.nonnav],
             "safety_depth_m": (round(self.safety_depth, 2)
                                if self.source == "enc" and self.safety_depth is not None else None),
             "geometry": self.geometry,
@@ -453,9 +469,12 @@ def build_for_course(definition: dict, course_id, bbox, *, coastline_on=True, zo
     if coastline_on:
         field.land = "ok"                                    # _fill_global_backstop says if not
         if field.source == "enc":
+            # the depth sources whose coverage touches this race's box (#292): the chart (NOAA ENC)
+            # first, then any depth grid for the water it doesn't chart
+            chart, *grids = depthsrc.sources_for(bbox)
+            grid_used = False
             try:
-                enc.ensure_bbox(bbox, cache_dir)
-                layers = enc.layers_in_bbox(bbox, cache_dir, depth)
+                layers = chart.layers(bbox, cache_dir, depth)
                 if layers.get("missing"):
                     raise OSError("ENC cells not downloaded: " + ", ".join(layers["missing"][:5]))
             except Exception as exc:  # noqa: BLE001 — reported: depths were not checked (#242)
@@ -473,6 +492,10 @@ def build_for_course(definition: dict, course_id, bbox, *, coastline_on=True, zo
                 field.nodepth = bytearray(b"\x01") * (field.nx * field.ny)
                 for poly in layers.get("depth_cover", []) + layers.get("land", []):
                     field._fill_polygon(poly, 0, "depth", mask=field.nodepth)
+                grid_used = _apply_grids(field, grids, depth, cache_dir,
+                                         layers.get("depth_cover", []) + layers.get("land", []))
+                if grid_used:
+                    field.safety_depth = depth
             if layers.get("land") or layers.get("shoal") or layers.get("depth_cover"):
                 field.safety_depth = depth
                 for poly in layers.get("land", []):          # ENC's sharper US land on top
@@ -484,8 +507,11 @@ def build_for_course(definition: dict, course_id, bbox, *, coastline_on=True, zo
                 _overlay(field, "land_rings", layers.get("land", []))
                 _overlay(field, "shoal_rings", layers.get("shoal", []))
                 _overlay(field, "obstruction_rings", layers.get("obstruction", []))
-            else:
-                field.source = coastline.active_source()     # ENC unavailable → global backstop alone
+            elif not grid_used:
+                # nothing from ENC or a grid → the global backstop alone. With grid depths the
+                # source stays "enc" (charts + depth sources), so the Deploy chart for the boat
+                # is rebuilt the same way, grid shoals included (Codex on #300)
+                field.source = coastline.active_source()
         else:                                                # global coastline only (no ENC requested)
             _fill_global_backstop(field, cache_dir)
             field.source = coastline.active_source()         # honest provenance (gshhg | natural_earth)
@@ -532,7 +558,7 @@ def build_for_course(definition: dict, course_id, bbox, *, coastline_on=True, zo
         _add_barriers(field, _island_rounding_marks(definition, course_id))
 
     # a failed load (shoreline or ENC depths) is retried next run, never served from the cache
-    if ck is not None and field.land != "failed" and field.depth != "failed":
+    if ck is not None and field.land != "failed" and field.depth != "failed" and not field.depth_gaps:
         _cache_put(ck, field)
     return field
 
@@ -649,7 +675,7 @@ def build_leg_fields(definition, course_id, bbox, *, source=None, safety_depth=N
             out.append(base)
             continue
         key = bkey + "|leg" + hashlib.sha1(repr(_barrier_sig(mine)).encode()).hexdigest()[:12]
-        failed = base.land == "failed" or base.depth == "failed"
+        failed = base.land == "failed" or base.depth == "failed" or bool(base.depth_gaps)
         f = _cache_get(key) if not failed else None
         if f is None:
             f = _copy_field(base)
@@ -673,6 +699,7 @@ def _copy_field(field):
     f.land, f.land_error = field.land, field.land_error
     f.depth, f.depth_error = field.depth, field.depth_error
     f.nodepth = field.nodepth                  # read-only once built: shared, not copied
+    f.nonnav, f.depth_gaps = field.nonnav, field.depth_gaps
     return f
 
 
@@ -702,6 +729,105 @@ def legs_summary(base, legs):
     if any(getattr(f, "depth", None) == "failed" for f in fields):
         s["depth"] = "failed"
     return s
+
+
+def _fully_charted(field, chart_polys):
+    """Cells the chart covers whole. A cell counts as charted (`nodepth` 0) when the chart covers
+    its centre, so it may still hold uncharted water: at the chart's edge, or in a sliver between
+    two charted areas. A cell is covered whole only if
+      - it and its in-box neighbours are charted (the out-of-box ones are never routed), and
+      - no edge of the chart's outline crosses it. The outline is every polygon edge that only
+        one chart polygon has: an edge two depth areas share is inside the chart (S-57 areas
+        share their boundaries), one only one polygon has bounds uncharted water.
+    (Codex on #300.)"""
+    nx, ny, nd = field.nx, field.ny, field.nodepth
+    out = bytearray(nx * ny)
+    for iy in range(ny):
+        for ix in range(nx):
+            i = iy * nx + ix
+            if nd[i]:
+                continue
+            if all(not nd[jy * nx + jx]
+                   for jy in range(max(0, iy - 1), min(ny, iy + 2))
+                   for jx in range(max(0, ix - 1), min(nx, ix + 2))):
+                out[i] = 1
+    count = {}
+    seen = set()
+    for poly in chart_polys:
+        rings = tuple(tuple((round(x, 7), round(y, 7)) for x, y in ring) for ring in poly)
+        if rings in seen:            # the same area from two overlapping ENC cells: once
+            continue
+        seen.add(rings)
+        for ring in rings:
+            for k in range(len(ring)):
+                a, b = ring[k], ring[(k + 1) % len(ring)]
+                if a != b:
+                    key = (a, b) if a < b else (b, a)
+                    count[key] = count.get(key, 0) + 1
+    w, sth, res = field.w, field.s, field.res
+    for (a, b), c in count.items():
+        if c != 1:
+            continue
+        for cx, cy in gridwalk.cells_touched((a[0] - w) / res, (a[1] - sth) / res,
+                                             (b[0] - w) / res, (b[1] - sth) / res):
+            if 0 <= cx < nx and 0 <= cy < ny:
+                out[cy * nx + cx] = 0
+    return out
+
+
+def _apply_grids(field, grids, safety_depth, cache_dir, chart_polys=()) -> bool:
+    """Fill the water no chart covers from the depth grids (#292). Per cell, everywhere but the
+    cells the chart covers whole (`_fully_charted`: at the chart's edge both apply, so a shoal in
+    a cell's uncharted half is still seen; Codex on #300):
+      - the shallowest depth any grid has in the cell, shallower than `safety_depth`, blocks it
+        (a shoal), even if the grid covers only part of the cell;
+      - the cell's depth counts as checked (`nodepth` cleared, the grid named on the leg) only
+        where a grid covers the WHOLE cell; a part-covered cell keeps "no depth data".
+    A grid that fails to load is listed in `field.depth_gaps` and its water stays "no depth
+    data". True if any grid gave a depth."""
+    got = []
+    for g in grids:
+        try:
+            got.append((g, *g.cells(field.bbox, field.res, field.nx, field.ny, cache_dir)))
+        except Exception as exc:  # noqa: BLE001 — reported; that water stays "no depth data"
+            why = f"{g.name}: {type(exc).__name__}: {exc}"[:200]
+            field.depth_gaps.append(why)
+            print(f"[obstacles] depth grid did not load: {why}", flush=True)
+    if not got:
+        return False
+    marks = {g.name: bytearray(field.nx * field.ny) for g, _d, _f in got if not g.navigational}
+    nd, mask = field.nodepth, field.mask
+    charted = _fully_charted(field, chart_polys)
+    shoal = 0
+    any_depth = False
+    for i in range(field.nx * field.ny):
+        if charted[i]:
+            continue
+        best, who = None, None                  # shallowest anywhere / its grid, if it is full
+        for g, depths, full in got:
+            d = depths[i]
+            if d is None:
+                continue
+            any_depth = True
+            if best is None or d < best:
+                best = d
+            if full[i] and (who is None or d < who[1]):
+                who = (g, d)
+        if best is None:
+            continue
+        if who is not None:
+            nd[i] = 0
+            if who[0].name in marks:
+                marks[who[0].name][i] = 1
+        if best < safety_depth and mask[i] != 1:
+            mask[i] = 1
+            shoal += 1
+    if shoal:
+        field.layers["shoal"] = field.layers.get("shoal", 0) + shoal
+        field.active = True
+    field.nonnav = [(g.label, marks[g.name]) for g, _d, _f in got
+                    if g.name in marks and any(marks[g.name])]
+    return any_depth
 
 
 def _fill_global_backstop(field, cache_dir):
@@ -752,7 +878,7 @@ def cache_key(definition, course_id, bbox, res_deg=RES_DEG, *, source=None, safe
     isl = _course_islands(definition, course_id)
     pockets = [(n, round(la, 6), round(lo, 6)) for n, la, lo in override_marks(definition, course_id)]
     src = (source or COASTLINE_SOURCE).strip().lower()
-    dv = enc.DATA_VERSION if src == "enc" else coastline.DATA_VERSION
+    dv = depthsrc.data_version(bbox) if src == "enc" else coastline.DATA_VERSION
     depth = safety_depth if safety_depth is not None else safety_depth_m()
     depth = round(depth, 3) if src == "enc" else None
     payload = repr((src, dv, depth, course_id, tuple(round(b, 4) for b in bbox),
