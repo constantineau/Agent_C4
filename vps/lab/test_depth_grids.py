@@ -147,7 +147,7 @@ _orig = (coastline.ensure_global, coastline.layers_in_bbox, coastline.active_sou
 coastline.ensure_global = lambda cache_dir=None: None
 coastline.layers_in_bbox = lambda bbox, cache_dir=None: {"land": [], "lakes": [], "islands": []}
 coastline.active_source = lambda: "stub"
-ENC_BOX = [[(20.0, S), (20.15, S), (20.15, N), (20.0, N)]]        # the chart covers the west strip
+ENC_BOX = [[(19.9, S - 0.1), (20.15, S - 0.1), (20.15, N + 0.1), (19.9, N + 0.1)]]  # the west strip
 ENC_EDGE = [[(20.30, S), (20.33, S), (20.33, N), (20.30, N)]]      # ...and the west 3/5 of a column
 enc.ensure_bbox = lambda bbox, cache_dir=None: None
 enc.layers_in_bbox = lambda bbox, cache_dir=None, depth=None: {
@@ -183,6 +183,26 @@ try:
     enc.layers_in_bbox = lambda bbox, cache_dir=None, depth=None: {
         "land": [], "shoal": [], "obstruction": [], "depth_cover": [ENC_BOX, ENC_EDGE],
     "missing": []}
+
+    ALL = [[(19.9, 9.9), (20.7, 9.9), (20.7, 10.6), (19.9, 10.6)]]
+    enc.layers_in_bbox = lambda bbox, cache_dir=None, depth=None: {
+        "land": [], "shoal": [], "obstruction": [], "depth_cover": [ALL], "missing": []}
+    fa = OB.build_for_course(COURSE, "c", BBOX, res_deg=RES, use_cache=False, source="enc",
+                             safety_depth=SR33)
+    check("the chart covers the whole box: the grid's shoals don't count, at the box edge too",
+          not fa.blocked(10.2, 20.4) and not fa.blocked(10.01, 20.4) and not fa.blocked(10.2, 20.59)
+          and not fa.nonnav, (fa.blocked(10.01, 20.4), fa.blocked(10.2, 20.59)))
+    SPLIT = [[[(19.9, 9.9), (20.42, 9.9), (20.42, 10.6), (19.9, 10.6)]],
+             [[(20.43, 9.9), (20.7, 9.9), (20.7, 10.6), (20.43, 10.6)]]]
+    enc.layers_in_bbox = lambda bbox, cache_dir=None, depth=None: {
+        "land": [], "shoal": [], "obstruction": [], "depth_cover": SPLIT, "missing": []}
+    fs = OB.build_for_course(COURSE, "c", BBOX, res_deg=RES, use_cache=False, source="enc",
+                             safety_depth=SR33)
+    check("an uncharted sliver inside a cell: the grid's shoal there still blocks",
+          fs.blocked(10.2, 20.425) and not fs.blocked(10.2, 20.32))
+    enc.layers_in_bbox = lambda bbox, cache_dir=None, depth=None: {
+        "land": [], "shoal": [], "obstruction": [], "depth_cover": [ENC_BOX, ENC_EDGE],
+        "missing": []}
 
     print("3) shoals per boat")
     check("1 m blocked for sr33", f.blocked(10.2, 20.4))

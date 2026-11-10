@@ -492,7 +492,8 @@ def build_for_course(definition: dict, course_id, bbox, *, coastline_on=True, zo
                 field.nodepth = bytearray(b"\x01") * (field.nx * field.ny)
                 for poly in layers.get("depth_cover", []) + layers.get("land", []):
                     field._fill_polygon(poly, 0, "depth", mask=field.nodepth)
-                grid_used = _apply_grids(field, grids, depth, cache_dir)
+                grid_used = _apply_grids(field, grids, depth, cache_dir,
+                                         layers.get("depth_cover", []) + layers.get("land", []))
                 if grid_used:
                     field.safety_depth = depth
             if layers.get("land") or layers.get("shoal") or layers.get("depth_cover"):
@@ -730,22 +731,51 @@ def legs_summary(base, legs):
     return s
 
 
-def _fully_charted(field):
-    """Cells the chart covers whole: a cell counts as charted (`nodepth` 0) when the chart covers
-    its centre, so a cell at the chart's edge may be half uncharted water. Only a charted cell
-    whose 8 neighbours are charted too counts here; a cell at the box's edge never does."""
+def _fully_charted(field, chart_polys):
+    """Cells the chart covers whole. A cell counts as charted (`nodepth` 0) when the chart covers
+    its centre, so it may still hold uncharted water: at the chart's edge, or in a sliver between
+    two charted areas. A cell is covered whole only if
+      - it and its in-box neighbours are charted (the out-of-box ones are never routed), and
+      - no edge of the chart's outline crosses it. The outline is every polygon edge that only
+        one chart polygon has: an edge two depth areas share is inside the chart (S-57 areas
+        share their boundaries), one only one polygon has bounds uncharted water.
+    (Codex on #300.)"""
     nx, ny, nd = field.nx, field.ny, field.nodepth
     out = bytearray(nx * ny)
-    for iy in range(1, ny - 1):
-        for ix in range(1, nx - 1):
+    for iy in range(ny):
+        for ix in range(nx):
             i = iy * nx + ix
-            if not (nd[i - nx - 1] or nd[i - nx] or nd[i - nx + 1] or nd[i - 1] or nd[i]
-                    or nd[i + 1] or nd[i + nx - 1] or nd[i + nx] or nd[i + nx + 1]):
+            if nd[i]:
+                continue
+            if all(not nd[jy * nx + jx]
+                   for jy in range(max(0, iy - 1), min(ny, iy + 2))
+                   for jx in range(max(0, ix - 1), min(nx, ix + 2))):
                 out[i] = 1
+    count = {}
+    seen = set()
+    for poly in chart_polys:
+        rings = tuple(tuple((round(x, 7), round(y, 7)) for x, y in ring) for ring in poly)
+        if rings in seen:            # the same area from two overlapping ENC cells: once
+            continue
+        seen.add(rings)
+        for ring in rings:
+            for k in range(len(ring)):
+                a, b = ring[k], ring[(k + 1) % len(ring)]
+                if a != b:
+                    key = (a, b) if a < b else (b, a)
+                    count[key] = count.get(key, 0) + 1
+    w, sth, res = field.w, field.s, field.res
+    for (a, b), c in count.items():
+        if c != 1:
+            continue
+        for cx, cy in gridwalk.cells_touched((a[0] - w) / res, (a[1] - sth) / res,
+                                             (b[0] - w) / res, (b[1] - sth) / res):
+            if 0 <= cx < nx and 0 <= cy < ny:
+                out[cy * nx + cx] = 0
     return out
 
 
-def _apply_grids(field, grids, safety_depth, cache_dir) -> bool:
+def _apply_grids(field, grids, safety_depth, cache_dir, chart_polys=()) -> bool:
     """Fill the water no chart covers from the depth grids (#292). Per cell, everywhere but the
     cells the chart covers whole (`_fully_charted`: at the chart's edge both apply, so a shoal in
     a cell's uncharted half is still seen; Codex on #300): the shallowest grid depth there is the
@@ -764,7 +794,7 @@ def _apply_grids(field, grids, safety_depth, cache_dir) -> bool:
         return False
     marks = {g.name: bytearray(field.nx * field.ny) for g, _c in got if not g.navigational}
     nd, mask = field.nodepth, field.mask
-    charted = _fully_charted(field)
+    charted = _fully_charted(field, chart_polys)
     shoal = 0
     any_depth = False
     for i in range(field.nx * field.ny):
