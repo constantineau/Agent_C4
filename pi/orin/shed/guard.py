@@ -208,8 +208,8 @@ def load_config(env=None):
         if not 0 <= power <= 3:
             raise ValueError("SHED_POWER_LEVEL must be 0-3")
         hold, interval = float(c["SHED_HOLD_S"]), float(c["SHED_INTERVAL_S"])
-        if not (math.isfinite(hold) and hold >= 0 and math.isfinite(interval) and 0 < interval <= 60):
-            raise ValueError("SHED_HOLD_S must be >= 0 and SHED_INTERVAL_S 0-60 s")
+        if not (math.isfinite(hold) and hold >= 0 and math.isfinite(interval) and 0 < interval <= 10):
+            raise ValueError("SHED_HOLD_S must be >= 0 and SHED_INTERVAL_S 0-10 s (readers call 30 s stale)")
         return {"mem": mem, "mem_clear": memc, "tj": tj, "tj_clear": tjc, "power": power,
                 "hold_s": hold, "interval_s": interval,
                 "unload": c["SHED_UNLOAD_MODEL"].strip() not in ("0", "false", "no", ""),
