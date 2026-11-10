@@ -50,8 +50,10 @@ def _polars():
     now = time.monotonic()
     gen = _deploy_gen()
     if _POLARS is None or now - _POLARS_AT >= _POLARS_TTL_S or gen != _POLARS_GEN:
-        _POLARS = [(tws, twa, stw) for (tws, twa, stw) in datasource.active().polars_stw() if stw]
-        _POLARS_AT, _POLARS_GEN = now, gen
+        fresh = [(tws, twa, stw) for (tws, twa, stw) in datasource.active().polars_stw() if stw]
+        if _deploy_gen() != gen:
+            return _polars()   # a push landed mid-read: read again, cache nothing (Codex on #319)
+        _POLARS, _POLARS_AT, _POLARS_GEN = fresh, now, gen
     return _POLARS
 
 

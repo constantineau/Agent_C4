@@ -165,14 +165,19 @@ def _polar_table():
     ttl = POLAR_TTL_S if _POLAR_TABLE else POLAR_RETRY_S
     gen = _deploy_generation()
     if _POLAR_TABLE is None or now - _POLAR_AT >= ttl or gen != _POLAR_GEN:
-        _POLAR_AT, _POLAR_GEN = now, gen
         try:
             fresh = [(t, a, s) for (t, a, s) in datasource.active().polars_stw() if s is not None]
             failed = False
         except Exception:
             fresh, failed = [], True
+        if _deploy_generation() != gen:
+            # a Deploy push landed during the read: this table may be the previous boat's.
+            # Cache nothing from it; read again for the new boat (pushes are rare, pre-race)
+            return _polar_table()
         if not failed or not _POLAR_TABLE:
-            _POLAR_TABLE = fresh
+            _POLAR_TABLE, _POLAR_AT, _POLAR_GEN = fresh, now, gen
+        else:
+            _POLAR_AT, _POLAR_GEN = now, gen
     return _POLAR_TABLE
 
 
