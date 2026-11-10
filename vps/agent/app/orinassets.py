@@ -5,7 +5,11 @@ The Lab's Deploy push builds them (vps/lab/app/orinassets.py) and posts them her
 
   * the course's LAND chart (land-only mask, "land-v2", with a fingerprint of the course, zones and
     no-go depth) — the Orin can't build it, it has no shoreline data;
-  * the Lab's reviewed BOAT PROFILE (helm factor, approved polar cells, draft) and its version.
+  * the Lab's reviewed BOAT PROFILE (helm factor, approved polar cells, draft) and its version;
+  * that boat's own POLAR block (#304, shared/boat_polar.py): envelope, per-sail curves, crossover
+    table, speed guide. `boat_polar()` serves it to the engine (% of polar, targets, the sail
+    dial): aboard, the polar comes from here or the profile's inline cert, never from files
+    baked into the image. None held → the engine says "No boat polar loaded."
 
 The Pi stores them in one file (atomic replace) and puts them in every re-route request it sends
 the Orin (orinroute.build_request). The Orin keeps nothing: it routes on what the request carries,
@@ -24,6 +28,7 @@ import threading
 import time
 import zlib
 
+from shared import boat_polar as BP
 from shared import boat_profile
 
 from . import racegate
@@ -35,6 +40,13 @@ MAX_BYTES = 1536 * 1024              # well under the Orin's 2 MB request cap, w
 MAX_CELLS = 20_000_000              # = the Lab's obstacles.MAX_FIELD_CELLS
 RACING = racegate.RACING
 _LOCK = threading.Lock()
+_GEN = [0]          # bumped on every stored push: polar caches elsewhere re-read at once
+
+
+def generation():
+    """A counter that changes whenever a push replaces what's held (matcher/routing key their
+    polar caches on it, so the next boat's polar is used at once, never the last one's)."""
+    return _GEN[0]
 
 
 def _path():
@@ -124,6 +136,13 @@ def validate(body):
             return False, "boat profile version doesn't match"
         if body.get("boat_id") is not None and body["boat_id"] != boat.get("boat_id"):
             return False, "boat profile is for another boat"
+    polar = body.get("polar")
+    if polar is not None:
+        if not isinstance(boat, dict):
+            return False, "polar without a boat profile"
+        bad = BP.check(polar, boat.get("boat_id"))
+        if bad:
+            return False, bad[0]
     chart = body.get("chart")
     if chart is not None:
         ok, why = _check_chart(chart, body["race_id"], body["course_id"])
@@ -170,6 +189,7 @@ def load(body, now=None):
         if racegate.race_session():
             return racegate.refused()
         _write(text)
+        _GEN[0] += 1
     return answer
 
 
@@ -192,7 +212,8 @@ def summary(a, received_at=None):
             "chart_source": chart.get("source"), "open_water": bool(chart.get("open_water")),
             "boat_id": boat.get("boat_id"), "boat_version": a.get("boat_version") if boat else None,
             "helm_factor": boat.get("helm_factor"),
-            "polar_cells": len(boat.get("polar_adjustments") or []) if boat else None}
+            "polar_cells": len(boat.get("polar_adjustments") or []) if boat else None,
+            "polar": BP.summary(a.get("polar")) if boat else None}
 
 
 def get():
@@ -219,5 +240,44 @@ def for_run(definition, course_id):
         and a.get("course_id") == course_id
     return {"chart": a.get("chart") if same else None, "boat": a.get("boat"),
             "boat_version": a.get("boat_version") if a.get("boat") else None,
+            # only when the push carried the key: an older push has none, so the Orin may fall
+            # back to the profile's own; an explicit null means "no polar" (Codex on #319)
+            **({"polar": a.get("polar") if a.get("boat") else None} if "polar" in a else {}),
             "race_id": a.get("race_id"), "course_id": a.get("course_id"),
             "received_at": rec.get("received_at")}
+
+
+_POLAR_MEMO = {"memo": None}      # (file key, polar block), replaced as one tuple
+
+
+def boat_polar():
+    """The deployed boat's polar block for the engine, or None (#304).
+
+    The block the Lab's Deploy push carried with the profile, when it is whole and that boat's;
+    else the profile's inline ORC cert (a fleet boat). Never a file in the image: with nothing
+    deployed the engine's polar, targets and sail dial say "No boat polar loaded." Re-read only
+    when the stored file changes."""
+    try:
+        st = os.stat(_path())
+        key = (st.st_ino, st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+    memo = _POLAR_MEMO["memo"]
+    if memo is not None and memo[0] == key:
+        return memo[1]
+    pol = None
+    rec = _read()
+    if rec:
+        a = rec["assets"]
+        boat = a.get("boat") if isinstance(a.get("boat"), dict) else None
+        if boat is not None:
+            carried = a.get("polar")
+            if isinstance(carried, dict) and not BP.check(carried, boat.get("boat_id")):
+                pol = carried
+            elif "polar" not in a:
+                # a push from a Lab before #304 (no polar key): the profile's inline cert only,
+                # no files aboard. An explicit null is the Lab's word: no polar (Codex on #319)
+                pol = BP.resolve(boat, dirs=())
+    _POLAR_MEMO["memo"] = (key, pol)
+    return pol
+

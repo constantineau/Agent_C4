@@ -8,6 +8,8 @@ Exits non-zero on any failure.
 import json
 import os
 
+os.environ["BOAT_ID"] = "sr33"     # the shore agent's sail guide is its own boat's (#304)
+
 from app import sails
 
 ok = True

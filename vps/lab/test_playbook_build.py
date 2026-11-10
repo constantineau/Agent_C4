@@ -18,6 +18,8 @@ os.environ["INGESTED_DIR"] = _tmp
 os.environ["PLAYBOOK_DIR"] = os.path.join(_tmp, "playbooks")
 
 from app import scenarios as scen, synthesis as SYN  # noqa: E402
+import polar_fixture  # noqa: E402
+polar_fixture.install()     # bare optimizer/sail-plan calls route on sr33's own polar (#303)
 
 ok = True
 
@@ -70,7 +72,7 @@ check("with a field it still thins to the budget", len(built[0]["response"]["rou
 # ---- #182-8 ------------------------------------------------------------------------------------
 print("3) the boat model is the boat the job started on")
 active = {"boat": "sr33"}
-SYN._boat_model = lambda: {"boat_id": active["boat"]}
+SYN._boat_model = lambda *a, **k: {"boat_id": active["boat"]}
 
 
 def fake_build(*a, **k):

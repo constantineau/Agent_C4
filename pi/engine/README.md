@@ -18,8 +18,9 @@ Those read through `datasource.active()`; with `DATA_SOURCE=onboard` that resolv
   written by `pi/archiver`), mounted **read-only**;
 - **freshest live value** — an in-process Signal K WS cache (lower latency than the ~2-s archive
   flush; the engine still works if the WS is down — it falls back to the archive);
-- **polars** — parsed from the committed `vps/db/seed/polars_sr33.sql` (the one canonical polar
-  source; no DB);
+- **polars** — the DEPLOYED boat's own polar block (#304), carried with its profile by the Lab's
+  Deploy push (`POST /reroute/assets`); the image has no boat data. Nothing deployed → "No boat
+  polar loaded." on the polar and sail tiles, never another boat's numbers;
 - **course marks** — a small local SQLite store on the `engine_state` volume (the boat has no
   `waypoints` Postgres table); holds the generated practice course.
 

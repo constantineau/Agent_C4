@@ -52,12 +52,43 @@ def list_boats():
     return out
 
 
-def get_boat(bid):
-    for f in _files():
+def _bundled(bid):
+    """The bundled seed of boat `bid` (ignores the edited copy), or None."""
+    if not os.path.isdir(BUNDLED_DIR):
+        return None
+    for f in sorted(glob.glob(os.path.join(BUNDLED_DIR, "*.json"))):
         d = _load(f)
         if d and (d.get("boat_id") or os.path.splitext(os.path.basename(f))[0]) == bid:
             return d
     return None
+
+
+def get_boat(bid):
+    for f in _files():
+        d = _load(f)
+        if d and (d.get("boat_id") or os.path.splitext(os.path.basename(f))[0]) == bid:
+            if "polar_files" not in d and not d.get("cert_polar") \
+                    and os.path.dirname(f) != BUNDLED_DIR:
+                # an edited copy saved before the profile named its own polar files (#303): the
+                # boat's polar files come from its bundled seed, never from a default. An
+                # explicit empty `polar_files` is the owner's word (no polar) and stands.
+                seed = _bundled(bid)
+                if seed and isinstance(seed.get("polar_files"), dict) and seed["polar_files"]:
+                    d["polar_files"] = dict(seed["polar_files"])
+            return d
+    return None
+
+
+def polar_for(b):
+    """Boat `b`'s own polar block (shared/boat_polar.py): its `polar_files`, else its inline
+    `cert_polar`, else None — the caller refuses with `boat_polar.NO_POLAR`. Never sr33's."""
+    from shared import boat_polar
+    return boat_polar.resolve(b) if b else None
+
+
+def active_polar():
+    """The active boat's polar block (see `polar_for`), or None."""
+    return polar_for(active_boat())
 
 
 def save_boat(d: dict) -> dict:

@@ -37,8 +37,8 @@ os.environ["ONBOARD_LIVE_WS"] = "false"
 os.environ["DATA_SOURCE"] = "onboard"
 os.environ["COPILOT_URL"] = "http://127.0.0.1:9"        # no Orin: refused at once
 os.environ["BOAT_ID"] = "bravo"                         # this Pi is Bravo's
-# the Pi engine image bakes the polar at /srv/polars_sr33.sql; the same file from the repo here
-os.environ["POLARS_FILE"] = os.path.join(REPO, "vps", "db", "seed", "polars_sr33.sql")
+# the Pi engine image carries no polar since #304: it comes with the Deploy push (below)
+os.environ.pop("POLARS_FILE", None)
 os.environ.pop("ANTHROPIC_API_KEY", None)
 
 import pytest  # noqa: E402
@@ -91,7 +91,7 @@ POLAR = [tuple(map(float, p)) for p in BRAVO["cert_polar"]]
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from shared import boat_profile, polar as SPOL  # noqa: E402
+from shared import boat_polar, boat_profile, polar as SPOL  # noqa: E402
 from app import datasource  # noqa: E402
 import engine_app  # noqa: E402
 
@@ -119,7 +119,9 @@ def deploy(bundle):
     a = client.post("/reroute/assets", json={
         "schema": "c4.orin-assets/v1", "race_id": bundle["race_id"],
         "course_id": bundle["course_id"], "boat_id": "bravo", "boat": BRAVO,
-        "boat_version": boat_profile.version(BRAVO), "chart": None})
+        "boat_version": boat_profile.version(BRAVO), "chart": None,
+        # the boat's own polar block, as the Lab's Deploy push carries it (#304)
+        "polar": boat_polar.resolve(BRAVO)})
     assert a.status_code == 200 and a.json().get("loaded"), a.text
 
 
@@ -136,12 +138,10 @@ def onboard_polar():
     return rows, seen
 
 
-@xfail("#304", "the engine's polar is the baked sr33 file whatever boat is deployed")
 def test_onboard_polar_opens_no_sr33_file(onboard_polar):
     assert onboard_polar[1] == []
 
 
-@xfail("#304", "% of polar and targets aboard are sr33's numbers")
 def test_onboard_polar_is_bravos(onboard_polar):
     rows = onboard_polar[0]
     assert rows, "no polar aboard"
@@ -164,12 +164,10 @@ def test_sail_call_answers(sail_call):
     assert out.get("available") or out.get("note")
 
 
-@xfail("#304", "the sail call reads sr33's speed guide and crossovers for Bravo")
 def test_sail_call_opens_no_sr33_file(sail_call):
     assert sail_call[1] == []
 
 
-@xfail("#304", "the sail call's targets are sr33's speed guide numbers")
 def test_sail_call_targets_are_bravos_or_none(sail_call):
     """Either Bravo's own target speed, or a plain 'no sail model' — never another boat's."""
     out = sail_call[0]

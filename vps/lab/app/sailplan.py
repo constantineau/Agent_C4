@@ -1,65 +1,64 @@
-"""SR33 sail crossover model — routing fidelity 2b (the per-leg SAIL PLAN source).
+"""Sail crossover model — routing fidelity 2b (the per-leg SAIL PLAN source).
 
 The Lab optimizer routes on the Best-Performance polar envelope, which IS the max-over-sails speed —
 so the route's SPEED is already sail-optimal, but the route doesn't say WHICH sail achieves it. This
 module supplies that: the per-(TWS,TWA) optimal sail + the per-TWS crossover bands, precomputed from
-the ORC certificate into `sr33_crossovers.json` (by `vps/agent/knowledge/build_speed_guide.py`). The
-optimizer attaches `sail` to each leg; the playbook bundle freezes the whole crossover table as the
-reviewed, onboard-loadable boat sail model. (Lab-3 will make this boat-scoped via BoatProfile; the
-file is already keyed by `boat_id`.)
+the ORC certificate (by `vps/agent/knowledge/build_speed_guide.py`). The optimizer attaches `sail`
+to each leg; the playbook bundle freezes the whole crossover table as the reviewed, onboard-loadable
+boat sail model.
+
+The table is the BOAT's (#303): callers pass `xo`, the `crossovers` of the boat's polar block
+(`boats.polar_for(boat)`, see `of`). No table (a cert-only boat) → no sail calls, never another
+boat's.
 """
-import json
-import os
 
-CROSSOVERS_FILE = os.environ.get("CROSSOVERS_FILE", "/srv/sr33_crossovers.json")
-_CACHE = None
+_EMPTY = {"crossovers": {}, "tws_buckets": [], "inventory": [], "sail_names": {}}
 
 
-def _load():
-    global _CACHE
-    if _CACHE is None:
-        try:
-            with open(CROSSOVERS_FILE) as f:
-                _CACHE = json.load(f)
-        except (OSError, ValueError):
-            _CACHE = {"crossovers": {}, "tws_buckets": [], "inventory": [], "sail_names": {}}
-    return _CACHE
+def of(block):
+    """The crossover table of a boat polar block (None when it has none)."""
+    xo = (block or {}).get("crossovers")
+    return xo if isinstance(xo, dict) else None
 
 
-def available() -> bool:
-    return bool(_load().get("crossovers"))
+def _load(xo):
+    return xo if isinstance(xo, dict) else _EMPTY
 
 
-def model() -> dict:
+def available(xo) -> bool:
+    return bool(_load(xo).get("crossovers"))
+
+
+def model(xo) -> dict:
     """The full sail model (for the bundle's boat_model block + the review UI)."""
-    d = _load()
+    d = _load(xo)
     return {"boat_id": d.get("boat_id"), "source": d.get("source"),
             "inventory": d.get("inventory", []), "sail_names": d.get("sail_names", {}),
             "tws_buckets": d.get("tws_buckets", []), "crossovers": d.get("crossovers", {}),
             "overlaps": d.get("overlaps", {})}
 
 
-def _nearest_tws(tws):
-    buckets = _load().get("tws_buckets") or []
+def _nearest_tws(tws, xo):
+    buckets = _load(xo).get("tws_buckets") or []
     if not buckets or tws is None:
         return None
     return min(buckets, key=lambda b: abs(b - tws))
 
 
-def crossovers(tws):
+def crossovers(tws, xo):
     """The sail zones for the nearest TWS bucket: [{sail, short, label, twa_min, twa_max}]."""
-    b = _nearest_tws(tws)
-    return _load().get("crossovers", {}).get(str(b), []) if b is not None else []
+    b = _nearest_tws(tws, xo)
+    return _load(xo).get("crossovers", {}).get(str(b), []) if b is not None else []
 
 
-def crossovers_specialized(jib_crossovers, sail_config=None):
+def crossovers_specialized(jib_crossovers, sail_config=None, xo=None):
     """The full per-TWS crossover table with the upwind jib band relabelled to the actual jib for
     THAT row's TWS (J1/J2/J3 by the boat's change-downs) — so the chart shows what you'd really fly,
     not just the cert's single J1. Each row IS one TWS, so the substitution is exact (not a clamp).
     With a `sail_config` carrying a Code 0 band, the C0 CARVES its TWA range out of the jib zone on
     the light rows it applies to (the zone splits jib / C0 / jib as needed) — same crew-band-overlay
     discipline as the jib change-downs (the cert doesn't rate a Code 0)."""
-    raw = _load().get("crossovers", {})
+    raw = _load(xo).get("crossovers", {})
     c0 = _code0_band(sail_config)
     if not jib_crossovers and not c0:
         return raw
@@ -123,10 +122,10 @@ def _merge_c0(zones):
     return out
 
 
-def overlaps_specialized(jib_crossovers):
+def overlaps_specialized(jib_crossovers, xo=None):
     """The per-TWS toss-up bands with the upwind jib in each band's sail list relabelled to the actual
     jib for THAT row's TWS (J1/J2/J3) — mirrors crossovers_specialized so the chart's overlaps match."""
-    raw = _load().get("overlaps", {})
+    raw = _load(xo).get("overlaps", {})
     if not jib_crossovers:
         return raw
     out = {}
@@ -163,7 +162,7 @@ def jib_for_tws(tws, jib_crossovers):
     return jib_crossovers[-1].get("sail") or _JIB_FAMILY
 
 
-def optimal_sail(tws, twa, jib_crossovers=None, sail_config=None):
+def optimal_sail(tws, twa, jib_crossovers=None, sail_config=None, xo=None):
     """The crew-shorthand sail (e.g. 'A3') optimal at (tws, twa). TWA is folded to 0–180 (port/
     starboard symmetric). A leg's TWA is the DIRECT-course angle, so an upwind beat can read below
     the close-hauled angle (you tack up on the beat sail) — clamp to the first/last band rather than
@@ -174,7 +173,7 @@ def optimal_sail(tws, twa, jib_crossovers=None, sail_config=None):
     if twa is None:
         return None
     twa = abs(((twa + 180) % 360) - 180)
-    zones = crossovers(tws)
+    zones = crossovers(tws, xo)
     if not zones:
         return None
     if twa < zones[0]["twa_min"]:                     # below the beat angle → beating on the up sail

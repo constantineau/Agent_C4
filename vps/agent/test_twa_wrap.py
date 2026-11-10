@@ -9,10 +9,13 @@ import math
 import os
 import sys
 
+os.environ["BOAT_ID"] = "sr33"     # the shore agent's sail guide is its own boat's (#304)
+
 from shared import units
 from app import datasource_onboard, onboard_conditions, sails, tools
-from app.datasource_onboard import OnboardSource, _load_polars
+from app.datasource_onboard import OnboardSource
 
+# an explicit polar file (the replay rig's override; aboard the polar comes from Deploy, #304)
 datasource_onboard.POLARS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                               "..", "db", "seed", "polars_sr33.sql")
 
@@ -69,7 +72,6 @@ print("polar target (onboard table) folds the angle")
 # The nearest-bucket helper is gone (#67); the polar target is the shared interpolation.
 from shared import polar as shared_polar   # noqa: E402
 src = OnboardSource.__new__(OnboardSource)    # just the polar table — no archive, no live feed
-src._polars = _load_polars()
 check("onboard polar table loaded", len(src._polars) > 0)
 tab = [r for r in src.polars_stw() if r[2] is not None]
 n36, n324, nm36 = (shared_polar.target(tab, 12, a) for a in (36, 324, -36))

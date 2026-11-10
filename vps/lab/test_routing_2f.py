@@ -14,6 +14,8 @@ import math
 from app import store, polars as POL
 from app.geo import obstacles as OB
 from app import optimizer as OPT
+import polar_fixture  # noqa: E402
+polar_fixture.install()     # bare optimizer/sail-plan calls route on sr33's own polar (#303)
 
 ok = True
 def check(name, cond):

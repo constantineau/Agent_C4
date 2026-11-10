@@ -24,12 +24,6 @@ import subprocess
 import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-for _seed in (os.path.join(HERE, "..", "db", "seed"), "/srv"):
-    if os.path.exists(os.path.join(_seed, "polars_sr33.sql")):
-        os.environ["POLARS_FILE"] = os.path.join(_seed, "polars_sr33.sql")
-        os.environ["SAIL_POLARS_FILE"] = os.path.join(_seed, "sr33_sail_polars.json")
-        os.environ["CROSSOVERS_FILE"] = os.path.join(_seed, "sr33_crossovers.json")
-        break
 _tmp = tempfile.mkdtemp()
 os.environ["INGESTED_DIR"] = _tmp
 os.environ["GRIB_CACHE"] = os.path.join(_tmp, "gribcache")
@@ -39,6 +33,8 @@ os.environ["DEPTH_GRIDS"] = "none"     # stub charts only: no real depth grid ov
 from app import optimizer as OPT, orinassets, playbook, synthesis as SYN  # noqa: E402
 from app import current as currentmod, wave as wavemod  # noqa: E402
 from app.geo import coastline as C, obstacles as OB  # noqa: E402
+import polar_fixture  # noqa: E402
+polar_fixture.install()     # bare optimizer/sail-plan calls route on sr33's own polar (#303)
 from shared import gridwalk  # noqa: E402
 
 ok = True

@@ -29,6 +29,8 @@ from app import monitor
 from app import obspolar as OP
 from app import polars as POL
 from app import track as T
+import polar_fixture  # noqa: E402
+polar_fixture.install()     # bare optimizer/sail-plan calls route on sr33's own polar (#303)
 
 ok = True
 

@@ -6,7 +6,6 @@
   "sail_number": "USA 5288",
   "draft_m": 1.582,
   "safety_margin_m": 0.5,
-  "polars_file": "",
   "orc": {
     "rating": 0.6721,
     "gph": 659.5,

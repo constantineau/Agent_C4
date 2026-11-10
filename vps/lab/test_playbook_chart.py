@@ -19,12 +19,6 @@ import os
 import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-for _seed in (os.path.join(HERE, "..", "db", "seed"), "/srv"):
-    if os.path.exists(os.path.join(_seed, "polars_sr33.sql")):
-        os.environ["POLARS_FILE"] = os.path.join(_seed, "polars_sr33.sql")
-        os.environ["SAIL_POLARS_FILE"] = os.path.join(_seed, "sr33_sail_polars.json")
-        os.environ["CROSSOVERS_FILE"] = os.path.join(_seed, "sr33_crossovers.json")
-        break
 _tmp = tempfile.mkdtemp()
 os.environ["INGESTED_DIR"] = _tmp
 os.environ.pop("ANTHROPIC_API_KEY", None)
@@ -35,6 +29,8 @@ from app import current as currentmod, geo, labstate, playbook, wave as wavemod 
 from app.geo import obstacles as OB  # noqa: E402
 from app.wind import grib  # noqa: E402
 from app.wind.windfield import WindField  # noqa: E402
+import polar_fixture  # noqa: E402
+polar_fixture.install()     # bare optimizer/sail-plan calls route on sr33's own polar (#303)
 
 labstate._PATH = os.path.join(_tmp, "_labstate.json")   # never the image's real state file
 
@@ -147,7 +143,7 @@ synthesis.pb.build_playbook = fake_build_playbook
 synthesis._venue_stats = lambda: None
 synthesis._buoy_stations = lambda *a, **k: []
 synthesis._fingerprint = lambda *a, **k: None
-synthesis._boat_model = lambda: {}
+synthesis._boat_model = lambda *a, **k: {}
 bundle = synthesis.synthesize(DEF, "c", T0, ["gfs"], chart=CHART)
 check("build_playbook got the chart", seen.get("chart") == CHART)
 check("the bundle records it", bundle.get("chart") == {"source": "enc", "safety_depth_m": 2.1})

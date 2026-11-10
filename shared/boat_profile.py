@@ -10,8 +10,9 @@ Canonical units are SI (metres) to match the rest of the engine and the raw-SI t
 US sailors think in FEET, so the Lab UI displays/enters draft in feet and converts on the boundary
 (`ft_to_m`/`m_to_ft`); only metres are stored.
 
-Fields beyond draft (polars, ORC rating, beam/air-draft/displacement/hull/sail inventory) are carried
-so the profile can grow into corrected-time scoring and fuller modelling — draft is the one wired into
+The boat's polar is its own: `polar_files` (or an inline `cert_polar`), resolved by
+shared/boat_polar.py — no boat ever routes on another boat's polar. Fields beyond draft (ORC
+rating, beam/air-draft/displacement/hull/sail inventory) are carried so the profile can grow into corrected-time scoring and fuller modelling — draft is the one wired into
 routing today. SR33 = profile #1 (`vps/lab/boats/sr33.json`, draft 7 ft = 2.1336 m).
 """
 from __future__ import annotations
@@ -53,7 +54,10 @@ class BoatProfile:
     # own transmission coming back. Blank → not set (env OWN_MMSI or the race's own.mmsi may say).
     mmsi: str = ""
     safety_margin_m: float = DEFAULT_MARGIN_M        # under-keel margin → no-go depth = draft + this
-    polars_file: str = ""                            # per-boat polars (blank → the Lab default)
+    # The boat's OWN speed model files (#303), basenames found in the boat-data dirs (see
+    # shared/boat_polar.py): {envelope, sail_polars?, crossovers?, speed_guide?}. Empty → the
+    # inline `cert_polar` if any, else the boat has no polar and routing refuses. Never a default.
+    polar_files: dict = field(default_factory=dict)
     orc: Optional[dict] = None
     # fuller modelling, optional / future:
     beam_m: Optional[float] = None
@@ -181,6 +185,8 @@ def shape_errors(d) -> list:
     opt("main_reefs", lambda v: isinstance(v, dict) and all(
         x is None or _num(x) for x in v.values()))
     opt("sail_inventory", lambda v: isinstance(v, list) and all(isinstance(x, str) for x in v))
+    from shared import boat_polar
+    errs += boat_polar.files_errors(d.get("polar_files"))
     return errs
 
 
