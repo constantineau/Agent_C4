@@ -25,7 +25,7 @@ sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "
 _tmp = tempfile.mkdtemp()
 os.environ["ENGINE_DB"] = os.path.join(_tmp, "engine", "engine.db")
 
-from app import orinroute, deviation  # noqa: E402
+from app import orinroute, deviation, reroutelog  # noqa: E402
 from app import navigator as NAV  # noqa: E402
 
 ok = True
@@ -141,6 +141,15 @@ code, body = orinroute.run("iPad 2", call=orin({("POST", "/run"): (
           "detail": "A re-route is already running."})}))
 check("409 busy + the Orin's progress", code == 409 and body["busy"] and body["progress"] == PROG
       and body["detail"] == "A re-route is already running.")
+
+print("paused by the Orin's load shed (#295):")
+code, body = orinroute.run("iPad 2", call=orin({("POST", "/run"): (
+    503, {"ok": False, "paused": True, "detail": "Re-route paused: Orin low on memory."})}))
+check("503 paused, said as paused (not a failure), the Orin's words kept",
+      code == 503 and body.get("paused") is True and body.get("orin") == "paused"
+      and body["detail"] == "Re-route paused: Orin low on memory.")
+ev = [(r["event"], r.get("outcome")) for r in reroutelog.history(5)]
+check("logged as paused", ("pressed", "paused") in ev)
 
 print("done → stored:")
 RESULT = {"schema": "c4.reroute/v1", "job_id": "j1", "available": True, "label": "x",

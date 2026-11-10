@@ -47,6 +47,7 @@
      raises a status (a suggestion is quiet text, not an alarm). */
   const CELLS = ["wind", "playbook", "forecast", "sail", ["eta", "route"], "ais", "charge", PAIR];
   const RT = window.C4Reroute;
+  const SHED = window.C4Shed;     // the Orin's load shed (#295): one plain line while it sheds
   // the re-route status poll: ~every 10 s, every 3 s while one runs (RT.pollEvery)
   const boatName = (r) => { const n = r.boat || r.name || ("MMSI " + (r.mmsi || "?")); return n.length > 14 ? n.slice(0, 13) + "…" : n; };
   const aisName = (t) => { const n = t.name || ("MMSI " + t.mmsi); return n.length > 12 ? n.slice(0, 11) + "…" : n; };
@@ -1759,7 +1760,28 @@
       rrAgeMs: demo ? 0 : Date.now() - App.rrAt, rrAt: App.rrAt,
       suggest: syn.reroute_suggest || null, sugAgeMs: demo ? 0 : Date.now() - App.synAt,
       press: App.rtPress, nowMs: Date.now(),
+      shedLevel: demo || !App.cpHealth ? null : SHED.level(App.cpHealth), shedAt: App.cpHealthAt,
     });
+  }
+  /* the Orin's load shed (#248/#295): GET /copilot/health. No answer (no Orin aboard, the Orin
+     off or the link down) → null and no line: that case is shown elsewhere, never twice. */
+  async function fetchCopilotHealth() {
+    if (App.src !== "live") return;
+    // stamped when ASKED: a level-0 read asked before a refused press must not end its Pi offer.
+    // 20 s: /health checks the engine, then Ollama (its own 8 s timeout), in turn.
+    const askedAt = Date.now();
+    const r = await COL.fetchJsonWithin(COPILOT + "/health", { headers: { Accept: "application/json" } }, 20000);
+    if (askedAt < App.cpHealthAt) return;   // polls can overlap: a newer read already landed
+    App.cpHealth = r && typeof r === "object" ? r : null;
+    App.cpHealthAt = askedAt;
+    renderShed();
+    render();
+  }
+  function renderShed() {
+    const el = document.getElementById("shedWarn");
+    if (!el) return;
+    const txt = App.src === "live" ? SHED.line(App.cpHealth) : null;
+    el.hidden = !txt; el.textContent = txt || "";
   }
   /* POST that keeps the status code: {code, body}, or null with no answer at all */
   function postStatus(path, body, ms) {
@@ -1787,7 +1809,8 @@
     App.rtPress = RT.afterPress(eng, res ? res.code : null, res ? res.body : null, Date.now());
     render();
     fetchReroute();
-    if (App.rtPress.phase === "unreachable") setTimeout(render, RT.ARM_MS + 50);   // arm the Pi offer
+    if (App.rtPress.phase === "unreachable" || App.rtPress.phase === "paused")
+      setTimeout(render, RT.ARM_MS + 50);   // arm the Pi offer
   };
   /* the ROUTE tile: a mini tile whose face carries the button itself (one tap, wet fingers);
      a tap anywhere else opens the detail */
@@ -2233,6 +2256,7 @@
     dwell: {}, fresh: {}, ages: {}, data: null, windHist: [], fcstHist: [], seriesHist: [], lastPersist: 0, brief: null, track: BG.newTrack(),
     coach: null, deviation: null, forecastDrift: null, selector: null, synAt: 0,
     rr: null, rrAt: 0, rrTimer: null, rtPress: {},
+    cpHealth: null, cpHealthAt: 0, cpHealthTimer: null,
     plangap: null, trend: null, briefBusy: {}, gps: null, gpsBusy: false, gpsNote: "",
     checklist: null, chkTimer: null,
     plume: null, plumeAt: 0, plumeWait: "", plumeTimer: null, plumeView: { field: "tws", only: null },
@@ -2984,6 +3008,7 @@
     else { App.src = "live"; }
     document.getElementById("srcLbl").textContent = App.src === "live" ? "LIVE" : "DEMO·" + App.demoScn;
     renderSailsBar();
+    renderShed();
     raceOverUntil = 0;
     renderRaceOver();
     if (App.src === "live") fetchSession();
@@ -3027,6 +3052,8 @@
     App.selTimer = setInterval(fetchSelector, DEV_EVERY);
     fetchSynthesis();               // in-race strategy synthesis (copilot LLM → engine fallback), own cadence
     App.synTimer = setInterval(fetchSynthesis, SYN_EVERY);
+    fetchCopilotHealth();           // the Orin's load shed (copilot /health), the synthesis's cadence
+    App.cpHealthTimer = setInterval(fetchCopilotHealth, SYN_EVERY);
     fetchPlays();                   // Phase-D play matcher (engine, deterministic), own cadence
     fetchSailState();               // the SAILS bar (crew sail configuration), own cadence
     App.sailTimer = setInterval(fetchSailState, 12000);
@@ -3086,7 +3113,8 @@
       oldTag: oldTag, poll: poll, onWake: onWake, courseMapHtml: courseMapHtml, selectorHtml: selectorHtml,
       provenanceTableHtml: provenanceTableHtml, twsTrendTile: twsTrendTile, fetchSailState: fetchSailState,
       fetchCourse: fetchCourse, fetchSelector: fetchSelector, navControlsHtml: navControlsHtml,
-      navAction: navAction, fetchDeviation: fetchDeviation,
+      navAction: navAction, fetchDeviation: fetchDeviation, fetchCopilotHealth: fetchCopilotHealth,
+      rerouteView: rerouteView,
       deviationHtml: deviationHtml, currentData: currentData, rawDead: rawDead });
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
   else init();
