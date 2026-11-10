@@ -166,6 +166,10 @@ def main():
     with open(path, "w") as f:
         f.write("{not json")
     check("broken file → level 0", guard.read_state(path)["level"] == 0)
+    os.environ["SHED_STALE_S"] = "oops"
+    check("a junk SHED_STALE_S in a reader → default 30 s, no crash",
+          guard.read_state(path, now=5001)["level"] == 0)
+    os.environ.pop("SHED_STALE_S")
     os.environ["SHED_STATE"] = path
     guard.write_state({"level": 2, "cause": "memory", "updated": 5000.0}, path)
     check("SHED_STATE env picks the file", guard.paused("plume", now=5001) is not None)

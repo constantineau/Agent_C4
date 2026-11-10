@@ -76,8 +76,13 @@ def read_state(path=None, now=None, stale_s=None):
     guard isn't running) → level 0 with `guard` saying why: fail open, never block on a dead guard."""
     path = path or state_path()
     now = time.time() if now is None else now
-    stale_s = float(os.environ.get("SHED_STALE_S", DEFAULTS["SHED_STALE_S"])) \
-        if stale_s is None else stale_s
+    if stale_s is None:
+        try:
+            stale_s = float(os.environ.get("SHED_STALE_S", DEFAULTS["SHED_STALE_S"]))
+        except ValueError:
+            stale_s = float(DEFAULTS["SHED_STALE_S"])
+        if not math.isfinite(stale_s) or stale_s <= 0:
+            stale_s = float(DEFAULTS["SHED_STALE_S"])
     try:
         with open(path) as f:
             st = json.load(f)
