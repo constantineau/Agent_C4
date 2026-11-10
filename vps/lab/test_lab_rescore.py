@@ -220,23 +220,20 @@ check("reject on a ready run works", LN.rescore_reject(run2["id"])["ok"] is True
       and LN.get_rescore(run2["id"])["status"] == "rejected")
 check("approve on a rejected run is refused", LN.rescore_propose(run2["id"])["ok"] is False)
 
-# a wave fit that succeeds: the helm/overlay are refined on the SAME coefficients it proposes
-print("4b) a re-score with a wave fit refines helm on the proposed wave coefficients")
-# pct_flat as scored on the OLD coefficients (no wave loss at all): a run that refined helm off it
-# would propose 0.99 next to a wave slope, and the pair would over-predict in a seaway
-WB = [{**b(10.0, 45.0, 0, 50), "hs_mean": hs, "pct_flat": 99, "race_id": RID, "window_start": W18}
+# a wave fit that succeeds is shown, never filed: helm stays on the coefficients in use
+print("4b) a re-score's wave fit is shown, not filed")
+WB = [{**b(10.0, 45.0, 0, 50), "hs_mean": hs, "race_id": RID, "window_start": W18}
       for hs in (0.2, 0.3, 0.4, 1.2, 1.6, 2.0)]
-ag = {**LN.applied_model("sr33"), "wave_coeffs": {"hs_deadband": 0.5, "k_up": 0.0, "k_reach": 0.0,
-                                                  "k_down": 0.0, "floor": 0.6}}
-for x in WB:            # a clean slope: 90% flat, losing 6%/m above 0.5 m
-    x["pct"] = round(90 * (1 - 0.06 * max(0.0, x["hs_mean"] - 0.5)))
-wr = LN.save_rescore("sr33", "t", [], WB, against=ag)
-wk = (wr["wave"] or {}).get("proposed") or {}
-from app.optimizer import _wave_factor        # noqa: E402
-pred = [wr["result"]["helm_proposed"] * _wave_factor(x["hs_mean"], x["twa"], wk) for x in WB]
-check(f"the wave fit succeeds (k_up {wk.get('k_up')})", (wr["wave"] or {}).get("ok"))
-check(f"helm × proposed wave factor predicts what was sailed (got {[round(p, 3) for p in pred]})",
-      all(abs(p - x["pct"] / 100.0) < 0.02 for p, x in zip(pred, WB)))
+for x in WB:            # a clean slope: 90% flat, losing 6%/m above 0.5 m, scored on no wave loss
+    x["pct"] = x["pct_flat"] = round(90 * (1 - 0.06 * max(0.0, x["hs_mean"] - 0.5)))
+wr = LN.save_rescore("sr33", "t", [], WB)
+check("the wave fit succeeds and is in the comparison",
+      (wr["wave"] or {}).get("ok") and wr["comparison"]["wave"]["available"])
+n_props = rows("proposals")
+res_w = LN.rescore_propose(wr["id"])
+check("approve files ONE proposal, the boat-model one, refined on the waves in use",
+      res_w.get("ok") and rows("proposals") == n_props + 1
+      and LN.get_proposal(res_w["proposal_id"])["kind"] == "boat_model")
 
 # ---- 5) score_recording: fields over the recording's own time ---------------------------------
 print("5) score_recording builds current and sea state for the recording's own span")

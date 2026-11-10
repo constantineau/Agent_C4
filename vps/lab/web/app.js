@@ -4705,7 +4705,7 @@ function polRescoreCard() {
     }).join("");
     const w = cmp.wave || {};
     const wave = w.available
-      ? `<div class="muted" style="font-size:12px;margin-top:6px">Waves: ${Object.entries(w.keys || {}).filter(([, v]) => v.now !== v.new).map(([k, v]) => `${esc(k)} ${v.now} → <b>${v.new}</b>`).join(" · ") || "no change"}</div>`
+      ? `<div class="muted" style="font-size:12px;margin-top:6px">Waves: ${Object.entries(w.keys || {}).filter(([, v]) => v.now !== v.new).map(([k, v]) => `${esc(k)} ${v.now} → <b>${v.new}</b>`).join(" · ") || "no change"}. Not part of this suggestion. Fit waves in Learnings.</div>`
       : `<div class="muted" style="font-size:12px;margin-top:6px">Waves: no change. ${esc(w.note || "")}</div>`;
     body = `<div class="dep-row">Helm <b>${h.now}</b> → <b>${h.new}</b>${h.change ? " (" + (h.change > 0 ? "+" : "") + h.change + ")" : ""}
         · ${c.changes || 0} of ${cmp.applied_cells || 0} cells change · ${c.dropped || 0} back to polar · ${c.new || 0} new · ${c.same || 0} same</div>

@@ -79,7 +79,7 @@ def _conn():
         created_at REAL, boat_id TEXT, evidence_version TEXT, status TEXT,
         against_json TEXT, recordings_json TEXT, bins_json TEXT, result_json TEXT,
         wave_json TEXT, comparison_json TEXT,
-        proposal_id INTEGER, wave_proposal_id INTEGER, decided_at REAL, decided_note TEXT);
+        proposal_id INTEGER, decided_at REAL, decided_note TEXT);
     """)
     _ensure_columns(c)      # additive-only migration for archives created before these columns
     return c
@@ -873,29 +873,18 @@ def compare(against, result, wave=None):
     return out
 
 
-def _flat_on(bins, wave):
-    """When the wave fit proposes new coefficients, take the sea state out of each bin with THOSE
-    (pct_flat), so the helm and overlay filed alongside them form one model: applying both must
-    predict what the boat sailed. Bins with no sea state, or no fit, are left as scored."""
-    if not (wave or {}).get("ok"):
-        return bins
-    from .optimizer import _wave_factor
-    out = []
-    for b in bins:
-        if b.get("hs_mean") is not None and b.get("pct") is not None:
-            f = _wave_factor(float(b["hs_mean"]), float(b["twa"]), wave["proposed"])
-            b = {**b, "pct_flat": round(b["pct"] / f) if f > 0 else b["pct"]}
-        out.append(b)
-    return out
-
-
 def save_rescore(boat_id, evidence_version, recordings, bins, against=None):
     """File one re-score run: the re-scored bins, the proposal math over them, the wave fit, and the
     comparison with what the boat sails on now. Writes ONLY its own row."""
     against = against if against is not None else applied_model(boat_id)
-    wave = fit_waves(bins, against.get("wave_coeffs") or _current_wave_coeffs(boat_id))
-    result = refine(_flat_on(bins, wave), None, against["helm_factor"]) if bins else {
+    # The helm and overlay are refined on the wave coefficients IN USE (each bin's pct_flat was
+    # scored with them), so the suggestion this run can file fits the boat as it sails now. The
+    # wave fit is shown, never filed from here: a helm refined on one set of coefficients and a
+    # wave proposal applied (or rejected) separately would make an inconsistent model (Codex on
+    # #297). New wave coefficients go through Learnings' own wave fit.
+    result = refine(bins, None, against["helm_factor"]) if bins else {
         "ok": False, "note": "No recording could be scored again."}
+    wave = fit_waves(bins, against.get("wave_coeffs") or _current_wave_coeffs(boat_id))
     comparison = compare(against, result, wave)
     c = _conn()
     try:
@@ -945,16 +934,16 @@ def latest_rescore(boat_id):
 
 
 def rescore_propose(run_id, note=""):
-    """A person approved a re-score run → file it as an ordinary `proposed` refinement (plus a wave
-    one when the wave fit succeeded). Nothing reaches the boat here: the proposal is applied, or
-    not, through `apply_proposal` like any other (ADR-0003)."""
+    """A person approved a re-score run → file it as an ordinary `proposed` boat-model refinement.
+    Nothing reaches the boat here: the proposal is applied, or not, through `apply_proposal` like
+    any other (ADR-0003). The wave fit is not filed (see `save_rescore`)."""
     from . import boats
     run = get_rescore(run_id)
     if not run:
         return {"ok": False, "note": "unknown re-score"}
     if run["status"] != "ready":
         return {"ok": False, "note": f"re-score already {run['status']}"}
-    res, wave = run.get("result") or {}, run.get("wave") or {}
+    res = run.get("result") or {}
     if not res.get("ok"):
         return {"ok": False, "note": res.get("note") or "this re-score has nothing to suggest"}
     boat = boats.get_boat(run["boat_id"]) or {}
@@ -974,21 +963,11 @@ def rescore_propose(run_id, note=""):
             (now, run["boat_id"], "proposed", helm_now, res["helm_proposed"], res["overall_pct"],
              res["n_debriefs"], res["n_bins"], json.dumps(res["adjustments"]),
              json.dumps({**res["summary"], **tag}))).lastrowid
-        wpid = None
-        if wave.get("ok"):
-            wpid = c.execute(
-                """INSERT INTO proposals (created_at,boat_id,status,kind,helm_current,helm_proposed,
-                   overall_pct,n_debriefs,n_bins,adjustments_json,summary_json,wave_json)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (now, run["boat_id"], "proposed", "wave_coeffs", None, None, None,
-                 wave["n_debriefs"], wave["n_bins"], json.dumps([]),
-                 json.dumps({**wave["summary"], **tag}), json.dumps(wave["proposed"]))).lastrowid
-        c.execute("UPDATE rescore_runs SET proposal_id=?,wave_proposal_id=? WHERE id=?",
-                  (pid, wpid, run_id))
+        c.execute("UPDATE rescore_runs SET proposal_id=? WHERE id=?", (pid, run_id))
         c.commit()
     finally:
         c.close()
-    return {"ok": True, "proposal_id": pid, "wave_proposal_id": wpid}
+    return {"ok": True, "proposal_id": pid}
 
 
 def rescore_reject(run_id, note=""):
