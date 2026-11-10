@@ -310,6 +310,16 @@ def test_debrief_opens_no_sr33_file(scored):
     assert scored[1] == []
 
 
+@xfail("#303", "debrief's polar targets for Bravo are sr33's numbers")
+def test_debrief_targets_are_bravos(scored):
+    from shared import polar as SPOL
+    pts = [tuple(map(float, p)) for p in BRAVO["cert_polar"]]
+    bins = scored[0].get("perf_bins") or []
+    assert bins
+    for b in bins:
+        assert abs(b["target_stw"] - SPOL.lookup(pts, b["tws"], b["twa"])) < 0.1, b
+
+
 @pytest.fixture(scope="module")
 def tactics(bundle):
     pb = bundle[0]
