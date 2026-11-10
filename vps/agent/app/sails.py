@@ -66,7 +66,7 @@ def _overlaps_of(xo):
         return {}
 
 
-_MEMO = {"key": None, "guide": ({}, {})}
+_MEMO = {"memo": None}          # (key, (sections, overlaps)), replaced as one tuple
 # one answer reads ONE guide: a Deploy push landing mid-answer can't mix two boats (Codex on #319)
 _PINNED = contextvars.ContextVar("sails_guide", default=None)
 
@@ -83,7 +83,9 @@ def _shore_files():
 
 
 def _guide():
-    """(sections, overlaps) of THIS boat's speed guide (see the module doc); ({}, {}) when none."""
+    """(sections, overlaps) of THIS boat's speed guide (see the module doc); ({}, {}) when none.
+    Cached as ONE (key, guide) tuple, built locally and published at once, so readers racing a
+    Deploy push never leave one boat's guide under another's key (Codex on #319)."""
     pinned = _PINNED.get()
     if pinned is not None:
         return pinned
@@ -91,30 +93,34 @@ def _guide():
         from . import orinassets
         block = orinassets.boat_polar()
         key = ("deploy", (block or {}).get("version"))
-        if _MEMO["key"] != key:
-            _MEMO["key"] = key
-            _MEMO["guide"] = (_sections_of((block or {}).get("speed_guide")),
-                              _overlaps_of((block or {}).get("crossovers")))
-        return _MEMO["guide"]
+        memo = _MEMO["memo"]
+        if memo is not None and memo[0] == key:
+            return memo[1]
+        guide = (_sections_of((block or {}).get("speed_guide")),
+                 _overlaps_of((block or {}).get("crossovers")))
+        _MEMO["memo"] = (key, guide)
+        return guide
     g, x = _shore_files()
     key = ("shore", g, x)
-    if _MEMO["key"] != key:
-        _MEMO["key"] = key
-        sections, overlaps = {}, {}
-        if g:
-            try:
-                with open(g, encoding="utf-8") as f:
-                    sections = _sections_of(BP.parse_speed_guide(f.read()))
-            except OSError:
-                sections = {}
-        if x:
-            try:
-                with open(x) as f:
-                    overlaps = _overlaps_of(json.load(f))
-            except (OSError, ValueError):
-                overlaps = {}
-        _MEMO["guide"] = (sections, overlaps)
-    return _MEMO["guide"]
+    memo = _MEMO["memo"]
+    if memo is not None and memo[0] == key:
+        return memo[1]
+    sections, overlaps = {}, {}
+    if g:
+        try:
+            with open(g, encoding="utf-8") as f:
+                sections = _sections_of(BP.parse_speed_guide(f.read()))
+        except OSError:
+            sections = {}
+    if x:
+        try:
+            with open(x) as f:
+                overlaps = _overlaps_of(json.load(f))
+        except (OSError, ValueError):
+            overlaps = {}
+    guide = (sections, overlaps)
+    _MEMO["memo"] = (key, guide)
+    return guide
 
 
 def _overlaps_for(tws_bucket):
