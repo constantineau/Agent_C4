@@ -187,6 +187,25 @@ check("Deploy: no polar block, and the step says why", pay2["polar"] is None
 s2 = judge._score_actual_track(track, {}, [], T0, boat=NOPOLAR, wave_coeffs=None)
 check("track scoring refuses by name", s2.get("available") is False and s2["note"] == BP.NO_POLAR)
 
+print("5b) a playbook job keeps the boat it was asked for, with its polar")
+boats.set_active("sr33")
+seen = {}
+_bp = synthesis.pb.build_playbook
+
+
+def fake_build(*a, **k):
+    seen["polar"] = k.get("boat_polar")
+    return {"available": False, "note": "stop"}
+
+
+synthesis.pb.build_playbook = fake_build
+try:
+    synthesis.synthesize(COURSE, "x", T0, ["gfs"], boat=BRAVO, boat_polar=PB)
+finally:
+    synthesis.pb.build_playbook = _bp
+check("routes on the snapshot boat's polar (Bravo), not the now-active sr33",
+      (seen.get("polar") or {}).get("boat_id") == "bravo")
+
 print("6) static guard: no Lab code calls the optimizer, sail plan or polar helpers polar-less")
 APP = os.path.join(os.path.dirname(boats.__file__))
 NEED = {"optimize_course": ("boat_polar", "polar"), "route_leg": ("xo",),

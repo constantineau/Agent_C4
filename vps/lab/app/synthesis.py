@@ -755,7 +755,7 @@ def _build_plays(playbook, definition, course_id, venue_stats=None, jib_crossove
 def synthesize(definition, course_id, start_epoch, models, ensemble_members=0, time_budget_s=200,
                jib_crossovers=None, sail_config=None, helm_factor=1.0, use_waves=True,
                polar_adjustments=None, wave_coeffs=None, fan_depth="standard", chart=None,
-               boat_polar=None):
+               boat_polar=None, boat=None):
     """Lab-2a fan-out → Lab-2b synthesized bundle (UNSIGNED draft). Freeze (`sign_bundle`) before
     it's relied on / deployed onboard. Passes through the not-available case from 2a unchanged.
     `chart` = {"source", "safety_depth"} snapshot when the job starts (#149): every route uses it,
@@ -763,11 +763,14 @@ def synthesize(definition, course_id, start_epoch, models, ensemble_members=0, t
     routed_on = race_def.course_hash(definition, course_id)    # before routing touches anything
     # the boat the job STARTED on (#182-8): switching the Lab's active boat mid-run must not relabel
     # the bundle or change the boat profile Deploy sends with it
-    try:
-        from . import boats
-        boat = boats.active_boat() or {}
-    except Exception:
-        boat = {}
+    # `boat` + `boat_polar` are snapshot together by the caller when the job is asked for, so
+    # the bundle's boat and the polar its routes used are always the same boat (Codex on #319)
+    if boat is None:
+        try:
+            from . import boats
+            boat = boats.active_boat() or {}
+        except Exception:
+            boat = {}
     if boat_polar is None:              # the boat's OWN polar (#303), never a default
         from . import boats
         boat_polar = boats.polar_for(boat)

@@ -145,8 +145,9 @@ POLAR_RETRY_S = 30.0     # an empty/failed read retries sooner (was cached as []
 
 
 def _polar_table():
-    """The polar table, re-read every POLAR_TTL_S (POLAR_RETRY_S while empty). A failed or empty
-    read keeps the last good table rather than wiping it."""
+    """The polar table, re-read every POLAR_TTL_S (POLAR_RETRY_S while empty). A FAILED read keeps
+    the last good table rather than wiping it; a clean empty read (the deployed boat has no polar,
+    #304) empties it, so plays are never priced on the previous boat's polar."""
     global _POLAR_TABLE, _POLAR_AT
     now = time.monotonic()
     ttl = POLAR_TTL_S if _POLAR_TABLE else POLAR_RETRY_S
@@ -154,9 +155,10 @@ def _polar_table():
         _POLAR_AT = now
         try:
             fresh = [(t, a, s) for (t, a, s) in datasource.active().polars_stw() if s is not None]
+            failed = False
         except Exception:
-            fresh = []
-        if fresh or not _POLAR_TABLE:
+            fresh, failed = [], True
+        if not failed or not _POLAR_TABLE:
             _POLAR_TABLE = fresh
     return _POLAR_TABLE
 

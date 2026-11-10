@@ -370,6 +370,13 @@ def _active_jibs():
     return b.get("jib_crossovers") or []
 
 
+def _boat_snapshot():
+    """The active boat and ITS polar, read once together (#303): a playbook job is labelled with,
+    and routed on, the same boat even if the selection changes while it runs."""
+    b = boats.active_boat() or {}
+    return {"boat": b, "boat_polar": boats.polar_for(b)}
+
+
 def _active_sails():
     """The active boat's Code 0 band + main reef points (crew label overlays, not in the cert)."""
     return boats.active_sail_config()
@@ -735,7 +742,7 @@ async def playbook_synthesize(body: dict):
               polar_adjustments=_active_adjustments(), wave_coeffs=_active_wave(),
               use_waves=(body or {}).get("use_waves", True),
               fan_depth=(body or {}).get("fan_depth", "standard"), chart=_playbook_chart(),
-              boat_polar=boats.active_polar())
+              **_boat_snapshot())
     if (body or {}).get("sync"):
         # legacy synchronous path (fits the gateway only for small fans) — the UI uses the job
         try:
@@ -789,7 +796,7 @@ async def playbook_freeze(body: dict):
                                          use_waves=body.get("use_waves", True),
                                          fan_depth=body.get("fan_depth", "standard"),
                                          chart=_playbook_chart(),
-                                         boat_polar=boats.active_polar())
+                                         **_boat_snapshot())
         if not bundle.get("variants"):
             return JSONResponse({"detail": "nothing to freeze — no variants",
                                  "bundle": bundle}, status_code=422)
