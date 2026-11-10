@@ -873,13 +873,29 @@ def compare(against, result, wave=None):
     return out
 
 
+def _flat_on(bins, wave):
+    """When the wave fit proposes new coefficients, take the sea state out of each bin with THOSE
+    (pct_flat), so the helm and overlay filed alongside them form one model: applying both must
+    predict what the boat sailed. Bins with no sea state, or no fit, are left as scored."""
+    if not (wave or {}).get("ok"):
+        return bins
+    from .optimizer import _wave_factor
+    out = []
+    for b in bins:
+        if b.get("hs_mean") is not None and b.get("pct") is not None:
+            f = _wave_factor(float(b["hs_mean"]), float(b["twa"]), wave["proposed"])
+            b = {**b, "pct_flat": round(b["pct"] / f) if f > 0 else b["pct"]}
+        out.append(b)
+    return out
+
+
 def save_rescore(boat_id, evidence_version, recordings, bins, against=None):
     """File one re-score run: the re-scored bins, the proposal math over them, the wave fit, and the
     comparison with what the boat sails on now. Writes ONLY its own row."""
     against = against if against is not None else applied_model(boat_id)
-    result = refine(bins, None, against["helm_factor"]) if bins else {
-        "ok": False, "note": "No recording could be scored again."}
     wave = fit_waves(bins, against.get("wave_coeffs") or _current_wave_coeffs(boat_id))
+    result = refine(_flat_on(bins, wave), None, against["helm_factor"]) if bins else {
+        "ok": False, "note": "No recording could be scored again."}
     comparison = compare(against, result, wave)
     c = _conn()
     try:
