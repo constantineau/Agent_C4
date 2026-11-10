@@ -12,6 +12,7 @@ On the shore agent it is the files named for its `BOAT_ID` (`knowledge/<boat>_sp
 
 The crossover TWAs shift with TWS, so zones are recomputed from the nearest TWS bucket.
 """
+import contextvars
 import json
 import os
 
@@ -66,6 +67,8 @@ def _overlaps_of(xo):
 
 
 _MEMO = {"key": None, "guide": ({}, {})}
+# one answer reads ONE guide: a Deploy push landing mid-answer can't mix two boats (Codex on #319)
+_PINNED = contextvars.ContextVar("sails_guide", default=None)
 
 
 def _shore_files():
@@ -81,6 +84,9 @@ def _shore_files():
 
 def _guide():
     """(sections, overlaps) of THIS boat's speed guide (see the module doc); ({}, {}) when none."""
+    pinned = _PINNED.get()
+    if pinned is not None:
+        return pinned
     if os.environ.get("DATA_SOURCE", "").strip().lower() == "onboard":
         from . import orinassets
         block = orinassets.boat_polar()
@@ -223,6 +229,15 @@ def _fit_and_change(crew, a_twa, tws, optimal, wrong, tossup_ok, boat_model):
 
 
 def get_sail_advice(tws: float = None, twa: float = None, hoisted: str = None, boat_model: dict = None):
+    """Sail-range advice for the dial + agent (see `_advice`), on one snapshot of the guide."""
+    tok = _PINNED.set(_guide())
+    try:
+        return _advice(tws, twa, hoisted, boat_model)
+    finally:
+        _PINNED.reset(tok)
+
+
+def _advice(tws: float = None, twa: float = None, hoisted: str = None, boat_model: dict = None):
     """Sail-range advice for the dial + agent. tws/twa are live values; hoisted is the
     crew-reported sail (J1/A3/S1) so we can flag flying the wrong one."""
     sections = _guide()[0]

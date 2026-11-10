@@ -1040,7 +1040,7 @@ class OnboardSource:
 
 
 _FILE_ROWS = None
-_ROWS_MEMO = {"version": None, "rows": []}
+_ROWS_MEMO = {"memo": None}     # (polar version, rows), replaced as one tuple
 
 
 def _load_polar_file(path):
@@ -1066,14 +1066,16 @@ def _polar_rows():
     from . import orinassets
     block = orinassets.boat_polar()
     ver = (block or {}).get("version")
-    if ver != _ROWS_MEMO["version"]:
-        _ROWS_MEMO["version"] = ver
-        _ROWS_MEMO["rows"] = [{"tws": float(r[0]), "twa": float(r[1]), "target_stw": float(r[2]),
-                               "target_vmg": None if r[3] is None else float(r[3])}
-                              for r in (block or {}).get("envelope") or ()]
-        if block:
-            print(f"[onboard] polar: {block.get('boat_id')} {block.get('label')} "
-                  f"({len(_ROWS_MEMO['rows'])} points, from Deploy)", flush=True)
-        else:
-            print("[onboard] no boat polar deployed; polar tools are empty", flush=True)
-    return _ROWS_MEMO["rows"]
+    memo = _ROWS_MEMO["memo"]
+    if memo is not None and memo[0] == ver:
+        return memo[1]
+    rows = [{"tws": float(r[0]), "twa": float(r[1]), "target_stw": float(r[2]),
+             "target_vmg": None if r[3] is None else float(r[3])}
+            for r in (block or {}).get("envelope") or ()]
+    _ROWS_MEMO["memo"] = (ver, rows)        # one atomic publish: a version never gets another's rows
+    if block:
+        print(f"[onboard] polar: {block.get('boat_id')} {block.get('label')} "
+              f"({len(rows)} points, from Deploy)", flush=True)
+    else:
+        print("[onboard] no boat polar deployed; polar tools are empty", flush=True)
+    return rows
