@@ -778,21 +778,24 @@ def _fully_charted(field, chart_polys):
 def _apply_grids(field, grids, safety_depth, cache_dir, chart_polys=()) -> bool:
     """Fill the water no chart covers from the depth grids (#292). Per cell, everywhere but the
     cells the chart covers whole (`_fully_charted`: at the chart's edge both apply, so a shoal in
-    a cell's uncharted half is still seen; Codex on #300): the shallowest grid depth there is the
-    cell's depth, and shallower than `safety_depth` blocks it (a shoal). A grid that fails to load
-    is listed in `field.depth_gaps` and its water stays "no depth data". True if any grid gave a
-    depth."""
+    a cell's uncharted half is still seen; Codex on #300):
+      - the shallowest depth any grid has in the cell, shallower than `safety_depth`, blocks it
+        (a shoal), even if the grid covers only part of the cell;
+      - the cell's depth counts as checked (`nodepth` cleared, the grid named on the leg) only
+        where a grid covers the WHOLE cell; a part-covered cell keeps "no depth data".
+    A grid that fails to load is listed in `field.depth_gaps` and its water stays "no depth
+    data". True if any grid gave a depth."""
     got = []
     for g in grids:
         try:
-            got.append((g, g.cells(field.bbox, field.res, field.nx, field.ny, cache_dir)))
+            got.append((g, *g.cells(field.bbox, field.res, field.nx, field.ny, cache_dir)))
         except Exception as exc:  # noqa: BLE001 — reported; that water stays "no depth data"
             why = f"{g.name}: {type(exc).__name__}: {exc}"[:200]
             field.depth_gaps.append(why)
             print(f"[obstacles] depth grid did not load: {why}", flush=True)
     if not got:
         return False
-    marks = {g.name: bytearray(field.nx * field.ny) for g, _c in got if not g.navigational}
+    marks = {g.name: bytearray(field.nx * field.ny) for g, _d, _f in got if not g.navigational}
     nd, mask = field.nodepth, field.mask
     charted = _fully_charted(field, chart_polys)
     shoal = 0
@@ -800,24 +803,29 @@ def _apply_grids(field, grids, safety_depth, cache_dir, chart_polys=()) -> bool:
     for i in range(field.nx * field.ny):
         if charted[i]:
             continue
-        best, who = None, None
-        for g, cells in got:
-            d = cells[i]
-            if d is not None and (best is None or d < best):
-                best, who = d, g
+        best, who = None, None                  # shallowest anywhere / its grid, if it is full
+        for g, depths, full in got:
+            d = depths[i]
+            if d is None:
+                continue
+            any_depth = True
+            if best is None or d < best:
+                best = d
+            if full[i] and (who is None or d < who[1]):
+                who = (g, d)
         if best is None:
             continue
-        nd[i] = 0
-        any_depth = True
-        if who.name in marks:
-            marks[who.name][i] = 1
+        if who is not None:
+            nd[i] = 0
+            if who[0].name in marks:
+                marks[who[0].name][i] = 1
         if best < safety_depth and mask[i] != 1:
             mask[i] = 1
             shoal += 1
     if shoal:
         field.layers["shoal"] = field.layers.get("shoal", 0) + shoal
         field.active = True
-    field.nonnav = [(g.label, marks[g.name]) for g, _c in got
+    field.nonnav = [(g.label, marks[g.name]) for g, _d, _f in got
                     if g.name in marks and any(marks[g.name])]
     return any_depth
 

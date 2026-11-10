@@ -36,13 +36,13 @@ def check(name, cond, detail=""):
     print(f"  [{'OK ' if cond else 'FAIL'}] {name}" + (f" — {detail}" if detail else ""))
 
 
-# --- a synthetic grid: 0.6° x 0.5° at 0.01°, elevation (up is +), nodata north of 10.4 N ---------
+# --- a synthetic grid: 0.6° x 0.5° at 0.01°, elevation (up is +), nodata north of 10.42 N ---------
 W, S, E, N = 20.0, 10.0, 20.6, 10.5
 STEP = 0.01
 
 
 def elev(lat, lon):
-    if lat >= 10.4:
+    if lat >= 10.42:
         return -9999
     if lon < 20.1:
         return -1.0          # 1 m: a shoal the chart (ENC) says is not there; the chart wins
@@ -91,7 +91,7 @@ check("a box the grid doesn't touch: the chart only",
       [s.name for s in D.sources_for((50.5, 50.0, 0.0, 0.5))] == ["noaa_enc"])
 g = srcs[1]
 gx, gy = round((E - W) / RES), round((N - S) / RES)
-cells = g.cells(BBOX, RES, gx, gy, None)
+cells, full = g.cells(BBOX, RES, gx, gy, None)
 
 
 def cell(lat, lon):
@@ -103,7 +103,9 @@ check("a shoal: 1 m", cell(10.2, 20.4) == 1.0, cell(10.2, 20.4))
 check("one shallow pixel in a deep cell: the cell is that shallow", cell(10.12, 20.17) == 0.5,
       cell(10.12, 20.17))
 check("south row first (the north strip has no data)", cell(10.02, 20.2) == 10.0
-      and cell(10.45, 20.2) is None, (cell(10.02, 20.2), cell(10.45, 20.2)))
+      and cell(10.46, 20.2) is None, (cell(10.02, 20.2), cell(10.46, 20.2)))
+check("a cell half in the empty strip: its depth known, not full",
+      cell(10.41, 20.2) == 10.0 and not full[int((10.41 - S) / RES) * gx + int((20.2 - W) / RES)])
 check("downloaded and unpacked once", os.path.exists(g.raster(None)))
 
 print("1b) any nodata value; a new grid version is a new file (Codex on #300)")
@@ -117,11 +119,12 @@ subprocess.run(["gdal_translate", "-q", "-of", "GTiff", "-a_srs", "EPSG:4326", "
                 asc0, os.path.join(TMP, "d.tif")], check=True)
 g0 = D.GridSource({"name": "zero_nd", "bbox": [S + 0.1, S, W, W + 0.1], "z": "depth",
                    "url": "file://" + os.path.join(TMP, "d.tif"), "version": "1"})
-c0 = g0.cells((S + 0.1, S, W, W + 0.1), 0.05, 2, 2, None)
-check("nodata 0: the cell with an empty pixel is not covered, the others are",
-      c0[0] is None and c0[1:] == [10.0, 10.0, 10.0], c0)
-ce = g0.cells((S + 0.1, S + 0.05, W + 0.025, W + 0.125), 0.05, 2, 1, None)
-check("a cell the raster's edge cuts through is not covered", ce == [10.0, None], ce)
+c0, f0 = g0.cells((S + 0.1, S, W, W + 0.1), 0.05, 2, 2, None)
+check("nodata 0: the cell with an empty pixel is not full, the others are",
+      f0 == [False, True, True, True] and c0 == [10.0, 10.0, 10.0, 10.0], (c0, f0))
+ce, fe = g0.cells((S + 0.1, S + 0.05, W + 0.025, W + 0.125), 0.05, 2, 1, None)
+check("a cell the raster's edge cuts through is not full, its known depth kept",
+      fe == [True, False] and ce == [10.0, 10.0], (ce, fe))
 # the same grid in UTM: its lon/lat footprint is tilted, so it is refused, never half-checked
 subprocess.run(["gdal_translate", "-q", "-of", "GTiff", "-a_srs", "EPSG:32634", "-a_nodata", "0",
                 "-a_ullr", "500000", "1120000", "510000", "1110000", asc0,
@@ -171,6 +174,9 @@ try:
           and f.nonnav_labels(10.2, 20.2, 10.2, 20.21) == ["Test grid"])
     check("deep grid water is open", not f.blocked(10.2, 20.2))
     check("outside both: no depth data", f.no_depth(10.45, 20.2, 10.46, 20.2))
+    check("a part-covered cell: its known shoal blocks, and it says no depth data",
+          f.blocked(10.41, 20.4) and f.no_depth(10.41, 20.36, 10.41, 20.37)
+          and f.no_depth(10.41, 20.2, 10.41, 20.21))
     check("the summary names the grid", f.summary().get("depth_grids") == ["Test grid"])
 
     enc.layers_in_bbox = lambda bbox, cache_dir=None, depth=None: {

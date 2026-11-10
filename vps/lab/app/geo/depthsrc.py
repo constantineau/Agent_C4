@@ -39,7 +39,7 @@ from .. import atomicio
 from . import enc
 
 CACHE = os.environ.get("ENC_CACHE", "/srv/enc")
-GRID_DATA_VERSION = "grid_v2"           # bump when the grid reduction changes (cache + mask keys)
+GRID_DATA_VERSION = "grid_v3"           # bump when the grid reduction changes (cache + mask keys)
 _HDRS = {"User-Agent": "Agent_C4-lab/1.0"}
 
 # NOAA NCEI (ex-NGDC) Great Lakes bathymetry, 3 arc-second (~90 m), compiled 1999 with CHS: each
@@ -170,9 +170,11 @@ class GridSource:
         return out
 
     # --- prep: reduce to the mask grid ---------------------------------------
-    def cells(self, bbox, res, nx, ny, cache_dir) -> list:
-        """Shallowest depth (m, down is +) in each mask cell, row-major from the SOUTH-west cell
-        (the ObstacleField's order), or None where the grid has no data for the whole cell.
+    def cells(self, bbox, res, nx, ny, cache_dir):
+        """(depths, full) per mask cell, row-major from the SOUTH-west cell (the ObstacleField's
+        order). `depths[i]`: the shallowest depth (m, down is +) of the pixels in the cell that
+        have data, None if none has. `full[i]`: every bit of the cell has data. A known shoal
+        counts even in a part-covered cell; only a full cell says "depth checked" (Codex on #300).
 
         Cached per box and cell size: a different boat re-thresholds this, it never re-warps."""
         n, s, w, e = bbox
@@ -182,8 +184,9 @@ class GridSource:
         try:
             with open(cpath) as f:
                 got = json.load(f)
-            if got.get("key") == key and len(got.get("d", [])) == nx * ny:
-                return got["d"]
+            if got.get("key") == key and len(got.get("d", [])) == nx * ny \
+                    and len(got.get("f", "")) == nx * ny:
+                return got["d"], [c == "1" for c in got["f"]]
         except (OSError, ValueError, AttributeError):
             pass
         src = self.raster(cache_dir)
@@ -202,21 +205,24 @@ class GridSource:
         rw, rs, re_, rn = ext[0] - eps, ext[1] - eps, ext[2] + eps, ext[3] + eps
         inside_col = [rw <= w + c * res and w + (c + 1) * res <= re_ for c in range(nx)]
         inside_row = [rs <= s + (ny - 1 - r) * res and s + (ny - r) * res <= rn for r in range(ny)]
-        out = []
+        out, full = [], []
         for i in range(nx * ny):
             v = shallow[i]
-            if v is None or v != v or cover[i] != 255.0 or not (inside_row[i // nx]
-                                                                and inside_col[i % nx]):
+            if v is None or v != v:
                 out.append(None)
+                full.append(False)
                 continue
             # to the cm, rounded DOWN (shallower): rounding never opens a cell (Codex on #300)
             out.append(math.floor((-v if z == "elevation" else v) * 100) / 100)
-        # rows came north-first from GDAL; the field counts rows from the south
-        rows = [out[r * nx:(r + 1) * nx] for r in range(ny)]
-        flat = [v for row in reversed(rows) for v in row]
+            full.append(cover[i] == 255.0 and inside_row[i // nx] and inside_col[i % nx])
+
+        def south_first(vals):                   # rows came north-first from GDAL
+            return [v for r in range(ny - 1, -1, -1) for v in vals[r * nx:(r + 1) * nx]]
+
+        out, full = south_first(out), south_first(full)
         os.makedirs(os.path.dirname(cpath), exist_ok=True)
-        atomicio.write_json(cpath, {"key": key, "d": flat})
-        return flat
+        atomicio.write_json(cpath, {"key": key, "d": out, "f": "".join("1" if x else "0" for x in full)})
+        return out, full
 
     @staticmethod
     def _info(src):
