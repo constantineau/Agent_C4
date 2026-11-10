@@ -180,11 +180,16 @@ def parse_speed_guide(text):
     return {k: v for k, v in sections.items() if v}
 
 
+def _n(x):
+    """A real, finite JSON number (not a numeric string, not a bool)."""
+    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+
+
 def _zones_ok(zones, need_sails=False):
     if not isinstance(zones, list):
         return False
     for z in zones:
-        if not isinstance(z, dict) or _f(z.get("twa_min")) is None or _f(z.get("twa_max")) is None:
+        if not isinstance(z, dict) or not _n(z.get("twa_min")) or not _n(z.get("twa_max")):
             return False
         if need_sails and not (isinstance(z.get("sails"), list)
                                and all(isinstance(x, str) for x in z["sails"])):
@@ -200,11 +205,12 @@ def crossovers_ok(xo) -> bool:
     if not isinstance(xo, dict):
         return False
     b, c, o = xo.get("tws_buckets"), xo.get("crossovers"), xo.get("overlaps", {})
-    if not isinstance(b, list) or not all(_f(x) is not None for x in b):
+    if not isinstance(b, list) or not all(_n(x) for x in b):
         return False
     if not isinstance(c, dict) or not all(_f(k) is not None and _zones_ok(v) for k, v in c.items()):
         return False
-    if o is not None and not (isinstance(o, dict) and all(
+    # overlaps is optional, but when present it is a table (an explicit null is malformed)
+    if not (isinstance(o, dict) and all(
             _f(k) is not None and _zones_ok(v, need_sails=True) for k, v in o.items())):
         return False
     return True
@@ -212,8 +218,8 @@ def crossovers_ok(xo) -> bool:
 
 def _guide_ok(sg) -> bool:
     return isinstance(sg, dict) and all(
-        isinstance(rows, list) and all(isinstance(r, dict) and _f(r.get("twa")) is not None
-                                       for r in rows) for rows in sg.values())
+        isinstance(rows, list) and all(isinstance(r, dict) and _n(r.get("twa")) for r in rows)
+        for rows in sg.values())
 
 
 def _load_envelope(path):

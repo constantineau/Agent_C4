@@ -79,6 +79,14 @@ check("a malformed crossover table is left out (no sail calls), not a crash in r
       _bx["crossovers"] is None and sailplan.optimal_sail(6, 90, xo=_bx["crossovers"]) is None)
 check("a carried block with a malformed crossover table is refused",
       BP.check(dict(P33, crossovers={"tws_buckets": [6], "crossovers": []}), "sr33") != [])
+for _why, _xo in (
+        ("numeric strings", {"tws_buckets": ["6"], "crossovers": {"6": [
+            {"short": "J1", "twa_min": 40, "twa_max": 180}]}}),
+        ("string TWA bounds", {"tws_buckets": [6], "crossovers": {"6": [
+            {"short": "J1", "twa_min": "40", "twa_max": 180}]}}),
+        ("null overlaps", {"tws_buckets": [6], "crossovers": {"6": [
+            {"short": "J1", "twa_min": 40, "twa_max": 180}]}, "overlaps": None})):
+    check(f"crossover table with {_why} is malformed", not BP.crossovers_ok(_xo))
 check("sr33's real crossover table passes", BP.crossovers_ok(P33["crossovers"]))
 check("the carried block checks clean and is versioned", BP.check(P33, "sr33") == []
       and BP.check(PB, "bravo") == [] and BP.check(PB, "sr33") != [])
