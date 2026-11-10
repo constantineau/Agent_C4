@@ -116,7 +116,9 @@ def parse_envelope_rows(rows):
     """[[tws, twa, stw(, vmg)]] (JSON / an inline cert polar) → [(tws, twa, stw, vmg)]; a missing
     VMG is the speed made good up or down wind (|stw·cos twa|, as the ORC SQL carries it)."""
     out = []
-    for r in rows or ():
+    if not isinstance(rows, (list, tuple)):
+        return out
+    for r in rows:
         if not isinstance(r, (list, tuple)) or len(r) < 3:
             continue
         t, a, s = _f(r[0]), _f(r[1]), _f(r[2])
@@ -129,11 +131,15 @@ def parse_envelope_rows(rows):
 
 def parse_sail_polars(obj):
     """{"sails": {sail: [[tws, twa, stw|null]]}} → {sail: [(tws, twa, stw)]} (null speeds dropped)."""
-    raw = (obj or {}).get("sails", {}) if isinstance(obj, dict) else {}
+    raw = obj.get("sails") if isinstance(obj, dict) else None
     out = {}
-    for s, pts in (raw or {}).items():
+    if not isinstance(raw, dict):
+        return out
+    for s, pts in raw.items():
         rows = []
-        for p in pts or ():
+        if not isinstance(pts, (list, tuple)):
+            continue
+        for p in pts:
             if isinstance(p, (list, tuple)) and len(p) >= 3:
                 t, a, v = _f(p[0]), _f(p[1]), _f(p[2])
                 if t is not None and a is not None and v is not None:
@@ -226,7 +232,7 @@ def resolve(profile, dirs=None):
             return _CACHE[key]
         try:
             env = _load_envelope(paths["envelope"])
-        except (OSError, ValueError, UnicodeDecodeError):
+        except (OSError, ValueError, UnicodeDecodeError, TypeError, AttributeError):
             return None
         if not env:
             return None
@@ -236,7 +242,7 @@ def resolve(profile, dirs=None):
                 return None
             try:
                 return load(_read(paths[k]))
-            except (OSError, ValueError, UnicodeDecodeError):
+            except (OSError, ValueError, UnicodeDecodeError, TypeError, AttributeError):
                 return None
 
         sp = opt("sail_polars", lambda t: parse_sail_polars(json.loads(t))) or {}

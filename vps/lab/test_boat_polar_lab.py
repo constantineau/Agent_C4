@@ -62,6 +62,16 @@ check("a profile naming a file that isn't there → None, not a default",
 check("a polar file name with a path is refused",
       BP.files_errors({"envelope": "../../etc/passwd"}) and BP.resolve(
           dict(NOPOLAR, polar_files={"envelope": "../seed/polars_sr33.sql"})) is None)
+_bad = tempfile.mkdtemp()
+for _n, _t in (("bad_env.json", "42"), ("bad_sails.json", '{"sails": ["J1"]}'),
+               ("ok_env.json", "[[10, 90, 7.0]]")):
+    with open(os.path.join(_bad, _n), "w") as _f:
+        _f.write(_t)
+check("malformed JSON polar files → no polar / no sail curves, never a crash",
+      BP.resolve(dict(NOPOLAR, polar_files={"envelope": "bad_env.json"}), dirs=[_bad]) is None
+      and BP.resolve(dict(NOPOLAR, polar_files={"envelope": "ok_env.json",
+                                                "sail_polars": "bad_sails.json"}),
+                     dirs=[_bad])["sail_polars"] == {})
 check("the carried block checks clean and is versioned", BP.check(P33, "sr33") == []
       and BP.check(PB, "bravo") == [] and BP.check(PB, "sr33") != [])
 check("a tampered block fails its version", BP.check(dict(PB, label="x"), "bravo") != [])
