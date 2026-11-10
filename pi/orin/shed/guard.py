@@ -183,8 +183,8 @@ def signal_level(cur, value, enter, clear, low_is_bad):
 
 def _triple(s, name):
     v = [float(x) for x in str(s).split(",")]
-    if len(v) != 3:
-        raise ValueError(f"{name} needs three numbers")
+    if len(v) != 3 or not all(math.isfinite(x) for x in v):
+        raise ValueError(f"{name} needs three finite numbers")
     return v
 
 

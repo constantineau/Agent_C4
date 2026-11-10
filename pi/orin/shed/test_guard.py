@@ -181,6 +181,8 @@ def main():
     check("a bad interval (negative, nan, inf, 0, over 10 s) → defaults",
           all(guard.load_config({"SHED_INTERVAL_S": v})["interval_s"] == 5.0
               for v in ("-1", "nan", "inf", "0", "60")))
+    check("nan thresholds → defaults",
+          guard.load_config({"SHED_MEM_CLEAR_MB": "nan,nan,nan"})["mem_clear"] == [950.0, 850.0, 750.0])
     check("a good override is used",
           guard.load_config({"SHED_MEM_MB": "900,700,550",
                              "SHED_MEM_CLEAR_MB": "1100,950,800"})["mem"] == [900.0, 700.0, 550.0])
