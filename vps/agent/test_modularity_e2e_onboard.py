@@ -243,4 +243,4 @@ def test_every_engine_module_takes_the_configured_boat():
 def test_no_engine_module_defaults_to_sr33():
     """BOAT_ID unset: each module refuses to start or has no boat id — never files as sr33."""
     ids = _module_boat_ids(None)
-    assert not [m for m, v in ids.items() if v == "sr33"], ids
+    assert all(v is None or str(v).startswith("refused") for v in ids.values()), ids
