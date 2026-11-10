@@ -18,17 +18,15 @@ import os
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-for _seed in (os.path.join(HERE, "..", "db", "seed"), "/srv"):
-    if os.path.exists(os.path.join(_seed, "polars_sr33.sql")):
-        os.environ["POLARS_FILE"] = os.path.join(_seed, "polars_sr33.sql")
-        os.environ["SAIL_POLARS_FILE"] = os.path.join(_seed, "sr33_sail_polars.json")
-        os.environ["CROSSOVERS_FILE"] = os.path.join(_seed, "sr33_crossovers.json")
-        break
 
 from app import optimizer as OPT       # noqa: E402
 from app import playbook as PB         # noqa: E402
 from app import polars as POL          # noqa: E402
 from app import synthesis as SYN       # noqa: E402
+import polar_fixture  # noqa: E402
+polar_fixture.install()     # bare optimizer/sail-plan calls route on sr33's own polar (#303)
+from app import boats as _boats  # noqa: E402
+SR33_BOAT = _boats.get_boat("sr33")   # the debrief scores the race boat's own polar (#303)
 
 ok = True
 
@@ -285,8 +283,9 @@ try:
         # exactly the judge's call
         scores[kind] = JD._score_actual_track(gpx, tac.get("oracle") or {}, tac.get("marks") or [],
                                               tac.get("start_epoch"), tac.get("wf"), tac.get("cur"),
-                                              tac.get("wave"))
-    raw = JD._score_actual_track(gpx, {}, [], T0, beam, None, None)    # the pre-fix shape
+                                              tac.get("wave"), boat=SR33_BOAT)
+    raw = JD._score_actual_track(gpx, {}, [], T0, beam, None, None,
+                                 boat=SR33_BOAT)    # the pre-fix shape
 
     class _NoWind(WF):
         loaded = False

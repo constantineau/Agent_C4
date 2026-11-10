@@ -144,20 +144,40 @@ POLAR_TTL_S = 300.0      # re-read a good table this often, so an applied polar 
 POLAR_RETRY_S = 30.0     # an empty/failed read retries sooner (was cached as [] for the process)
 
 
+_POLAR_GEN = None         # the Deploy push generation the table was read under (#304)
+
+
+def _deploy_generation():
+    """Changes when a Deploy push replaces the boat's polar (aboard); None on the shore."""
+    try:
+        from . import orinassets
+        return orinassets.generation()
+    except Exception:
+        return None
+
+
 def _polar_table():
-    """The polar table, re-read every POLAR_TTL_S (POLAR_RETRY_S while empty). A failed or empty
-    read keeps the last good table rather than wiping it."""
-    global _POLAR_TABLE, _POLAR_AT
+    """The polar table, re-read every POLAR_TTL_S (POLAR_RETRY_S while empty). A FAILED read keeps
+    the last good table rather than wiping it; a clean empty read (the deployed boat has no polar,
+    #304) empties it, so plays are never priced on the previous boat's polar."""
+    global _POLAR_TABLE, _POLAR_AT, _POLAR_GEN
     now = time.monotonic()
     ttl = POLAR_TTL_S if _POLAR_TABLE else POLAR_RETRY_S
-    if _POLAR_TABLE is None or now - _POLAR_AT >= ttl:
-        _POLAR_AT = now
+    gen = _deploy_generation()
+    if _POLAR_TABLE is None or now - _POLAR_AT >= ttl or gen != _POLAR_GEN:
         try:
             fresh = [(t, a, s) for (t, a, s) in datasource.active().polars_stw() if s is not None]
+            failed = False
         except Exception:
-            fresh = []
-        if fresh or not _POLAR_TABLE:
-            _POLAR_TABLE = fresh
+            fresh, failed = [], True
+        if _deploy_generation() != gen:
+            # a Deploy push landed during the read: this table may be the previous boat's.
+            # Cache nothing from it; read again for the new boat (pushes are rare, pre-race)
+            return _polar_table()
+        if not failed or not _POLAR_TABLE:
+            _POLAR_TABLE, _POLAR_AT, _POLAR_GEN = fresh, now, gen
+        else:
+            _POLAR_AT, _POLAR_GEN = now, gen
     return _POLAR_TABLE
 
 

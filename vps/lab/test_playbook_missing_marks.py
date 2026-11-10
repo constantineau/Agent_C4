@@ -23,6 +23,8 @@ os.environ["DEPLOY_PI_ENGINE_URL"] = "http://pi:8200"
 os.environ.pop("ANTHROPIC_API_KEY", None)
 
 from app import deploy as D, labstate, playbook, synthesis  # noqa: E402
+import polar_fixture  # noqa: E402
+polar_fixture.install()     # bare optimizer/sail-plan calls route on sr33's own polar (#303)
 
 labstate._PATH = os.path.join(_tmp, "_labstate.json")   # never the image's real state file
 

@@ -18,20 +18,14 @@ import os
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-# Resolve the seed dir wherever the test runs: the repo (vps/lab/../db/seed) OR docker-cp'd to /srv.
-# Only override the env when the seed is actually found (a bad guess zeroes out the polars).
-for _seed in (os.path.join(HERE, "..", "db", "seed"), "/srv"):
-    if os.path.exists(os.path.join(_seed, "polars_sr33.sql")):
-        os.environ["POLARS_FILE"] = os.path.join(_seed, "polars_sr33.sql")
-        os.environ["SAIL_POLARS_FILE"] = os.path.join(_seed, "sr33_sail_polars.json")
-        os.environ["CROSSOVERS_FILE"] = os.path.join(_seed, "sr33_crossovers.json")
-        break
 
 from app import optimizer as OPT       # noqa: E402
 from app import playbook as PB         # noqa: E402
 from app import scenarios as SCEN      # noqa: E402
 from app import synthesis as SYN       # noqa: E402
 from app import polars as POL          # noqa: E402
+import polar_fixture  # noqa: E402
+polar_fixture.install()     # bare optimizer/sail-plan calls route on sr33's own polar (#303)
 
 ok = True
 

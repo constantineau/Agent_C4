@@ -30,6 +30,8 @@ from app import boats
 from app import judge as J
 from app import learning as LN
 from app import track as T
+import polar_fixture  # noqa: E402
+polar_fixture.install()     # bare optimizer/sail-plan calls route on sr33's own polar (#303)
 
 ok = True
 

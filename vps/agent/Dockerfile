@@ -9,8 +9,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY shared/ ./shared/
 COPY vps/agent/knowledge/ ./knowledge/
-# the sail crossover model (its per-TWS toss-up overlaps feed the /sail dial); canonical copy in db/seed
-COPY vps/db/seed/sr33_crossovers.json ./knowledge/sr33_crossovers.json
+# each boat's sail crossover model (its per-TWS toss-up overlaps feed the /sail dial), read by the
+# boat id this agent runs for (knowledge/<BOAT_ID>_crossovers.json, #304); canonical copies in db/seed
+COPY vps/db/seed/*_crossovers.json ./knowledge/
 COPY vps/agent/app/ ./app/
 
 EXPOSE 8000

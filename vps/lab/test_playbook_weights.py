@@ -15,6 +15,8 @@ os.environ.pop("ANTHROPIC_API_KEY", None)
 
 from app import modelskill, playbook, venue  # noqa: E402
 from app.wind.windfield import WindField  # noqa: E402
+import polar_fixture  # noqa: E402
+polar_fixture.install()     # bare optimizer/sail-plan calls route on sr33's own polar (#303)
 
 ok = True
 

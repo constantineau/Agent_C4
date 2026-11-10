@@ -19,13 +19,14 @@ from shared import boat_profile
 from . import boats, optimizer
 
 
-def boat_inputs(boat):
-    """The optimizer kwargs that come from a boat profile dict (None → no boat: raw polars)."""
+def boat_inputs(boat, boat_polar=None):
+    """The optimizer kwargs that come from a boat profile dict. The polar is the boat's own
+    (#303): `boat_polar` when the caller already has it (the Orin's carried one), else resolved
+    from the profile (its polar files, else its ORC cert). No boat or no polar → the optimizer
+    refuses ("No polar for this boat."), never another boat's polar."""
     b = boat or {}
     return {
-        # a fleet boat added from its ORC cert routes on ITS envelope (optimize_course then drops
-        # the own-boat per-sail curves); the overlays below all read the same profile
-        "polar": b.get("cert_polar") or None,
+        "boat_polar": boat_polar if boat_polar is not None else boats.polar_for(boat),
         "safety_depth": boats.safety_depth_m(boat),
         "jib_crossovers": b.get("jib_crossovers") or [],
         "sail_config": boats.sail_config(boat),
@@ -77,7 +78,7 @@ def run_course(definition, course_id, start_epoch, models, *, ensemble_members=0
                per_model=False, resolution="auto", use_waves=True, use_current=True,
                on_progress=None, boat=None, chart_source=None, model_skill=True,
                obstacles=None, time_budget_s=None, fallback_tries=None, bbox=None, t_end=None,
-               briefing=True, grids=True, on_phase=None, leg_obstacles=None):
+               briefing=True, grids=True, on_phase=None, leg_obstacles=None, boat_polar=None):
     """Blocking: build the multi-model wind field, route the course, write the briefing.
 
     `models` are model names or ModelSource instances (the Orin passes cache-first wrappers).
@@ -85,9 +86,15 @@ def run_course(definition, course_id, start_epoch, models, *, ensemble_members=0
     GRIB cache already holds). `obstacles` is a prebuilt ObstacleField (else the optimizer builds
     one from the course box). `briefing` / `grids` drop the Lab-only extras (the Opus briefing, the
     map's wind/current/sea-state grids). `on_phase(name)` hears "weather" then "routing" (the
-    Orin's progress). Lab defaults reproduce the Lab route exactly."""
+    Orin's progress). Lab defaults reproduce the Lab route exactly. `boat_polar` = the boat's
+    polar block when the caller holds it (the Orin's, from Deploy); else the profile's own. A boat
+    with no polar is refused before any download."""
     from .wind import build_windfield
     from . import current, wave
+    from shared.boat_polar import NO_POLAR
+    binputs = boat_inputs(boat, boat_polar)
+    if not binputs["boat_polar"]:
+        return {"available": False, "note": NO_POLAR}
     bbox = bbox or optimizer.course_bbox(definition, course_id)
     if not bbox:
         return {"available": False, "note": "No mark positions yet. Fix them in Course & Marks."}
@@ -118,13 +125,15 @@ def run_course(definition, course_id, start_epoch, models, *, ensemble_members=0
                                        leg_obstacles=leg_obstacles,
                                        time_budget_s=time_budget_s, per_model=per_model,
                                        resolution=resolution, cur=cur, waves=waves,
-                                       **boat_inputs(boat))
+                                       **binputs)
     result["current"] = cur.status()
     result["waves"] = waves.status()
     result["model_skill"] = skill                # venue model-skill weights + scorecard (UI panel)
     if briefing:
         result["briefing"] = optimizer.briefing(result, definition.get("name", ""))
     result["boat"] = boat_profile.summary(boat) if boat else None
+    from shared import boat_polar as BP
+    result["polar"] = BP.summary(binputs["boat_polar"])       # which polar this route sailed on
     if grids:
         wg = wind_grid(wf, bbox, start_epoch, result.get("finish_epoch", t_end))
         result["wind_grid"] = wg

@@ -1,4 +1,4 @@
-# Built from repo root (context: .) so it can include the shared engine code + knowledge files.
+# Built from repo root (context: .) so it can include the shared engine code.
 # Same image runs on the VPS bench (vcan0) and the real Pi (can0) — the portability rule.
 FROM python:3.12-slim
 
@@ -8,15 +8,12 @@ ENV PYTHONUNBUFFERED=1 PYTHONPATH=/srv DATA_SOURCE=onboard
 COPY pi/engine/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Reuse the exact engine modules from the cloud agent package; knowledge/ is a sibling of app/
-# so sails.py finds knowledge/sr33_speed_guide.md. polars_sr33.sql is the canonical polar source
-# OnboardSource parses (no psycopg, no LLM in this image).
+# Reuse the exact engine modules from the cloud agent package (no psycopg, no LLM in this image).
+# No boat data in the image (#304): the polar, speed guide and sail crossovers are the DEPLOYED
+# boat's, carried by the Lab's Deploy push with its profile (POST /reroute/assets). Nothing
+# deployed → the engine says "No boat polar loaded.", never another boat's numbers.
 COPY vps/agent/app/ ./app/
 COPY shared/ ./shared/
-COPY vps/agent/knowledge/ ./knowledge/
-COPY vps/db/seed/polars_sr33.sql ./polars_sr33.sql
-# the sail crossover model (its per-TWS toss-up overlaps feed the /sail dial); canonical copy in db/seed
-COPY vps/db/seed/sr33_crossovers.json ./knowledge/sr33_crossovers.json
 COPY pi/engine/engine_app.py ./engine_app.py
 
 EXPOSE 8200

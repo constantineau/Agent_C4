@@ -7,7 +7,12 @@
   "mmsi": "316053364",
   "draft_m": 2.1336,
   "safety_margin_m": 0.5,
-  "polars_file": "",
+  "polar_files": {
+    "envelope": "polars_sr33.sql",
+    "sail_polars": "sr33_sail_polars.json",
+    "crossovers": "sr33_crossovers.json",
+    "speed_guide": "sr33_speed_guide.md"
+  },
   "orc": {
     "rating": null,
     "gph": null,

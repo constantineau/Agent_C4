@@ -29,12 +29,31 @@ _cache = {"key": None, "t": 0, "val": None}
 CACHE_TTL = 25
 
 _POLARS = None
+_POLARS_AT = 0.0
+_POLARS_TTL_S = 60.0      # a Deploy push can replace the boat's polar (#304): re-read now and then
+
+
+_POLARS_GEN = 0          # orinassets.generation() at start: no push seen yet
+
+
+def _deploy_gen():
+    """Changes whenever a Deploy push replaces the boat's polar (#304): re-read at once."""
+    try:
+        from . import orinassets
+        return orinassets.generation()
+    except Exception:
+        return None
 
 
 def _polars():
-    global _POLARS
-    if _POLARS is None:
-        _POLARS = [(tws, twa, stw) for (tws, twa, stw) in datasource.active().polars_stw() if stw]
+    global _POLARS, _POLARS_AT, _POLARS_GEN
+    now = time.monotonic()
+    gen = _deploy_gen()
+    if _POLARS is None or now - _POLARS_AT >= _POLARS_TTL_S or gen != _POLARS_GEN:
+        fresh = [(tws, twa, stw) for (tws, twa, stw) in datasource.active().polars_stw() if stw]
+        if _deploy_gen() != gen:
+            return _polars()   # a push landed mid-read: read again, cache nothing (Codex on #319)
+        _POLARS, _POLARS_AT, _POLARS_GEN = fresh, now, gen
     return _POLARS
 
 
@@ -338,7 +357,8 @@ def get_route(route: str = None, target: str = "next"):
     if wind is None:
         return {"available": False, "target": dest["name"], "note": NO_WIND}
 
-    key = (round(slat, 3), round(slon, 3), dest["name"], target, round(live[0] or 0), round(live[1] or 0), use_fcst)
+    key = (round(slat, 3), round(slon, 3), dest["name"], target, round(live[0] or 0),
+           round(live[1] or 0), use_fcst, _deploy_gen())     # a new push → a new route
     if _cache["key"] == key and time.time() - _cache["t"] < CACHE_TTL:
         return _cache["val"]
 

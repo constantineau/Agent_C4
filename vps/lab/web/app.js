@@ -1687,6 +1687,7 @@ async function saveBoatModel() {
 
 function renderPolarGrid() {
   const g = Opt.polarGrid; if (!g || !g.grid) return "";
+  if (!g.n_points) return `<div class="muted">${esc(g.note || "No polar for this boat.")}</div>`;
   const tws = g.tws_buckets, twa = g.twa_buckets;
   const head = `<tr><th>TWA \\ TWS</th>${tws.map((t) => `<th>${t}</th>`).join("")}</tr>`;
   const rows = twa.map((a) => `<tr><td class="pg-twa">${a}°</td>${tws.map((t) => {

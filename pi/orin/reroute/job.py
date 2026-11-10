@@ -37,7 +37,7 @@ import orin_weather as W  # noqa: E402
 from app import boats, optimizer, routerun  # noqa: E402  (vps/lab on PYTHONPATH)
 from app import plume as lab_plume  # noqa: E402
 from app.geo import obstacles as geo  # noqa: E402
-from shared import boat_profile, race_def  # noqa: E402
+from shared import boat_polar, boat_profile, race_def  # noqa: E402
 from shared import boat_id as boat_id_setting  # noqa: E402
 
 SCHEMA = "c4.reroute/v1"
@@ -59,10 +59,12 @@ OLD_CHART = "Chart is out of date. Route doesn't check the shore."
 NO_COVER = "Chart doesn't cover the boat. Route doesn't check the shore."
 NO_LAND = "Chart has no land in it. Route doesn't check the shore."
 SHORT_FORECAST = "Forecast ends before the finish. Later legs use its last hour."
-NO_BOAT = "Boat profile missing. Route uses the raw polars."
-NOT_DEPLOYED_BOAT = "Boat profile not from Deploy. May be the raw polars."
+NO_BOAT = "Boat profile missing."
+NOT_DEPLOYED_BOAT = "Boat profile not from Deploy."
 BAD_BOAT = "Boat profile from Deploy is bad. Not used."
 OTHER_BOAT = "Boat profile from Deploy is another boat's. Not used."
+NO_POLAR = "No polar for this boat. Re-route not run."
+NOT_DEPLOYED_POLAR = "Boat polar not from Deploy."
 BOAT_IN_ZONE = "Boat is inside an exclusion zone. Re-route not run."
 BOAT_IN_ISLAND = "Boat is inside an island's keep-out. Re-route not run."
 INCOMPLETE = "Route incomplete."
@@ -355,6 +357,27 @@ def _boat_info(b, source, received_at):
             "polar_cells": len(boats.polar_adjustments(b)), "draft_m": b.get("draft_m")}
 
 
+def pick_polar(carried, boat, boat_info):
+    """The polar to route on → (block, "deploy" | "orin") or (None, None) (#304).
+
+    The deployed boat's own polar, carried with the profile by the Lab's Deploy push, when the
+    profile is the deployed one and the block is whole and is that boat's. Otherwise the profile's
+    own: its inline ORC cert, or the files it names in this checkout — unless the push said
+    "no polar" (an explicit null). Never another boat's."""
+    if boat is None:
+        return None, None
+    if (boat_info or {}).get("source") == "deploy":
+        pol = (carried or {}).get("polar")
+        if isinstance(pol, dict) and not boat_polar.check(pol, boat.get("boat_id")):
+            return pol, "deploy"
+        if "polar" in (carried or {}) and pol is None:
+            # Deploy sent no polar on purpose (none for this boat, or it changed since the
+            # playbook): its word stands, no fallback (Codex on #319)
+            return None, None
+    pol = boats.polar_for(boat)
+    return (pol, "orin") if pol else (None, None)
+
+
 def _validate(req):
     pos = (req or {}).get("position") or {}
     try:
@@ -386,6 +409,9 @@ def run(req, now=None, on_progress=None, on_phase=None, is_online=None):
     # No `assets` at all: a Pi from before this build; the Orin's own files are used, as before.
     carried = req.get("assets") if isinstance(req.get("assets"), dict) else None
     boat, boat_info, boat_note = pick_boat(carried)
+    polar, polar_from = pick_polar(carried, boat, boat_info)
+    if polar is None:
+        raise RunError(NO_POLAR)
     chart_kw = {"chart": carried.get("chart")} if carried is not None else {}
     chart_kw["overrides"] = override_names(req)      # the Lab's signed chart overrides (#242)
     why_not = boat_in_no_go(d, cid, lat, lon)
@@ -423,7 +449,7 @@ def run(req, now=None, on_progress=None, on_phase=None, is_online=None):
         on_progress=say, on_phase=phase, boat=boat, model_skill=False, obstacles=field,
         leg_obstacles=leg_fields,
         time_budget_s=ROUTE_BUDGET_S, fallback_tries=None if online else 0,
-        bbox=bbox, t_end=t_end, briefing=False, grids=False)
+        bbox=bbox, t_end=t_end, briefing=False, grids=False, boat_polar=polar)
     if budget.downloads:
         W.remember_box(STATE_DIR, bbox)
     weather = W.summarize(res.get("windfield"), now, budget, why, sources, names_req)
@@ -439,7 +465,9 @@ def run(req, now=None, on_progress=None, on_phase=None, is_online=None):
            "job_id": req.get("job_id"), "asked_by": str(req.get("device") or "")[:40] or None,
            "asked_at": req.get("asked_at"), "computed_from": int(now),
            "from": {"lat": round(lat, 5), "lon": round(lon, 5)},
-           "marks": names, "weather": weather, "boat": boat_info}
+           "marks": names, "weather": weather, "boat": boat_info,
+           # which polar this route sailed on: the deployed boat's, or the profile's own here
+           "polar": dict(boat_polar.summary(polar), **{"from": polar_from})}
     if not res.get("available"):
         no_wind = not (res.get("windfield") or {}).get("loaded")
         out.update(available=False, note="No forecast aboard. Connect to the internet." if no_wind
@@ -459,6 +487,8 @@ def run(req, now=None, on_progress=None, on_phase=None, is_online=None):
             warnings.insert(0, boat_note)
         elif boat_note:                 # a profile, just not the Lab's reviewed one: after the rest
             warnings.append(boat_note)
+        if polar_from != "deploy" and boat_note != NO_BOAT:
+            warnings.append(NOT_DEPLOYED_POLAR)
         until = weather.get("forecast_until")
         if until and res.get("finish_epoch") and res["finish_epoch"] > until:
             warnings.insert(0, SHORT_FORECAST)

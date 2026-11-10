@@ -387,6 +387,10 @@ check("after the TTL an applied polar is picked up",
 FlakyPolars.table = None
 matcher._POLAR_AT -= matcher.POLAR_TTL_S + 1
 check("a failed refresh keeps the last good table", matcher._polar_table() == [(10.0, 90.0, 7.5)])
+FlakyPolars.table = []                  # #304: a boat with no polar deployed
+matcher._POLAR_AT -= matcher.POLAR_TTL_S + 1
+check("a clean empty read (no polar deployed) drops the last boat's table",
+      matcher._polar_table() == [])
 matcher._POLAR_TABLE = None
 print("RESULT-11:", "PASS" if ok else "FAIL")
 import sys

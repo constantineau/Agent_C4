@@ -19,6 +19,7 @@ import time
 
 from shared import race_def
 from shared import polar as SPOL
+from shared.boat_polar import NO_POLAR
 from . import polars as POL
 from . import sailplan
 
@@ -529,7 +530,7 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, deadline=None,
               obstacles=None, capture=False, hstep=HSTEP, dt_cap=1.0, cur=None,
               sail_polars=None, jib_crossovers=None, start_sail=None,
               waves=None, helm_factor=1.0, wave_coeffs=None, wave_uniform_hs=None,
-              maneuver_prune_mult=1.0, sail_config=None):
+              maneuver_prune_mult=1.0, sail_config=None, xo=None):
     """Isochrone-optimal path from (slat,slon)@t0 to (dlat,dlon). Returns dict with path/eta.
 
     `obstacles` (an ObstacleField) makes the fan reject any heading whose step would cut across land,
@@ -569,7 +570,7 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, deadline=None,
         (sail, speed, is_peel). HOLD the current sail (its own, slower-off-optimal speed) until it's
         PEEL_HOLD_TOL off the optimal sail, then PEEL to the optimal sail at full (envelope) speed +
         a peel cost. A jib change-down (same aero family) is a free relabel, not a routing peel."""
-        opt = sailplan.optimal_sail(tws, twa, jib_crossovers, sail_config)
+        opt = sailplan.optimal_sail(tws, twa, jib_crossovers, sail_config, xo=xo)
         if sail_aware and opt is not None and _sail_polar_key(opt) not in dom:
             # gear-loss (exclude_sails): the cert-optimal sail has no curve in the FILTERED inventory
             # — the honest call is the fastest REMAINING sail (the rebuilt envelope already prices it)
@@ -1295,8 +1296,13 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
                     resolution="auto", cur=None, waves=None, helm_factor=1.0,
                     polar_adjustments=None, wave_coeffs=None, polar=None,
                     from_mark=0, exclude_sails=None, maneuver_prune_mult=1.0, sail_config=None,
-                    leg_obstacles=None):
+                    leg_obstacles=None, boat_polar=None):
     """Route the whole course from its start through every mark to the finish via `wf`.
+
+    The polar is the BOAT's (#303): `boat_polar` is its polar block (`boats.polar_for(boat)`:
+    envelope, per-sail curves, crossover table), or `polar` an injected envelope table (the fleet
+    retro's ORC cert path). With neither the run refuses ("No polar for this boat.") — there is
+    no default polar.
 
     Returns one optimal route with per-leg ETAs, total time/distance/tacks and a route confidence
     (mean of the wind field's per-point model agreement sampled along the path).
@@ -1318,6 +1324,7 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
         return {"available": False, "note": "course needs at least a start and one mark/finish",
                 "skipped": skipped}
     roundings = race_def.course_roundings(definition, course_id)   # #3 rounding side per nav mark
+    xo = None                                    # the boat's sail crossover table (sail calls)
     if polar is not None:
         # an INJECTED polar table [(tws,twa,stw)] — the fleet-retro per-boat path (an ORC cert's
         # Allowances envelope). Own-boat refinements (adjustments/jibs/per-sail curves) don't apply
@@ -1325,13 +1332,14 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
         P = [tuple(p) for p in polar]
         SP = {}
     else:
-        P = POL.polars_stw()
+        P = POL.polars_stw(boat_polar)
         if not P:
-            return {"available": False, "note": "no polars loaded"}
+            return {"available": False, "note": NO_POLAR, "skipped": skipped}
+        xo = sailplan.of(boat_polar)
         # Lab-4 human-approved refined-polar overlay — on the envelope AND the per-sail curves, so a
         # held non-optimal sail (and a gear-loss envelope rebuilt from the curves) sees it too. The
         # helm factor is applied once, later, on whichever speed the router picks.
-        SP = POL.adjust_sail_polars(POL.sail_polars(), polar_adjustments, P)   # {} → envelope only
+        SP = POL.adjust_sail_polars(POL.sail_polars(boat_polar), polar_adjustments, P)  # {} → envelope
         P = POL.apply_adjustments(P, polar_adjustments)
     if exclude_sails and SP:
         # GEAR-LOSS PLAYS (Playbook v2 Phase C): route as if a sail is out of service — the router
@@ -1356,7 +1364,7 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
     def _headline_sail(tws, twa):
         """Per-leg display sail — remapped to the fastest REMAINING sail under a gear-loss
         exclusion (the crossover table doesn't know a sail is out of service)."""
-        s = sailplan.optimal_sail(tws, twa, jib_crossovers, sail_config)
+        s = sailplan.optimal_sail(tws, twa, jib_crossovers, sail_config, xo=xo)
         if s and _gone and _sail_polar_key(s).upper() in _gone and SP:
             s = max(SP, key=lambda k: _sail_speed(SP, _dom, k, tws, twa), default=s)
         return s
@@ -1425,7 +1433,7 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
                         sail_polars=SP, jib_crossovers=jib_crossovers, start_sail=cur_sail,
                         waves=waves, helm_factor=helm_factor, wave_coeffs=wave_coeffs,
                         wave_uniform_hs=wave_uniform_hs, maneuver_prune_mult=maneuver_prune_mult,
-                        sail_config=sail_config)
+                        sail_config=sail_config, xo=xo)
         # #52: round the mark the legal way and leave from the EXIT standoff, not the inbound one
         nxt = marks[mi + 1] if mi + 1 < len(marks) else None
         corner = (_rounding_corner(slat, slon, dlat, dlon, nxt[2], nxt[3], side)
@@ -1570,7 +1578,7 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
                                            cur=cur, waves=waves, helm_factor=helm_factor,
                                            wave_coeffs=wave_coeffs, polar=polar,
                                            polar_adjustments=polar_adjustments, sail_config=sail_config,
-                                           exclude_sails=exclude_sails)
+                                           exclude_sails=exclude_sails, boat_polar=boat_polar)
     safety = route_safety(definition, cid or course_id, marks, full_path, leg_end_idx, incomplete,
                           obstacles, leg_obstacles, land_failed, from_mark=int(from_mark or 0))
     return {
@@ -1767,7 +1775,7 @@ def _per_model_paths(definition, course_id, start_epoch, wf, obstacles, P, marks
                      source, safety_depth, jib_crossovers, blended_hours, cur=None,
                      waves=None, helm_factor=1.0, wave_coeffs=None, polar=None,
                      polar_adjustments=None, sail_config=None, exclude_sails=None,
-                     leg_obstacles=None):
+                     leg_obstacles=None, boat_polar=None):
     """Route the course through EACH model's OWN sub-field (its series only) → the per-model candidate
     paths the blended route's confidence number summarizes. Same split as the playbook's `_subfields`,
     but here it feeds the Gameplan map's 'Model routes' overlay (PR-4): the user literally sees the fan
@@ -1798,7 +1806,7 @@ def _per_model_paths(definition, course_id, start_epoch, wf, obstacles, P, marks
                             jib_crossovers=jib_crossovers, emit_exploration=False, per_model=False, cur=cur,
                             waves=waves, helm_factor=helm_factor, wave_coeffs=wave_coeffs,
                             polar=polar, polar_adjustments=polar_adjustments, sail_config=sail_config,
-                            exclude_sails=exclude_sails)
+                            exclude_sails=exclude_sails, boat_polar=boat_polar)
         hrs = r.get("total_hours")
         if (not r.get("available") or not r.get("path") or r.get("degraded") or r.get("timed_out")
                 or hrs is None or hrs < lo or hrs > hi):
