@@ -1069,9 +1069,13 @@ async def debrief_session_boat(body: dict):
         for x in ses:
             if x.get("start_ts") is not None and \
                     sessionboat.key_of(x.get("kit"), x["start_ts"]) == want:
+                # both keys a debrief of it may be filed under: the derived window's start, and
+                # its own marker's (a debrief run with use_marker)
                 w = x.get("window") or {}
-                return (w.get("start_ts") if w.get("start_ts") is not None else x["start_ts"],
-                        x.get("race_id"))
+                keys = {float(x["start_ts"])}
+                if w.get("start_ts") is not None:
+                    keys.add(float(w["start_ts"]))
+                return sorted(keys), x.get("race_id")
         return None
 
     old = await run_in_threadpool(_old_recording)
@@ -1087,7 +1091,7 @@ async def debrief_session_boat(body: dict):
                                            b.get("boat_name"))
             if not ok:
                 return ok, res, 0
-            n = learning.withdraw_recording(old[1], old[0], res.get("boat_id"))
+            n = sum(learning.withdraw_recording(old[1], k, res.get("boat_id")) for k in old[0])
             return ok, res, n
 
     ok, res, n = await run_in_threadpool(_change)

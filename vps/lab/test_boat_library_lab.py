@@ -156,6 +156,16 @@ r = client.post("/api/debrief/session-boat", headers=TEAM, json={
     "kit": "sr33", "start_ts": S_OLD, "boat_id": "bravo"})
 check("edited, one debrief withdrawn (recording + race read from the boat log, not the client)",
       r.status_code == 200 and r.json()["withdrawn"] == 1)
+# stitched pair: session 1's window started earlier; a debrief run with use_marker filed under
+# its marker start must leave sr33's learning too
+SESSIONS[0]["window"] = dict(SESSIONS[0]["window"], start_ts=S_BRAVO - 600)
+learning.archive_debrief(report(S_BRAVO), "sr33")
+r = client.post("/api/debrief/session-boat", headers=TEAM, json={
+    "kit": "sr33", "start_ts": S_BRAVO, "boat_id": "bravo"})
+check("a debrief under the session's own marker start is withdrawn too",
+      r.status_code == 200 and r.json()["withdrawn"] == 1
+      and S_BRAVO not in [d["window_start"] for d in learning.archived_recordings("sr33")])
+SESSIONS[0]["window"] = dict(SESSIONS[0]["window"], start_ts=S_BRAVO)
 r = client.post("/api/debrief/session-boat", headers=TEAM, json={
     "kit": "sr33", "start_ts": 12345.0, "boat_id": "bravo"})
 check("a session the boat log doesn't have → refused, nothing edited", r.status_code == 409
