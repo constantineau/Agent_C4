@@ -528,7 +528,7 @@ def apply_proposal(pid, helm_factor=None, adjustments=None, note="", wave_coeffs
         return _apply_wave(prop, boat, wave_coeffs, note)
     summ = prop.get("summary") or {}
     if isinstance(summ, dict) and "rescore_run" in summ \
-            and boats.wave_coeffs(boat) != summ.get("boat_wave_coeffs"):
+            and _current_wave_coeffs(prop["boat_id"]) != summ.get("wave_coeffs_in_use"):
         # a re-score's helm and overlay were refined on the wave settings of the time (#245)
         return {"ok": False, "note": "The wave settings changed since this re-score. "
                 "Score again in the Polar tab."}
@@ -803,9 +803,10 @@ def applied_model(boat_id):
                                   "mult": float(a["mult"])}
                                  for a in (b.get("polar_adjustments") or [])
                                  if a.get("mult") is not None],
+           # the EFFECTIVE coefficients (overlay over the env priors): the bins' pct_flat is only
+           # valid while these are what the boat uses; approval and apply both check them
            "wave_coeffs": _current_wave_coeffs(boat_id),
-           # the boat's own overlay as scoring reads it (None = env priors): the bins' pct_flat
-           # is only valid while this is what the boat uses
+           # the boat's own overlay as scoring reads it (None = env priors)
            "boat_wave_coeffs": boats.wave_coeffs(b),
            "proposal_id": None, "proposal_adjustments": [], "proposal_overall_pct": None}
     c = _conn()
@@ -956,13 +957,13 @@ def rescore_propose(run_id, note=""):
     if not res.get("ok"):
         return {"ok": False, "note": res.get("note") or "this re-score has nothing to suggest"}
     boat = boats.get_boat(run["boat_id"]) or {}
-    if boats.wave_coeffs(boat) != (run.get("against") or {}).get("boat_wave_coeffs"):
+    if _current_wave_coeffs(run["boat_id"]) != (run.get("against") or {}).get("wave_coeffs"):
         # the helm and overlay were refined on the sea-state model of the time; on another one
         # they would not predict what the boat sailed
         return {"ok": False, "note": "The wave settings changed since this ran. Score again."}
     helm_now = float(boat.get("helm_factor", 1.0))
     tag = {"rescore_run": run_id, "evidence_version": run.get("evidence_version"),
-           "boat_wave_coeffs": (run.get("against") or {}).get("boat_wave_coeffs")}
+           "wave_coeffs_in_use": (run.get("against") or {}).get("wave_coeffs")}
     now = time.time()
     c = _conn()
     try:

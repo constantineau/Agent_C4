@@ -218,6 +218,10 @@ check("applying a re-score suggestion after the wave settings changed is refused
       LN.apply_proposal(res["proposal_id"])["ok"] is False
       and LN.get_proposal(res["proposal_id"])["status"] == "proposed")
 boats.save_boat(bt0)
+os.environ["ROUTE_WAVE_K_UP"] = "0.09"          # no overlay: the env prior is what changed
+check("…also when only the env prior changed (no boat overlay)",
+      LN.apply_proposal(res["proposal_id"])["ok"] is False)
+del os.environ["ROUTE_WAVE_K_UP"]
 check("the run is marked proposed", LN.get_rescore(run["id"])["status"] == "proposed")
 check("a second approve is refused", LN.rescore_propose(run["id"])["ok"] is False
       and rows("proposals") == n_props + 1)
@@ -230,6 +234,9 @@ boats.save_boat({**bt, "wave_coeffs": {"hs_deadband": 0.5, "k_up": 0.1, "floor":
 check("approve is refused when the wave settings changed since the run",
       LN.rescore_propose(run4["id"])["ok"] is False and LN.get_rescore(run4["id"])["status"] == "ready")
 boats.save_boat(bt)
+os.environ["ROUTE_WAVE_K_UP"] = "0.09"
+check("…and when only the env prior changed", LN.rescore_propose(run4["id"])["ok"] is False)
+del os.environ["ROUTE_WAVE_K_UP"]
 check("approve on a rejected run is refused", LN.rescore_propose(run2["id"])["ok"] is False)
 
 # a wave fit that succeeds is shown, never filed: helm stays on the coefficients in use
