@@ -212,6 +212,8 @@ for m in sys.argv[1:]:
         mod = importlib.import_module(m)
         out[m] = getattr(mod, "BOAT_ID", None)
     except Exception as e:
+        if "BOAT_ID" not in str(e):      # only a refusal that names the missing setting counts
+            raise
         out[m] = "refused: " + type(e).__name__
 print(json.dumps(out))
 """

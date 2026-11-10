@@ -225,7 +225,7 @@ def test_route_text_has_no_sr33_or_bayview(route):
 def test_route_says_no_depth_chart(route):
     """Outside US charts: the route says depths weren't checked (G4 — plain today)."""
     probs = [p.get("text") or "" for p in (route[0].get("safety") or {}).get("problems") or []]
-    assert any("depth" in p.lower() for p in probs), probs
+    assert any(re.search(r"no depth|depths? not checked", p.lower()) for p in probs), probs
 
 
 @xfail("#303", "route opens sr33's crossover file for Bravo's leg sails")
