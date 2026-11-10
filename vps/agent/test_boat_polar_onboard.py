@@ -20,7 +20,7 @@ _tmp = tempfile.mkdtemp()
 os.environ["DATA_SOURCE"] = "onboard"
 os.environ["ENGINE_DB"] = os.path.join(_tmp, "engine.db")
 os.environ.pop("POLARS_FILE", None)
-os.environ.pop("BOAT_ID", None)
+os.environ["BOAT_ID"] = "testpi"     # required (#307); a boat with no files of its own here
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
 
@@ -81,7 +81,7 @@ os.environ["BOAT_ID"] = "sr33"            # the shore agent's path: sr33's files
 os.environ["DATA_SOURCE"] = "cloud"
 shore = [sails.get_sail_advice(t, w, h) for t in (6, 12, 18) for w in (40, 90, 140) for h in ("J1", "A3")]
 os.environ["DATA_SOURCE"] = "onboard"
-os.environ.pop("BOAT_ID")
+os.environ["BOAT_ID"] = "testpi"
 aboard = [sails.get_sail_advice(t, w, h) for t in (6, 12, 18) for w in (40, 90, 140) for h in ("J1", "A3")]
 check("the deployed guide gives the same advice as sr33's own files", shore == aboard)
 
