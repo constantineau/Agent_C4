@@ -763,7 +763,7 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, deadline=None,
         else:
             sides = (1.0 if _wrap180(node["hdg"] - twd) > 0 else -1.0,)
         for side in sides:
-            h1, h2 = (twd + side * half) % 360, (twd - side * half) % 360
+            h1 = (twd + side * half) % 360
             # tack a hair past the layline: a node even 0.1° under it can't fetch at the VMG angle
             h2m = (twd - side * (half + LAYLINE_TACK_MARGIN)) % 360
             u1 = (math.sin(math.radians(h1)), math.cos(math.radians(h1)))
@@ -782,7 +782,23 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, deadline=None,
             t1 = s / sp1
             if t1 >= dt_h:
                 continue                                 # the layline is beyond this step
-            b = price(sail1, node, tws, half)
+            mlat, mlon = _advance(node["lat"], node["lon"], h1, s)
+            if obstacles and obstacles.crosses(node["lat"], node["lon"], mlat, mlon):
+                continue
+            t_mid = node["t"] + t1 * 3600
+            # the tack point is a node the boat sails on from: it needs wind of its own (#203),
+            # and the second board is priced on that wind
+            w2 = wind(mlat, mlon, t_mid)
+            if not w2:
+                continue
+            tws2, twd2 = w2
+            half2 = _vmg_twa(P, tws2, "beat")
+            if half2 is None:
+                continue
+            h2 = (twd2 - side * half2) % 360
+            mid = {"lat": mlat, "lon": mlon, "t": t_mid, "parent": node, "hdg": h1, "sail": sail1,
+                   "pen": node.get("pen", 0.0), "tk": node.get("tk", 0), "pl": node.get("pl", 0)}
+            b = price(sail1, mid, tws2, half2)
             if b is None:
                 continue
             sail2, sp2, peel2 = b
@@ -794,9 +810,6 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, deadline=None,
                     pen += sp * (PEEL_PRUNE_S * maneuver_prune_mult / 3600.0)
                     extra_s += PEEL_COST_S
                     pl += 1
-            mlat, mlon = _advance(node["lat"], node["lon"], h1, s)
-            if obstacles and obstacles.crosses(node["lat"], node["lon"], mlat, mlon):
-                continue
             pen += sp2 * (TACK_PRUNE_S * maneuver_prune_mult / 3600.0)
             tk += 1
             d2 = min(r, (dt_h - t1) * sp2)
@@ -806,11 +819,9 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, deadline=None,
             dmark_mid = _hav_nm(mlat, mlon, dlat, dlon)
             dmark_new = _hav_nm(nlat, nlon, dlat, dlon)
             dmin = min(node.get("dmin", direct), dmark_mid, dmark_new)
-            mid = {"lat": mlat, "lon": mlon, "t": node["t"] + t1 * 3600,
-                   "parent": node, "hdg": h1, "sail": sail1, "pen": node.get("pen", 0.0),
-                   "tk": node.get("tk", 0), "pl": node.get("pl", 0), "dmin": dmin}
+            mid["dmin"] = min(node.get("dmin", direct), dmark_mid)
             t_end = node["t"] + (t1 + d2 / sp2) * 3600 + TACK_COST_S + extra_s
-            place(cand, mid, nlat, nlon, t_end, h2, pen, tk, sail2, pl, dmin, dmark_new, tws, twd, sp2)
+            place(cand, mid, nlat, nlon, t_end, h2, pen, tk, sail2, pl, dmin, dmark_new, tws2, twd2, sp2)
 
     def direct_lay(node, tws, twd, dmark, bmark):
         """The closing board straight to the mark, priced like any other step in `expand`: the held or

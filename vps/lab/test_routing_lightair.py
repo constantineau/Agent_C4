@@ -83,5 +83,35 @@ for tws in (6.0, 10.0, 16.0):
     check(f"{tws:g} kn: every steady beat is two boards (one tack)", changes == [1] * 9, str(changes))
     check(f"{tws:g} kn: no leg slower than one clean tack by more than 1%", worst <= 0.01, f"{worst:+.2%}")
 
+# No invented wind (#203): the layline tack point is a node the boat sails on from, so it needs
+# forecast wind of its own. Wind stops just inside the laylines of a 9 nm dead beat (nothing
+# borrowed), so the exact layline tack lands where there is none and mustn't be used.
+class Holed(Steady):
+    def __init__(self, tws, x_nm):
+        super().__init__(tws, 0.0)
+        self.x = x_nm
+
+    def wind_at(self, lat, lon, t):
+        x = (lon - S_LON) * 60.0 * math.cos(math.radians(lat))
+        return (self.tws, self.twd) if abs(x) < self.x else None
+
+    def detail_at(self, lat, lon, t):
+        w = self.wind_at(lat, lon, t)
+        return w and {"tws": w[0], "twd": w[1], "confidence": 1.0}
+
+
+_fill = OPT.FILL_NM
+OPT.FILL_NM = 0.0
+try:
+    half = OPT._vmg_twa_cached(P, 6.0, "beat")
+    x_lay = 4.5 * math.tan(math.radians(half))           # the layline's offset at the tack, 9 nm leg
+    wf = Holed(6.0, x_lay - 0.02)
+    leg = OPT.route_leg(wf, P, S_LAT, S_LON, 0.0, S_LAT + 9 / 60.0, S_LON, hstep=12, dt_cap=1.0)
+    dry = [p for p in leg["path"][:-1] if wf.wind_at(p["lat"], p["lon"], p["t"]) is None]
+    check("no path node sails on from where the forecast has no wind", not dry,
+          f"{len(dry)} node(s) without wind")
+finally:
+    OPT.FILL_NM = _fill
+
 print("\nRESULT:", "ALL OK" if ok else "FAILURES")
 raise SystemExit(0 if ok else 1)
