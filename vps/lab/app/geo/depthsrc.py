@@ -1,0 +1,308 @@
+"""Depth sources for the route check (#292): which charts or depth grids cover a race's water.
+
+Region-free. A race's box is checked against every source whose coverage touches it, in order:
+
+  1. **chart sources** (navigational vector charts, `EncSource` = NOAA ENC, `enc.py`): real land,
+     depth areas and rocks. They come first and win wherever they chart the water.
+  2. **grid sources** (`GridSource`, a gridded bathymetry raster such as the NOAA Great Lakes
+     depth grids, which cover both sides of the US/Canada border): they fill only the water no
+     chart covers. Usually NOT for navigation: every leg whose depth came from one says so, by
+     the source's own label, and keeps the paper-chart caution.
+  3. **nothing**: the water stays "No depth data: check the paper chart." (#242). Never refused,
+     never assumed deep.
+
+The join is per mask cell, so two sets meet at a border with no gap and no double rule. Where
+two grids cover the same cell the shallowest depth wins.
+
+Grid sources come from a catalog: the built-in `GRIDS` (public-domain NOAA Great Lakes grids), or
+a JSON list at `DEPTH_GRIDS` (a path; "none" turns grids off). A new region is a catalog entry:
+{"name", "label", "navigational", "bbox": [n, s, w, e], "url", "member" (the GeoTIFF inside a
+.tar.gz/.zip, or omitted for a bare .tif), "z": "elevation" (up is +) | "depth" (down is +),
+"version"}. GDAL (`gdalwarp`) is a prep-time tool here as for ENC; the router only reads the
+cached per-cell result.
+"""
+from __future__ import annotations
+
+import array
+import hashlib
+import json
+import os
+import subprocess
+import sys
+import tarfile
+import threading
+import urllib.request
+import zipfile
+
+from .. import atomicio
+from . import enc
+
+CACHE = os.environ.get("ENC_CACHE", "/srv/enc")
+GRID_DATA_VERSION = "grid_v1"           # bump when the grid reduction changes (cache + mask keys)
+_HDRS = {"User-Agent": "Agent_C4-lab/1.0"}
+
+# NOAA NCEI (ex-NGDC) Great Lakes bathymetry, 3 arc-second (~90 m), compiled 1999 with CHS: each
+# grid covers its whole lake, both sides of the border. US Government work, public domain, "not to
+# be used for navigation". Elevation in metres from the lake's chart datum (negative = depth); land
+# is its height, so it reads as too shallow. Footprints are the GeoTIFFs' own extents.
+_NGDC = "https://www.ngdc.noaa.gov/mgg/greatlakes/{lake}/data/geotiff/{lake}_lld.geotiff.tar.gz"
+GRIDS = [
+    {"name": f"noaa_gl_{lake}", "label": f"NOAA {title} depth grid",
+     "navigational": False, "bbox": bbox, "url": _NGDC.format(lake=lake),
+     "member": f"{lake}_lld/{lake}_lld.tif", "z": "elevation", "version": "1999"}
+    for lake, title, bbox in (
+        ("huron", "Lake Huron", [46.5004, 42.9996, -84.5004, -79.6796]),
+        ("superior", "Lake Superior", [49.5004, 45.9996, -92.2004, -83.9996]),
+        ("michigan", "Lake Michigan", [46.0904, 41.6196, -88.0004, -84.4996]),
+        ("erie", "Lake Erie", [43.0004, 40.9996, -84.0004, -77.9996]),
+        ("ontario", "Lake Ontario", [44.2504, 43.1496, -79.9004, -76.0496]),
+    )]
+
+
+def _touches(bbox, other) -> bool:
+    n, s, w, e = bbox
+    on, os_, ow, oe = other
+    return not (oe < w or ow > e or on < s or os_ > n)
+
+
+class GridError(RuntimeError):
+    """A grid source covers the box but couldn't be loaded."""
+
+
+class EncSource:
+    """NOAA ENC (S-57 vector charts) through `enc.py`: the chart source."""
+    name = "noaa_enc"
+    label = "NOAA charts"
+    navigational = True
+    kind = "chart"
+
+    @property
+    def data_version(self):
+        return enc.DATA_VERSION
+
+    def covers(self, bbox) -> bool:
+        return True              # US cells are found from NOAA's catalog; none = nothing charted
+
+    def layers(self, bbox, cache_dir, safety_depth):
+        """{land, shoal, obstruction, depth_cover, missing} polygons (see `enc.layers_in_bbox`)."""
+        enc.ensure_bbox(bbox, cache_dir)
+        return enc.layers_in_bbox(bbox, cache_dir, safety_depth)
+
+
+class GridSource:
+    """A gridded bathymetry raster (GeoTIFF), reduced at prep to the shallowest depth per mask cell."""
+    kind = "grid"
+
+    def __init__(self, spec: dict):
+        self.spec = spec
+        self.name = str(spec["name"])
+        self.label = str(spec.get("label") or self.name)
+        self.navigational = bool(spec.get("navigational", False))
+        self.bbox = tuple(float(v) for v in spec["bbox"])
+        self.data_version = f"{GRID_DATA_VERSION}:{self.name}:{spec.get('version', '')}"
+
+    def covers(self, bbox) -> bool:
+        return _touches(bbox, self.bbox)
+
+    # --- prep: download once -------------------------------------------------
+    def _dir(self, cache_dir):
+        return os.path.join(cache_dir or CACHE, "grids", self.name)
+
+    def raster(self, cache_dir) -> str:
+        """Path to the source GeoTIFF on disk, downloading it the first time."""
+        d = self._dir(cache_dir)
+        out = os.path.join(d, f"{self.name}.tif")
+        if os.path.exists(out):
+            return out
+        os.makedirs(d, exist_ok=True)
+        url = self.spec["url"]
+        member = self.spec.get("member")
+        tmp = atomicio.tmp_name(out)
+        try:
+            req = urllib.request.Request(url, headers=_HDRS)
+            blob_path = tmp + ".dl"
+            with urllib.request.urlopen(req, timeout=300) as r, open(blob_path, "wb") as f:
+                while True:
+                    chunk = r.read(1 << 20)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+            if not member:
+                os.replace(blob_path, tmp)
+            else:
+                _unpack_member(blob_path, member, tmp)
+                os.remove(blob_path)
+        except Exception as exc:  # noqa: BLE001 — reported by the caller
+            for p in (tmp, tmp + ".dl"):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+            raise GridError(f"{self.name}: {type(exc).__name__}: {exc}"[:200]) from None
+        atomicio.commit(tmp, out)
+        return out
+
+    # --- prep: reduce to the mask grid ---------------------------------------
+    def cells(self, bbox, res, nx, ny, cache_dir) -> list:
+        """Shallowest depth (m, down is +) in each mask cell, row-major from the SOUTH-west cell
+        (the ObstacleField's order), or None where the grid has no data for the whole cell.
+
+        Cached per box and cell size: a different boat re-thresholds this, it never re-warps."""
+        n, s, w, e = bbox
+        key = f"{self.data_version}|{s:.6f},{w:.6f}|{res:.8f}|{nx}x{ny}"
+        cpath = os.path.join(self._dir(cache_dir),
+                             "cells-" + hashlib.sha1(key.encode()).hexdigest()[:16] + ".json")
+        try:
+            with open(cpath) as f:
+                got = json.load(f)
+            if got.get("key") == key and len(got.get("d", [])) == nx * ny:
+                return got["d"]
+        except (OSError, ValueError, AttributeError):
+            pass
+        src = self.raster(cache_dir)
+        te = [str(w), str(s), str(w + nx * res), str(s + ny * res)]
+        z = (self.spec.get("z") or "elevation").lower()
+        nodata = self._nodata(src)
+        # the shallowest valid value per cell: max elevation (up is +), or min depth (down is +)
+        wd = self._dir(cache_dir)
+        shallow = self._warp(wd, src, te, nx, ny, "max" if z == "elevation" else "min", nodata)
+        # a cell is covered only if EVERY source pixel in it has data: warp again with nodata as a
+        # plain number; a sentinel is outside the data range, so the extreme towards it finds it
+        if nodata is None:
+            cover = None
+        else:
+            cover = self._warp(wd, src, te, nx, ny, "min" if nodata < 0 else "max", None,
+                               dst_nodata=nodata)
+        out = []
+        for i in range(nx * ny):
+            v = shallow[i]
+            if v is None or (cover is not None and (cover[i] is None or cover[i] == nodata)):
+                out.append(None)
+                continue
+            out.append(round(-v if z == "elevation" else v, 2))
+        # rows came north-first from GDAL; the field counts rows from the south
+        rows = [out[r * nx:(r + 1) * nx] for r in range(ny)]
+        flat = [v for row in reversed(rows) for v in row]
+        os.makedirs(os.path.dirname(cpath), exist_ok=True)
+        atomicio.write_json(cpath, {"key": key, "d": flat})
+        return flat
+
+    @staticmethod
+    def _nodata(src):
+        try:
+            r = subprocess.run(["gdalinfo", "-json", src], capture_output=True, timeout=120)
+            if r.returncode != 0:
+                raise GridError("gdalinfo: " + r.stderr.decode(errors="replace")[:150])
+            info = json.loads(r.stdout)
+            nd = (info.get("bands") or [{}])[0].get("noDataValue")
+            return float(nd) if nd is not None else None
+        except (OSError, ValueError, subprocess.TimeoutExpired, TypeError) as exc:
+            raise GridError(f"gdalinfo: {type(exc).__name__}") from None
+
+    @staticmethod
+    def _warp(wd, src, te, nx, ny, how, src_nodata, dst_nodata=-3.0e38):
+        """gdalwarp the raster onto the mask grid (EPSG:4326, `how` = max|min over the source
+        pixels in each cell) → [float|None] north-first. Raises GridError on any failure."""
+        out = os.path.join(wd, f"warp-{os.getpid()}-{threading.get_ident()}-{how}.bil")
+        cmd = ["gdalwarp", "-q", "-overwrite", "-of", "EHdr", "-ot", "Float32",
+               "-t_srs", "EPSG:4326", "-te", *te, "-ts", str(nx), str(ny), "-r", how,
+               "-srcnodata", "None" if src_nodata is None else repr(src_nodata),
+               "-dstnodata", repr(float(dst_nodata)), "-wo", "INIT_DEST=NO_DATA", src, out]
+        try:
+            r = subprocess.run(cmd, capture_output=True, timeout=600)
+            if r.returncode != 0:
+                raise GridError(f"gdalwarp: {r.stderr.decode(errors='replace')[:150]}")
+            order = "I"
+            with open(out[:-4] + ".hdr") as f:
+                for line in f:
+                    parts = line.split()
+                    if len(parts) == 2 and parts[0].upper() == "BYTEORDER":
+                        order = parts[1].upper()
+            vals = array.array("f")
+            with open(out, "rb") as f:
+                vals.frombytes(f.read())
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise GridError(f"gdalwarp: {type(exc).__name__}") from None
+        finally:
+            for ext in (".bil", ".hdr", ".prj", ".bil.aux.xml", ".stx"):
+                try:
+                    os.remove(out[:-4] + ext)
+                except OSError:
+                    pass
+        if (order == "M") != (sys.byteorder == "big"):
+            vals.byteswap()
+        if len(vals) != nx * ny:
+            raise GridError("gdalwarp: wrong size")
+        dn = array.array("f", [dst_nodata])[0]          # the sentinel as float32 rounds it
+        return [None if v == dn else float(v) for v in vals]
+
+
+def _unpack_member(archive, member, dest):
+    """Copy one named file out of a .tar.gz or .zip to `dest`. Only that member is read, so a
+    path in the archive never lands anywhere else."""
+    if zipfile.is_zipfile(archive):
+        with zipfile.ZipFile(archive) as z, z.open(member) as src, open(dest, "wb") as f:
+            while True:
+                chunk = src.read(1 << 20)
+                if not chunk:
+                    break
+                f.write(chunk)
+        return
+    with tarfile.open(archive) as t:
+        m = t.getmember(member)
+        if not m.isfile():
+            raise GridError(f"{member} is not a file")
+        src = t.extractfile(m)
+        with src, open(dest, "wb") as f:
+            while True:
+                chunk = src.read(1 << 20)
+                if not chunk:
+                    break
+                f.write(chunk)
+
+
+def grid_catalog() -> list:
+    """The grid sources' specs: `DEPTH_GRIDS` (a JSON file, or "none"), else the built-in list."""
+    path = os.environ.get("DEPTH_GRIDS", "").strip()
+    if not path:
+        return list(GRIDS)
+    if path.lower() in ("none", "off", "0"):
+        return []
+    with open(path) as f:
+        got = json.load(f)
+    return [g for g in got if isinstance(g, dict)]
+
+
+class _BadCatalog:
+    """Stands in for every grid when the catalog won't read: covers everything, never loads, so
+    the water stays "no depth data" and the reason is reported (never a silent "no grids")."""
+    kind = "grid"
+    navigational = False
+    name = "depth_grids"
+    label = "depth grids"
+
+    def __init__(self, why):
+        self.why = why
+        self.data_version = "grid-catalog-error"
+
+    def covers(self, bbox):
+        return True
+
+    def cells(self, *_a, **_k):
+        raise GridError(f"catalog: {self.why}")
+
+
+def sources_for(bbox) -> list:
+    """The depth sources whose coverage touches bbox=(n,s,w,e): the chart source first, then the
+    grids, in catalog order."""
+    out = [EncSource()]
+    try:
+        grids = [GridSource(spec) for spec in grid_catalog()]
+    except Exception as exc:  # noqa: BLE001 — a broken catalog is reported, not fatal
+        return out + [_BadCatalog(f"{type(exc).__name__}: {exc}"[:150])]
+    return out + [g for g in grids if g.covers(bbox)]
+
+
+def data_version(bbox) -> str:
+    """What the depth sources for this box are: part of the obstacle cache key."""
+    return "+".join(s.data_version for s in sources_for(bbox))

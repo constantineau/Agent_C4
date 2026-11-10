@@ -34,6 +34,7 @@ _tmp = tempfile.mkdtemp()
 os.environ["INGESTED_DIR"] = _tmp
 os.environ["GRIB_CACHE"] = os.path.join(_tmp, "gribcache")
 os.environ.pop("ANTHROPIC_API_KEY", None)
+os.environ["DEPTH_GRIDS"] = "none"     # stub charts only: no real depth grid over the test water (#292)
 
 from app import optimizer as OPT, orinassets, playbook, synthesis as SYN  # noqa: E402
 from app import current as currentmod, wave as wavemod  # noqa: E402
