@@ -190,6 +190,13 @@ check("the legacy-path Jul 18 track is still scored once", sum(1 for s in seen i
 check("log_body_for finds the session by its derived window",
       RS.log_body_for(W15, [{"id": 1, "start_ts": W15 - 300, "window": {"start_ts": W15}}])
       == {"session_id": 1, "start_ts": W15 - 300})
+check("a recording archived on the marker re-scores the marker, not a moved derived window",
+      RS.log_body_for(W15, [{"id": 1, "start_ts": W15, "window": {"start_ts": W15 + 600}}])
+      == {"session_id": 1, "start_ts": W15, "use_marker": True})
+off = RS._track_for({"race_id": RID, "window_start": W15},
+                    lambda r, ws: ({"window": {"start_ts": ws + 600}, "fixes": []}, None))
+check(f"a fetched track whose window is another recording is left out (got {off[1]})",
+      off[0] is None and "differently" in off[1])
 check("…and says None when the boat log no longer has it", RS.log_body_for(W15, [{"id": 9, "start_ts": 1.0}]) is None)
 
 # ---- 4) approval only proposes ----------------------------------------------------------------

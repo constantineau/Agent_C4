@@ -19,11 +19,15 @@ def log_body_for(window_start, sessions):
     """The boat-log request for an archived recording: the session whose DERIVED window (or, for
     an old session, marker) starts at the archived window start. None when the boat log no longer
     has it."""
+    near = lambda ts: ts is not None and abs(float(ts) - float(window_start)) < 1.0
     for s in sessions or ():
-        w = s.get("window") or {}
-        for ts in (w.get("start_ts"), s.get("start_ts")):
-            if ts is not None and abs(float(ts) - float(window_start)) < 1.0:
-                return {"session_id": s.get("id"), "start_ts": s.get("start_ts")}
+        if near((s.get("window") or {}).get("start_ts")):
+            return {"session_id": s.get("id"), "start_ts": s.get("start_ts")}
+    for s in sessions or ():
+        if near(s.get("start_ts")):
+            # archived on the marker, and the derived window no longer starts there: re-score the
+            # SAME interval, or its bins would be filed under a recording they are not
+            return {"session_id": s.get("id"), "start_ts": s.get("start_ts"), "use_marker": True}
     return None
 
 
@@ -44,7 +48,11 @@ def _track_for(rec, fetch_track):
         t, why = fetch_track(rid, ws)
     except Exception as exc:       # noqa: BLE001 — one missing recording must not stop the run
         return None, f"boat log fetch failed: {type(exc).__name__}"
-    return (t, "boat log") if t else (None, why or "not on the boat log")
+    if not t:
+        return None, why or "not on the boat log"
+    if not track._near(track.recording_of(t), ws):
+        return None, "the boat log now cuts this recording differently"
+    return t, "boat log"
 
 
 def run(boat_id, fetch_track=None, score=None, on_progress=None):
