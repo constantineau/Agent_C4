@@ -21,12 +21,16 @@ Pins:
  10) #242 the bundle verdict and the refusal text Freeze, Deploy and GPX use.
 """
 import math
+import os
 
-from app import optimizer as O
-from app import routesafety as RS
-from app.geo import coastline
-from app.geo import enc
-from app.geo import obstacles as OB
+# the stub charts here are the only depth source: no real depth grid (#292) over the test water
+os.environ["DEPTH_GRIDS"] = "none"
+
+from app import optimizer as O  # noqa: E402
+from app import routesafety as RS  # noqa: E402
+from app.geo import coastline  # noqa: E402
+from app.geo import enc  # noqa: E402
+from app.geo import obstacles as OB  # noqa: E402
 
 ok = True
 
