@@ -189,17 +189,24 @@ class GridSource:
         src = self.raster(cache_dir)
         te = [str(w), str(s), str(w + nx * res), str(s + ny * res)]
         z = (self.spec.get("z") or "elevation").lower()
-        nodata = self._nodata(src)
+        nodata, ext = self._info(src)
         # the shallowest valid value per cell: max elevation (up is +), or min depth (down is +)
         wd = self._dir(cache_dir)
         shallow = self._warp(wd, src, te, nx, ny, "max" if z == "elevation" else "min", nodata)
         # a cell is covered only if EVERY source pixel in it has data: the validity mask's minimum
         # over the cell is 255; outside the raster the cell is 0
         cover = self._warp(wd, self._valid_mask(src), te, nx, ny, "min", None, dst_nodata=0.0)
+        # GDAL reduces only the pixels a cell has: a cell the raster's edge cuts through would read
+        # as covered from its inside half. Only cells wholly inside the raster count (Codex on #300)
+        eps = 1e-9                                   # float noise on an exactly shared edge
+        rw, rs, re_, rn = ext[0] - eps, ext[1] - eps, ext[2] + eps, ext[3] + eps
+        inside_col = [rw <= w + c * res and w + (c + 1) * res <= re_ for c in range(nx)]
+        inside_row = [rs <= s + (ny - 1 - r) * res and s + (ny - r) * res <= rn for r in range(ny)]
         out = []
         for i in range(nx * ny):
             v = shallow[i]
-            if v is None or v != v or cover[i] != 255.0:
+            if v is None or v != v or cover[i] != 255.0 or not (inside_row[i // nx]
+                                                                and inside_col[i % nx]):
                 out.append(None)
                 continue
             # to the cm, rounded DOWN (shallower): rounding never opens a cell (Codex on #300)
@@ -212,15 +219,19 @@ class GridSource:
         return flat
 
     @staticmethod
-    def _nodata(src):
+    def _info(src):
+        """(nodata value or None, (west, south, east, north) of the raster in WGS84)."""
         try:
             r = subprocess.run(["gdalinfo", "-json", src], capture_output=True, timeout=120)
             if r.returncode != 0:
                 raise GridError("gdalinfo: " + r.stderr.decode(errors="replace")[:150])
             info = json.loads(r.stdout)
             nd = (info.get("bands") or [{}])[0].get("noDataValue")
-            return float(nd) if nd is not None else None
-        except (OSError, ValueError, subprocess.TimeoutExpired, TypeError) as exc:
+            ring = info["wgs84Extent"]["coordinates"][0]
+            xs, ys = [float(p[0]) for p in ring], [float(p[1]) for p in ring]
+            return (float(nd) if nd is not None else None), (min(xs), min(ys), max(xs), max(ys))
+        except (OSError, ValueError, subprocess.TimeoutExpired, TypeError, KeyError,
+                IndexError) as exc:
             raise GridError(f"gdalinfo: {type(exc).__name__}") from None
 
     @staticmethod

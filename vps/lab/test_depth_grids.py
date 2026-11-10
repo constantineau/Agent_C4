@@ -116,6 +116,8 @@ g0 = D.GridSource({"name": "zero_nd", "bbox": [S + 0.1, S, W, W + 0.1], "z": "de
 c0 = g0.cells((S + 0.1, S, W, W + 0.1), 0.05, 2, 2, None)
 check("nodata 0: the cell with an empty pixel is not covered, the others are",
       c0[0] is None and c0[1:] == [10.0, 10.0, 10.0], c0)
+ce = g0.cells((S + 0.1, S + 0.05, W + 0.025, W + 0.125), 0.05, 2, 1, None)
+check("a cell the raster's edge cuts through is not covered", ce == [10.0, None], ce)
 g1 = D.GridSource(dict(SPEC, version="2"))
 check("a new version: a new file and a new data version",
       g1.raster(None) != g.raster(None) and g1.data_version != g.data_version)
