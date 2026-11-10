@@ -31,6 +31,7 @@ from . import coach as coach_mod
 from . import config, copilot, dashboard_brief, playbook as playbook_mod, tools
 from .engine_client import EngineClient
 from .llm import LLMClient
+from shed import guard as shed
 
 
 @asynccontextmanager
@@ -77,6 +78,9 @@ def health():
     pb = playbook_mod.load()
     eng_ok = engine.reachable()
     llm_ok = LLMClient().reachable() if config.USE_LLM else False
+    # the Orin's load shed (#248): level 1+ means no LLM calls, so the crew gets engine text
+    st = shed.read_state()
+    narration_paused = shed.message("narration", st) if st["level"] >= 1 else None
     return {
         "status": "ok",
         "service": "onboard-copilot",
@@ -89,8 +93,10 @@ def health():
                      "sail_inventory": pb.boat_model.get("sail_inventory", []),
                      "note": pb.note},
         # Honest degraded modes so the crew knows what they're getting.
-        "mode": ("llm" if (eng_ok and llm_ok) else
+        "mode": ("llm" if (eng_ok and llm_ok and not narration_paused) else
                  "deterministic" if eng_ok else "engine-unreachable"),
+        "shed": {"level": st["level"], "guard": st["guard"], "cause": st.get("cause"),
+                 "paused": st.get("paused", []), "detail": narration_paused},
         "coach": {"enabled": coach_mod.COACH.enabled, "running": coach_mod.COACH.running(),
                   "interval_s": coach_mod.COACH.interval, "ticks": coach_mod.COACH.ticks,
                   "last_error": coach_mod.COACH.last_error},

@@ -187,6 +187,17 @@ def run_judge(race_id, playbook_id=None, models=None, on_progress=None, recordin
     return report
 
 
+def score_recording(t, wave_coeffs=None, on_progress=None):
+    """The PERFORMANCE half alone, on today's evidence code: one recording → the scored track
+    (polar %, perf_bins, trust, current/wave flags). The re-score (#245) runs this over the
+    archived recordings; it needs no playbook and archives nothing. The current and sea-state
+    fields are built over the recording's own time and area (#68)."""
+    log = on_progress or (lambda *_: None)
+    start = ((t or {}).get("window") or {}).get("start_ts") or 0
+    cur, wv = _own_speed_fields(t, {}, None, start, log)
+    return _score_actual_track(t, {}, [], start, None, cur, wv, wave_coeffs=wave_coeffs)
+
+
 def _track_span(t, start_epoch):
     """(first, last) epoch the recording covers, or None when its fixes carry no clock. Same clock
     rule as `track.score_track`: a wall clock as is, a race-relative (YB) one anchored on the gun."""

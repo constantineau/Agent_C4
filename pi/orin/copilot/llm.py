@@ -8,6 +8,8 @@ import json
 import urllib.error
 import urllib.request
 
+from shed import guard as shed
+
 from . import config
 
 
@@ -17,6 +19,18 @@ class LLMUnavailable(Exception):
 
 class PromptTooLong(LLMUnavailable):
     """The request would not fit the context window. Retrying can't help."""
+
+
+class NarrationPaused(LLMUnavailable):
+    """The Orin is shedding load (#248, level 1+): no LLM call; callers fall back to the engine."""
+
+
+def check_shed():
+    """Refuse any LLM call while the load-shed guard has narration paused (pi/orin/shed). Raising
+    LLMUnavailable sends every caller down its deterministic fallback, same as a too-long prompt."""
+    why = shed.paused("narration")
+    if why:
+        raise NarrationPaused(why)
 
 
 def estimate_tokens(messages, tools=None) -> int:
@@ -67,6 +81,7 @@ class LLMClient:
         """One chat round. Returns the assistant message dict, which may contain `tool_calls`.
         `schema` (a JSON Schema) forces schema-valid JSON output (constrained decoding) — the most
         reliable structured-output mode; `json_object=True` is the looser JSON-only fallback."""
+        check_shed()
         check_budget(messages, tools, self.num_ctx)
         payload = {
             "model": self.model,
@@ -91,6 +106,7 @@ class LLMClient:
     def chat_stream(self, messages, temperature=None):
         """Stream a chat completion, yielding content deltas as they arrive (SSE). Used for the
         dashboard tile deep-dive so words appear token-by-token instead of after a long blank."""
+        check_shed()
         check_budget(messages, None, self.num_ctx)
         payload = {
             "model": self.model,

@@ -954,6 +954,50 @@ def _corner_tacks(wf, P, a, b, t):
     return out
 
 
+def _corner_leg(wf, P, leg, pts, dlat, dlon, leg_obs, helm_factor):
+    """Sail the rounding `pts` [(lat, lon)] from the end of `leg` round the mark at (dlat, dlon):
+    `leg` with the corner's steps added to its path, ETA, distance and tacks, or None when there's
+    no clean way round (a board crosses an obstacle, or no wind/speed on a step).
+
+    The straight boards actually sailed: a step that points inside the no-go zone is tacked, and
+    its two boards (not the chord) are what's checked, priced and drawn (Codex on #287). Steps are
+    a 0.1 nm circle's chords, so the boards stay close. Each tack put in costs TACK_COST_S of
+    clock, like a tack anywhere else on the route (#293)."""
+    boards, n_tacks = [], 0                 # (a, b, tack at b?)
+    for a, b in zip(pts, pts[1:]):
+        if leg_obs is not None and leg_obs.crosses(*a, *b):
+            return None
+        tk = _corner_tacks(wf, P, a, b, leg["eta"])
+        if tk is None:
+            boards.append((a, b, False))
+            continue
+        clear = [o for o in tk if leg_obs is None or not (
+            leg_obs.crosses(*o[0], *o[1]) or leg_obs.crosses(*o[1], *o[2]))]
+        if not clear:
+            return None
+        # the tack point farther from the mark: the boards stay outside the circle
+        _p, c, _q = max(clear, key=lambda o: _hav_nm(*o[1], dlat, dlon))
+        boards += [(a, c, True), (c, b, False)]
+        n_tacks += 1
+    # priced like any step: the polar at the wind there (forecast, or borrowed within the fill
+    # limit), helm included. No wind or no speed: no corner, and the side check judges.
+    tt, extra, steps = leg["eta"], 0.0, []
+    for a, b, tack in boards:
+        d = _hav_nm(*a, *b)
+        kn = _corner_speed(wf, P, a[0], a[1], tt, _bearing(*a, *b), helm_factor)
+        if kn is None:
+            return None
+        tt += d / kn * 3600.0
+        extra += d
+        steps.append({"lat": round(b[0], 5), "lon": round(b[1], 5), "t": tt})
+        if tack:
+            tt += TACK_COST_S
+    if not steps:
+        return None
+    return dict(leg, path=list(leg["path"]) + steps, eta=tt,
+                sailed_nm=round(leg["sailed_nm"] + extra, 2), tacks=leg["tacks"] + n_tacks)
+
+
 def _sweep(pts, mlat, mlon):
     """Signed angle (deg) the bearing from the mark to the boat turns through along `pts`
     [(lat, lon)]: negative = the boat went counter-clockwise round it (mark on its left)."""
@@ -1238,49 +1282,11 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
         if corner:
             last = leg["path"][-1]
             pts = [(last["lat"], last["lon"])] + corner
-            # the straight boards actually sailed: a step that points inside the no-go zone is
-            # tacked, and its two boards (not the chord) are what's checked, priced and drawn
-            # (Codex on #287). Steps are a 0.1 nm circle's chords, so the boards stay close.
-            boards, n_tacks = [], 0
-            for a, b in zip(pts, pts[1:]):
-                if leg_obs is not None and leg_obs.crosses(*a, *b):
-                    boards = None
-                    break
-                tk = _corner_tacks(wf, P, a, b, leg["eta"])
-                if tk is None:
-                    boards.append((a, b))
-                    continue
-                clear = [o for o in tk if leg_obs is None or not (
-                    leg_obs.crosses(*o[0], *o[1]) or leg_obs.crosses(*o[1], *o[2]))]
-                if not clear:
-                    boards = None
-                    break
-                # the tack point farther from the mark: the boards stay outside the circle
-                _p, c, _q = max(clear, key=lambda o: _hav_nm(*o[1], dlat, dlon))
-                boards += [(a, c), (c, b)]
-                n_tacks += 1
-            if boards is None:
+            rounded = _corner_leg(wf, P, leg, pts, dlat, dlon, leg_obs, helm_factor)
+            if rounded is None:
                 corner = []            # no clean way round at the standoff: the side check judges
             else:
-                # priced like any step: the polar at the wind there (forecast, or borrowed within
-                # the fill limit), helm included. No wind or no speed: no corner, and the side
-                # check judges.
-                tt, extra, steps = leg["eta"], 0.0, []
-                for a, b in boards:
-                    d = _hav_nm(*a, *b)
-                    kn = _corner_speed(wf, P, a[0], a[1], tt, _bearing(*a, *b), helm_factor)
-                    if kn is None:
-                        steps = None
-                        break
-                    tt += d / kn * 3600.0
-                    extra += d
-                    steps.append({"lat": round(b[0], 5), "lon": round(b[1], 5), "t": tt})
-                if steps:
-                    leg = dict(leg, path=list(leg["path"]) + steps, eta=tt,
-                               sailed_nm=round(leg["sailed_nm"] + extra, 2),
-                               tacks=leg["tacks"] + n_tacks)
-                else:
-                    corner = []
+                leg = rounded
         # sample wind + confidence at the leg's midpoint and end (for the briefing)
         mid = leg["path"][len(leg["path"]) // 2] if leg["path"] else {"lat": dlat, "lon": dlon}
         det = wf.detail_at(mid["lat"], mid["lon"], (t + leg["eta"]) / 2.0)

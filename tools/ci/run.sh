@@ -94,6 +94,8 @@ area archiver /repo /repo/pi/archiver:/repo pi/archiver/**/test_*.py
 area uplink /repo /repo pi/uplink/**/test_*.py
 area n2kout /repo /repo/pi/n2kout pi/n2kout/**/test_*.py
 orin_area agent pi/orin/copilot/**/test_*.py
+# The Orin's load-shed guard (#248) is stdlib python; the copilot imports its reader.
+orin_area agent pi/orin/shed/**/test_*.py
 area agent /repo /repo/vps/agent:/repo:/repo/pi/archiver vps/agent/**/test_*.py
 # shared/ is pure stdlib, imported by every service; the agent image is as good as any.
 area agent /repo /repo shared/**/test_*.py

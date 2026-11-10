@@ -46,6 +46,10 @@ os.environ.setdefault("PLUME_DIR", os.path.join(_HOME, "c4-plume", "store"))
 
 from app import plume as lab  # noqa: E402  (vps/lab on PYTHONPATH)
 
+# the load-shed guard's reader (pi/orin/shed, #248): stdlib, next to this folder
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from shed import guard as shed  # noqa: E402
+
 ENGINE_URL = os.environ.get("ENGINE_URL", "http://10.10.10.1:8200").rstrip("/")
 ENGINE_TIMEOUT = float(os.environ.get("ENGINE_TIMEOUT", "10"))
 GRIB_KEEP_S = float(os.environ.get("GRIB_KEEP_H", "30")) * 3600
@@ -533,6 +537,11 @@ def run_once(now=None, get=engine_get, post=engine_post, record=None, is_online=
 
 
 def main():
+    why = shed.paused("plume")
+    if why:
+        # level 2 of the load shed (#248): skip this pass; the timer tries again in 15 min
+        _log(f"pass skipped: {why}")
+        return 0
     t0 = time.time()
     try:
         out = run_once()

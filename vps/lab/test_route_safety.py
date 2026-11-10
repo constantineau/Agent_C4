@@ -162,6 +162,25 @@ check("(the chord alone is clear)", not fine.crosses(*a_, *b_))
 check("...but every way of tacking it is blocked",
       tk and all(fine.crosses(*p, *c) or fine.crosses(*c, *q) for p, c, q in tk))
 
+# #293: each tack the rounding puts in costs the boat's tack time, like a tack anywhere else.
+# Two steps dead upwind (wind N): each is split into two boards, so two tacks are added.
+_c3 = (LAT0 + 0.2 / 60.0, LON0)
+_leg0 = {"path": [{"lat": LAT0, "lon": LON0, "t": 0}], "eta": 1000.0, "sailed_nm": 1.0, "tacks": 3}
+_saved = O.TACK_COST_S
+O.TACK_COST_S = 0.0
+_free = O._corner_leg(Steady(8.5, 0.0), P, _leg0, [a_, b_, _c3], _c3[0], _c3[1], None, 1.0)
+O.TACK_COST_S = _saved
+_cost = O._corner_leg(Steady(8.5, 0.0), P, _leg0, [a_, b_, _c3], _c3[0], _c3[1], None, 1.0)
+check("a rounding that forces two tacks: two tacks added",
+      _cost is not None and _cost["tacks"] == 5, f"{_cost and _cost['tacks']}")
+check("...and its ETA carries two tack costs",
+      _free is not None and _cost is not None
+      and abs((_cost["eta"] - _free["eta"]) - 2 * O.TACK_COST_S) < 1e-6 and O.TACK_COST_S > 0,
+      f"{_cost and _free and _cost['eta'] - _free['eta']:.1f} s vs 2 × {O.TACK_COST_S}")
+_reach = O._corner_leg(Steady(8.5, 90.0), P, _leg0, [a_, b_, _c3], _c3[0], _c3[1], None, 1.0)
+check("...a rounding sailed straight adds no tack time",
+      _reach is not None and _reach["tacks"] == 3 and len(_reach["path"]) == 3)
+
 print("2) the string test on hand-made paths")
 M = (0.0, 0.0)
 
