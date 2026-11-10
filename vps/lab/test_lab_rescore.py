@@ -150,6 +150,11 @@ check(f"both recordings were scored (got {seen})", len(seen) == 2)
 check("Jul 18 used the stored track, Jul 15 came from the boat log",
       [r.get("track") for r in run["recordings"]] == ["boat log", "stored"] and len(fetched) == 1)
 check("the fetched track was not saved to the track store", sorted(os.listdir(T.TRACK_DIR)) == tracks_before)
+check("each scored recording says whether the instrument check ran",
+      all("trust_checked" in r for r in run["recordings"] if r["status"] == "scored"))
+check("the card flags a recording whose instrument check didn't run",
+      "trust_checked === false" in open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                     "web", "app.js")).read())
 check("no perf_bins were written", rows("perf_bins") == n_bins)
 check("no proposal was filed", rows("proposals") == n_props)
 check("the boat model is unchanged", json.dumps(boats.get_boat("sr33"), sort_keys=True) == applied_boat)

@@ -4687,7 +4687,7 @@ function polRescoreCard() {
   const recs = (run.recordings || []).map((r) => {
     const when = r.window_start ? new Date(r.window_start * 1000).toISOString().slice(0, 16).replace("T", " ") + "Z" : "uploaded track";
     return r.status === "scored"
-      ? `<div class="muted" style="font-size:12px">${esc(when)} · ${r.hours != null ? r.hours + " h · " : ""}${r.measured_bins} measured cell(s) · ${r.samples} samples · ${r.polar_pct != null ? r.polar_pct + "% of polar" : "—"}${r.old_polar_pct != null ? " (was " + r.old_polar_pct + "%)" : ""} · ${r.track === "stored" ? "saved track" : "from the boat log"}${r.current_corrected ? "" : " · no current"}${r.wave_corrected ? "" : " · no waves"}</div>`
+      ? `<div class="muted" style="font-size:12px">${esc(when)} · ${r.hours != null ? r.hours + " h · " : ""}${r.measured_bins} measured cell(s) · ${r.samples} samples · ${r.polar_pct != null ? r.polar_pct + "% of polar" : "—"}${r.old_polar_pct != null ? " (was " + r.old_polar_pct + "%)" : ""} · ${r.track === "stored" ? "saved track" : "from the boat log"}${r.current_corrected ? "" : " · no current"}${r.wave_corrected ? "" : " · no waves"}${r.trust_checked === false ? ' · <span class="pill bad">instrument check didn\'t run</span>' : ""}</div>`
       : `<div class="muted" style="font-size:12px">⊘ ${esc(when)} · left out: ${esc(r.note || "")}</div>`;
   }).join("");
   let body;

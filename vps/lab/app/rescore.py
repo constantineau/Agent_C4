@@ -95,6 +95,8 @@ def run(boat_id, fetch_track=None, score=None, on_progress=None):
                                      if b.get("wind_source") == "measured"),
                       "current_corrected": bool(s.get("current_corrected")),
                       "wave_corrected": bool(s.get("wave_corrected")),
-                      "trust_refused": tr.get("refused_samples")})
+                      "trust_refused": tr.get("refused_samples"),
+                      # a failed instrument check refuses nothing: say so next to the numbers
+                      "trust_checked": bool(tr.get("available")), "trust_line": tr.get("line")})
     log("comparing with the boat model in use…")
     return learning.save_rescore(boat_id, EVIDENCE_VERSION, notes, bins, against=against)
