@@ -12,10 +12,14 @@
      rrAgeMs  how old that read is (the iPad holds the last good one when a poll fails)
      suggest  {reason} from the strategy digest, or null; sugAgeMs its age
      press    what the last tap on THIS iPad came to (see afterPress)
+     shedLevel the Orin's load-shed level from /copilot/health (C4Shed.level), null if unknown;
+              shedAt when that read came
 
    The Orin-unreachable fallback is the SAME button, relabelled "Use Pi route": a second,
    explicit tap. The Pi's route is simpler (one forecast, no shore check), so the crew chooses it
-   knowingly. The relabelled button ignores taps for ARM_MS, so a double tap can't take it. */
+   knowingly. The relabelled button ignores taps for ARM_MS, so a double tap can't take it.
+   The same offer follows a refusal because the Orin is shedding load (#295, load-shed level 3:
+   "Re-route paused: Orin low on memory."). It ends when the Orin reports a level below 3. */
 (function (root) {
   "use strict";
 
@@ -123,6 +127,9 @@
     if (code == null) return { phase: "nolink", engine: engine, at: nowMs };
     if (code === 202) return { phase: "started", engine: engine, at: nowMs };
     if (code === 409 && b.busy) return { phase: "busy", engine: engine, at: nowMs };
+    if (code === 503 && engine === "orin" && b.paused)
+      return { phase: "paused", engine: "orin", at: nowMs, armAt: nowMs + ARM_MS,
+        until: nowMs + FALLBACK_MS, detail: b.detail || "Re-route paused: Orin overloaded." };
     if (code === 503 && engine === "orin")
       return { phase: "unreachable", engine: "orin", at: nowMs, armAt: nowMs + ARM_MS,
         until: nowMs + FALLBACK_MS };
@@ -145,10 +152,13 @@
     const starting = press.phase === "started" && nowMs - press.at < STARTING_MS && !running;
     const posting = press.phase === "posting";
 
-    // the fallback offer: after the Orin refused as unreachable, until it answers again
-    const orinBack = rr && rr.orin && rr.orin.reachable && (o.rrAt || 0) > (press.at || 0);
-    const fallback = press.phase === "unreachable" && nowMs < (press.until || 0) && !orinBack &&
-      !running;
+    // the fallback offer: after the Orin refused as unreachable, until it answers again; or
+    // after it refused because it is shedding load, until a newer read says re-route is back
+    const orinBack = press.phase === "paused"
+      ? o.shedLevel != null && o.shedLevel < 3 && (o.shedAt || 0) > (press.at || 0)
+      : rr && rr.orin && rr.orin.reachable && (o.rrAt || 0) > (press.at || 0);
+    const fallback = (press.phase === "unreachable" || press.phase === "paused") &&
+      nowMs < (press.until || 0) && !orinBack && !running;
 
     let progress = null;
     if (running) {
@@ -163,6 +173,7 @@
 
     let note = null;
     if (press.phase === "unreachable" && fallback) note = "Can't reach the Orin.";
+    else if (press.phase === "paused" && fallback) note = press.detail;
     else if (press.phase === "busy" && nowMs - press.at < 20000) note = "Already running. One at a time.";
     else if (press.phase === "refused" && nowMs - press.at < 60000) note = press.detail;
     else if (press.phase === "error" && nowMs - press.at < 60000) note = press.detail;

@@ -142,6 +142,42 @@ test("Orin unreachable: the same button offers the Pi, armed after a beat", () =
   assert.equal(back.button.label, "Re-route now");
 });
 
+test("Orin shedding load (#295): the button offers the Pi, as when it can't be reached", () => {
+  const body = { ok: false, orin: "paused", paused: true, detail: "Re-route paused: Orin low on memory." };
+  const p = RT.afterPress("orin", 503, body, NOW);
+  assert.equal(p.phase, "paused");
+  // the Orin is up (its status poll answers) but takes no new run
+  const now = v({ rr: IDLE, press: p, rrAt: NOW + 500, nowMs: NOW + 600, shedLevel: 3, shedAt: NOW + 500 });
+  assert.equal(now.fallback, true);
+  assert.equal(now.button.label, "Use Pi route");
+  assert.equal(now.button.engine, "pi");
+  assert.equal(now.button.disabled, true, "a double tap can't take it");
+  assert.equal(now.say, "Re-route paused: Orin low on memory.");
+  assert.equal(now.sub, "Pi route: one forecast, no shore check.");
+  const armed = v({ rr: IDLE, press: p, rrAt: NOW + 4000, nowMs: NOW + RT.ARM_MS + 1, shedLevel: 3, shedAt: NOW + 1 });
+  assert.equal(armed.button.disabled, false);
+  // no shed read (the copilot didn't answer): the offer stays until it lapses
+  assert.equal(v({ rr: IDLE, press: p, nowMs: NOW + 5000, shedLevel: null, shedAt: NOW + 4000 }).fallback, true);
+  // a read from before the press doesn't end it
+  assert.equal(v({ rr: IDLE, press: p, nowMs: NOW + 5000, shedLevel: 0, shedAt: NOW - 1 }).fallback, true);
+  // the shed drops below 3 → back to the Orin
+  const back = v({ rr: IDLE, press: p, nowMs: NOW + 5000, shedLevel: 2, shedAt: NOW + 4000 });
+  assert.equal(back.button.label, "Re-route now");
+  assert.equal(back.button.engine, "orin");
+  const lapsed = v({ rr: IDLE, press: p, nowMs: NOW + RT.FALLBACK_MS + 1, shedLevel: 3, shedAt: NOW + 1 });
+  assert.equal(lapsed.button.label, "Re-route now");
+});
+
+test("no Orin aboard at all (any boat): the button offers the Pi, shed or not", () => {
+  // no copilot → no shed read (null); the engine answers 503 unreachable
+  const off = Object.assign({}, IDLE, { orin: { reachable: false } });
+  const p = RT.afterPress("orin", 503, { ok: false, orin: "unreachable" }, NOW);
+  const x = v({ rr: off, press: p, nowMs: NOW + RT.ARM_MS + 1, shedLevel: null, shedAt: NOW + 1000 });
+  assert.equal(x.button.label, "Use Pi route");
+  assert.equal(x.button.disabled, false);
+  assert.equal(x.say, "Can't reach the Orin.");
+});
+
 test("the Pi fallback runs and reports like the Orin", () => {
   const off = { orin: { reachable: false }, state: null, result: null, latest: null,
     pi: { state: "running", asked_by: "Nav iPad", progress: { elapsed_s: 6, expected_s: 30, pct: 20 } } };
@@ -264,6 +300,7 @@ test("words stay short: every line the tile can show is 12 words or fewer", () =
   add(v({ rr: Object.assign({}, IDLE, { state: "done", latest: "orin", result: ORIN_ROUTE }) }));
   add(v({ rr: IDLE, press: RT.afterPress("orin", 503, {}, NOW) }));
   add(v({ rr: IDLE, press: RT.afterPress("orin", 409, { busy: true }, NOW) }));
+  add(v({ rr: IDLE, press: RT.afterPress("orin", 503, { paused: true, detail: "Re-route paused: Orin running hot." }, NOW) }));
   add(v({ rr: IDLE, press: RT.afterPress("orin", null, null, NOW) }));
   for (const l of lines) assert.ok(words(l) <= 12, "too long: " + l);
   for (const l of lines) assert.ok(!/veer|back(ed|ing)/i.test(l), "say right/left: " + l);

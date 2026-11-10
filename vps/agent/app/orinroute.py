@@ -413,6 +413,12 @@ def _start(call, req, dev):
         return 409, {"ok": False, "busy": True, "job_id": body.get("job_id"),
                      "progress": body.get("progress"),
                      "detail": body.get("detail") or "A re-route is already running."}
+    if code == 503 and body.get("paused"):
+        # the Orin's load shed (#248, level 3): it is up but takes no new run. Said as such (not a
+        # failure), so the iPad can offer the Pi's own route as it does for an unreachable Orin (#295)
+        detail = str(body.get("detail") or "Re-route paused: Orin overloaded.")[:120]
+        reroutelog.record("pressed", "orin", device=dev, outcome="paused", detail=detail)
+        return 503, {"ok": False, "orin": "paused", "paused": True, "detail": detail}
     detail = str(body.get("detail") or "Re-route failed. Try again.")[:120]
     reroutelog.record("pressed", "orin", device=dev, outcome="failed", detail=detail)
     return 502, {"ok": False, "detail": detail}
