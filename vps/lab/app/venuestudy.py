@@ -265,6 +265,12 @@ def _run(key, name, lat, lon, radius_nm, spec, stations, include_deep, log, toda
             notes.append(f"{m.upper()}: no forecasts matched")
     derived = modelskill.derive_weights({m: s for m, s in scores.items()
                                          if s and m not in modelskill.REFERENCE_ONLY})
+    prev = load(key)
+    if not derived and prev and any(r.get("weighted") for r in ((prev.get("result") or {}).get("table") or [])):
+        # e.g. older years during an Open-Meteo outage: only HRRR's archive answers, and one model
+        # can't be weighted. Don't swap a weighted study for an unweighted one.
+        raise ValueError("Too few models came back to replace the last study. It's kept. "
+                         "Try again later.")
     table = []
     for m, s in scores.items():
         if not s:

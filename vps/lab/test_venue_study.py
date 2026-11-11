@@ -368,6 +368,15 @@ except ValueError:
           venuestudy.load(st["key"]) == before and len(modelskill.load_scores(st["key"])) == 5)
 modelskill.fetch_forecast = _fc
 modelskill.fetch_reforecast = lambda *a, **k: {}
+_fc = modelskill.fetch_forecast
+modelskill.fetch_forecast = lambda lat, lon, sd, ed, m, timeout=45: _fc(lat, lon, sd, ed, m) if m == "hrrr" else {}
+try:
+    venuestudy.run("Fort Lauderdale", 26.10, -80.05, 40, sp, FL_ST, today=TODAY)
+    check("only one model back: doesn't replace a weighted study", False)
+except ValueError as exc:
+    check("only one model back: doesn't replace a weighted study",
+          "kept" in str(exc) and venuestudy.load(st["key"]) == before and len(modelskill.load_scores(st["key"])) == 5)
+modelskill.fetch_forecast = _fc
 _orig_save = venuestudy.save
 venuestudy.save = lambda *a, **k: (_ for _ in ()).throw(OSError("disk full"))
 try:
