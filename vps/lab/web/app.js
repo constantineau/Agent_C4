@@ -211,6 +211,7 @@ async function route() {
   if (sec === "monitor") return renderMonitor();
   if (sec === "debrief") return renderDebrief();
   if (sec === "polar") return renderPolar();
+  if (sec === "venue") return renderVenueStudy();
   location.hash = "#races";          // unknown route → the library
 }
 // The tab row scrolls sideways when it doesn't fit (iPad upright): bring the selected tab into view.

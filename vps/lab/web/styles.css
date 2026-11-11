@@ -593,3 +593,25 @@ button.qh-btn[aria-expanded="true"] > span { color: var(--ink); border-color: va
 .lab-plume .t-rows { font-size:12.5px; margin-top:6px; }
 .lab-plume .t-row { display:flex; gap:12px; padding:2px 0; border-top:1px solid var(--line); }
 .lab-plume .t-row .rl { min-width:90px; } .lab-plume .t-row.hdr { color:var(--muted); font-size:11px; border-top:none; }
+
+/* Venue study (venuestudy.js) */
+.vs .card { margin-bottom: 14px; }
+.vs-list { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.vs-saved { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; text-align: left; min-height: 44px; }
+.vs-saved.active { border-color: var(--accent); }
+.vs-saved .vs-verdict { flex-basis: 100%; font-size: 12px; }
+.vs-grid { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: end; }
+.vs-grid label { display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--muted); }
+.vs-grid label:has(input[type=radio]) { flex-direction: row; align-items: center; gap: 6px; color: var(--ink); font-size: 14px; }
+.vs-map { height: 320px; border-radius: 10px; border: 1px solid var(--line); margin: 10px 0 4px; }
+.vs-verdict-big { font-size: 17px; font-weight: 600; margin: 4px 0 6px; }
+.vs-bar { display: inline-block; width: 70px; height: 6px; background: var(--panel2); border-radius: 3px;
+  vertical-align: middle; overflow: hidden; }
+.vs-bar span { display: block; height: 100%; background: var(--cyan); border-radius: 3px; }
+.vs-clim { display: flex; flex-wrap: wrap; gap: 18px; align-items: flex-start; margin-top: 10px; }
+.vs-rose { width: 280px; max-width: 100%; height: auto; }
+.vs-legend { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 11px; color: var(--muted); max-width: 280px; }
+.vs-key i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+.vs-rose-t td, .vs-rose-t th { text-align: right; }
+.vs-rose-t td:first-child, .vs-rose-t th:first-child { text-align: left; }
+.vs-scroll { overflow-x: auto; max-width: 100%; }

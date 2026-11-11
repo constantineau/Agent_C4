@@ -18,6 +18,9 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import threading
+import time
 import urllib.parse
 import urllib.request
 import datetime as dt
@@ -37,6 +40,42 @@ _METAR = "https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py"
 _NDBC_RT = "https://www.ndbc.noaa.gov/data/realtime2/{station}.txt"
 
 MATCH_TOL_S = 1800          # match a forecast hour to an obs within ±30 min
+
+# Where each model has data. A model missing here is global. Approximate boxes are enough: a point
+# inside the box but off the real grid just comes back empty and is skipped like any other gap.
+# (A step toward the per-area source registry, #309.)
+MODEL_COVERAGE = {
+    "hrrr": {"box": (21.1, 52.7, -134.1, -60.9), "label": "US only"},   # (s, n, w, e)
+}
+
+
+def covers(model, lat, lon):
+    """True if `model` has forecasts at (lat, lon). Global models always do."""
+    c = MODEL_COVERAGE.get(model)
+    if not c:
+        return True
+    s, n, w, e = c["box"]
+    return s <= lat <= n and w <= lon <= e
+
+
+def coverage_note(model):
+    c = MODEL_COVERAGE.get(model)
+    return f"{model.upper()}: not here ({c['label']})" if c else f"{model.upper()}: not here"
+
+
+# Open-Meteo's free tier allows ~600 calls/min and 5,000/hour; a long study makes a few hundred.
+# Space the calls out so a study never trips the limit (429s are retried anyway, see _get).
+OPENMETEO_MIN_GAP_S = float(os.environ.get("OPENMETEO_MIN_GAP_S", "0.5"))
+_om_lock = threading.Lock()
+_om_last = [0.0]
+
+
+def _om_wait():
+    with _om_lock:
+        gap = OPENMETEO_MIN_GAP_S - (time.monotonic() - _om_last[0])
+        if gap > 0:
+            time.sleep(gap)
+        _om_last[0] = time.monotonic()
 
 
 # ---------------------------------------------------------------------------- wind vector helpers
@@ -87,6 +126,7 @@ def fetch_forecast(lat, lon, start_date, end_date, our_model, timeout=45):
         "hourly": "wind_speed_10m,wind_direction_10m", "models": om,
         "wind_speed_unit": "kn", "timezone": "UTC",
     })
+    _om_wait()
     try:
         payload = json.loads(_get(f"{_HIST_FC}?{qs}", timeout))
     except Exception:
@@ -172,7 +212,8 @@ def fetch_ndbc_realtime(station, timeout=45):
 def fetch_ndbc_historical(station, year, timeout=60):
     """A buoy's full-year archived stdmet (gzip). {epoch: (tws_kn, twd_deg)}. WSPD m/s → kn."""
     import gzip
-    url = f"https://www.ndbc.noaa.gov/data/historical/stdmet/{station}h{year}.txt.gz"
+    # the archive's file names are lower case (LKWF1 -> lkwf1h2025.txt.gz); upper case is a 404
+    url = f"https://www.ndbc.noaa.gov/data/historical/stdmet/{str(station).lower()}h{year}.txt.gz"
     try:
         raw = gzip.decompress(_get(url, timeout))
         text = raw.decode("utf-8", "replace")
@@ -305,7 +346,6 @@ def verify_venue(lat, lon, station, start_date, end_date, models=("gfs", "hrrr",
 
 
 # =========================================================================== Phase 2: store + weights
-import os
 import sqlite3
 
 SKILL_DB = os.environ.get("LEARNING_DB", "/srv/learning/learning.db")   # share the Lab-4 volume
@@ -336,9 +376,9 @@ def _conn():
         venue_key TEXT, model TEXT, station TEXT, obs_source TEXT,
         n INTEGER, vector_rmse_kn REAL, speed_bias_kn REAL, dir_bias_deg REAL,
         window_start TEXT, window_end TEXT, updated_at REAL,
-        n_years INTEGER, deep INTEGER,
+        n_years INTEGER, deep INTEGER, study INTEGER,
         PRIMARY KEY (venue_key, model))""")
-    for col, decl in (("n_years", "INTEGER"), ("deep", "INTEGER")):   # forward-compat for older tables
+    for col, decl in (("n_years", "INTEGER"), ("deep", "INTEGER"), ("study", "INTEGER")):   # forward-compat for older tables
         try:
             c.execute(f"ALTER TABLE model_skill ADD COLUMN {col} {decl}")
         except sqlite3.OperationalError:
@@ -346,37 +386,41 @@ def _conn():
     return c
 
 
-def save_scores(venue_key, station, obs_source, window, scores):
+def save_scores(venue_key, station, obs_source, window, scores, study=False):
     """Persist one score row per model. Each score dict carries its OWN `n_years` (count of distinct
-    seasons that model actually matched) and `deep` (did it use a pre-2021 archive)."""
+    seasons that model actually matched) and `deep` (did it use a pre-2021 archive). `study`=True
+    marks rows a Lab venue study wrote: kept until the study is run again (see _fresh)."""
     now = dt.datetime.now(dt.timezone.utc).timestamp()
     with _conn() as c:
         c.execute("DELETE FROM model_skill WHERE venue_key=?", (venue_key,))   # replace the venue set
         for m, s in scores.items():
             if not s:
                 continue
-            c.execute("""INSERT OR REPLACE INTO model_skill VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            c.execute("""INSERT OR REPLACE INTO model_skill (venue_key, model, station, obs_source,
+                         n, vector_rmse_kn, speed_bias_kn, dir_bias_deg, window_start, window_end,
+                         updated_at, n_years, deep, study) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                       (venue_key, m, station, obs_source, s["n"], s["vector_rmse_kn"],
                        s["speed_bias_kn"], s["dir_bias_deg"], window[0], window[1], now,
-                       s.get("n_years", 1), 1 if s.get("deep") else 0))
+                       s.get("n_years", 1), 1 if s.get("deep") else 0, 1 if study else 0))
 
 
 def load_scores(venue_key):
     with _conn() as c:
         rows = c.execute("""SELECT model,n,vector_rmse_kn,speed_bias_kn,dir_bias_deg,updated_at,
-                            window_start,window_end,station,obs_source,n_years,deep FROM model_skill
+                            window_start,window_end,station,obs_source,n_years,deep,study FROM model_skill
                             WHERE venue_key=?""", (venue_key,)).fetchall()
     return {r[0]: {"n": r[1], "vector_rmse_kn": r[2], "speed_bias_kn": r[3], "dir_bias_deg": r[4],
                    "updated_at": r[5], "window": [r[6], r[7]], "station": r[8], "obs_source": r[9],
-                   "n_years": r[10], "deep": bool(r[11])}
+                   "n_years": r[10], "deep": bool(r[11]), "study": bool(r[12])}
             for r in rows}
 
 
 def _fresh(scores):
     if not scores:
         return False
-    if any(s.get("deep") for s in scores.values()):
-        return True                                  # deep backfill is historical + static → permanent
+    if any(s.get("deep") or s.get("study") for s in scores.values()):
+        return True                                  # deep backfill is historical + static → permanent;
+                                                     # a venue study stands until it is run again
     now = dt.datetime.now(dt.timezone.utc).timestamp()
     return all((now - s["updated_at"]) < SKILL_TTL_S for s in scores.values())
 
@@ -401,6 +445,26 @@ def _season_windows(center_md, first_year, last_year, pad_days, yesterday):
     return out
 
 
+def _span_windows(start_md, end_md, first_year, last_year, pad_days, yesterday):
+    """Like _season_windows but for a date RANGE (race dates, or a whole month): in each year,
+    [start_md - pad, end_md + pad]. An end before the start wraps into the next year (a race over
+    New Year). Windows wholly in the future are skipped; the end is capped at `yesterday`."""
+    def _d(y, md):
+        try:
+            return dt.date(y, md[0], md[1])
+        except ValueError:
+            return dt.date(y, md[0], min(md[1], 28))
+    out = []
+    for y in range(first_year, last_year + 1):
+        s0 = _d(y, start_md)
+        e0 = _d(y + 1 if tuple(end_md) < tuple(start_md) else y, end_md)
+        start, end = s0 - dt.timedelta(days=pad_days), e0 + dt.timedelta(days=pad_days)
+        if start > yesterday:
+            continue
+        out.append((y, start.isoformat(), min(end, yesterday).isoformat()))
+    return out
+
+
 def _recency_weight(year, ref_year):
     """Newer years count more (models change over time). Exponential decay by RECENCY_HALFLIFE_Y."""
     return 0.5 ** ((ref_year - year) / max(0.5, RECENCY_HALFLIFE_Y))
@@ -420,6 +484,59 @@ def obs_series(station, sd, ed):
     if station["kind"] == "ndbc":
         return fetch_ndbc_window(station["id"], sd, ed)
     return fetch_metar(station["id"], sd, ed)
+
+
+def score_stations(stations, windows, models, ref_year, include_deep=False, log=None, on_obs=None):
+    """Score each model against the observed wind at each station over `windows` [(year, sd, ed)],
+    recency-weighted. The forecast is always sampled AT the station (co-located). A model with no
+    forecasts at a station (outside its area, #309) is skipped there with a note, never an error.
+    `on_obs(station, year, obs)` sees each window's observations (the venue study builds its
+    wind summary from them). Returns (scores {model: score|None}, years {model: sorted years},
+    notes [plain text])."""
+    accs = {m: _acc_new() for m in models}
+    model_years = {m: set() for m in models}          # per-model distinct seasons matched
+    model_deep = {m: False for m in models}           # per-model: did it use a pre-2021 archive
+    notes = []
+    for m in models:
+        if not any(covers(m, st["lat"], st["lon"]) for st in stations):
+            notes.append(coverage_note(m))
+    for st in stations:
+        lat, lon = st["lat"], st["lon"]
+        for (year, sd, ed) in windows:
+            if year < OPENMETEO_FIRST_YEAR and not include_deep:
+                continue                              # skip deep years on the fast inline path
+            obs = obs_series(st, sd, ed)
+            if not obs:
+                if log:
+                    log(f"{st['id']} {year}: no obs")
+                continue
+            if on_obs:
+                on_obs(st, year, obs)
+            w = _recency_weight(year, ref_year)
+            got = {}
+            for m in models:
+                if not covers(m, lat, lon):
+                    continue
+                fc = forecast_series(lat, lon, sd, ed, m, year, include_deep=include_deep)
+                if not fc:
+                    continue
+                before = accs[m]["n"]
+                _acc_add(accs[m], _match(obs, fc), w)
+                added = accs[m]["n"] - before
+                if added:
+                    got[m] = added
+                    model_years[m].add(year)
+                    if year < OPENMETEO_FIRST_YEAR:
+                        model_deep[m] = True
+            if log:
+                log(f"{st['id']} {year}: obs={len(obs)} " + " ".join(f"{m}+{n}" for m, n in got.items()))
+    scores = {}
+    for m, a in accs.items():
+        sc = _acc_final(a)
+        if sc:
+            sc["n_years"], sc["deep"] = len(model_years[m]), model_deep[m]
+        scores[m] = sc
+    return scores, {m: sorted(ys) for m, ys in model_years.items()}, notes
 
 
 def refresh_venue_skill(venue, models=DEFAULT_MODELS, race_date=None, force=False, include_deep=False,
@@ -443,42 +560,9 @@ def refresh_venue_skill(venue, models=DEFAULT_MODELS, race_date=None, force=Fals
     center = race_date or yesterday
     windows = _season_windows((center.month, center.day), FIRST_YEAR, yesterday.year,
                               SEASON_PAD_DAYS, yesterday)
-    accs = {m: _acc_new() for m in models}
-    model_years = {m: set() for m in models}          # per-model distinct seasons matched
-    model_deep = {m: False for m in models}           # per-model: did it use a pre-2021 archive
-    for st in stations:
-        lat, lon = st["lat"], st["lon"]
-        for (year, sd, ed) in windows:
-            if year < OPENMETEO_FIRST_YEAR and not include_deep:
-                continue                              # skip deep years on the fast inline path
-            obs = obs_series(st, sd, ed)
-            if not obs:
-                if log:
-                    log(f"{st['id']} {year}: no obs")
-                continue
-            w = _recency_weight(year, yesterday.year)
-            got = {}
-            for m in models:
-                fc = forecast_series(lat, lon, sd, ed, m, year, include_deep=include_deep)
-                if not fc:
-                    continue
-                before = accs[m]["n"]
-                _acc_add(accs[m], _match(obs, fc), w)
-                added = accs[m]["n"] - before
-                if added:
-                    got[m] = added
-                    model_years[m].add(year)
-                    if year < OPENMETEO_FIRST_YEAR:
-                        model_deep[m] = True
-            if log:
-                log(f"{st['id']} {year}: obs={len(obs)} " + " ".join(f"{m}+{n}" for m, n in got.items()))
-    scores = {}
-    for m, a in accs.items():
-        s = _acc_final(a)
-        if s:
-            s["n_years"], s["deep"] = len(model_years[m]), model_deep[m]
-        scores[m] = s
-    all_years = sorted(set().union(*model_years.values())) if any(model_years.values()) else []
+    scores, _years, _notes = score_stations(stations, windows, models, yesterday.year,
+                                            include_deep=include_deep, log=log)
+    all_years = sorted({y for ys in _years.values() for y in ys})
     span = [f"{all_years[0]}" if all_years else "", f"{all_years[-1]}" if all_years else ""]
     label = "+".join(s["id"] for s in stations)
     src = "+".join(sorted({s["kind"] for s in stations}))
