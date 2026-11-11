@@ -37,8 +37,13 @@ def check(name, cond):
 
 
 def profile(bid):
-    with open(os.path.join(REPO, "vps", "lab", "boats", f"{bid}.json")) as f:
-        return json.load(f)
+    # shipped boats in vps/lab/boats, test-only ones (bravo) in vps/lab/testdata/boats
+    for d in ("boats", os.path.join("testdata", "boats")):
+        p = os.path.join(REPO, "vps", "lab", d, f"{bid}.json")
+        if os.path.exists(p):
+            with open(p) as f:
+                return json.load(f)
+    raise FileNotFoundError(bid)
 
 
 SR33, BRAVO = profile("sr33"), profile("bravo")

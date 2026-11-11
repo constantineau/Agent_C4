@@ -127,7 +127,7 @@ def archive_debrief(report, boat_id=None):
     # keep the stored report lean (drop the heavy oracle path / windfield arrays)
     slim = {k: report.get(k) for k in ("race_id", "race_name", "playbook_id", "start_epoch",
                                        "regret", "playbook", "caveat", "recording",
-                                       "tactics_available", "tactics_note")}
+                                       "tactics_available", "tactics_note", "no_race")}
     slim["oracle"] = {k: (report.get("oracle") or {}).get(k)
                       for k in ("total_hours", "favored_side", "tacks")}
     slim["actual_track"] = {k: v for k, v in at.items() if k != "perf_bins"}
@@ -164,7 +164,8 @@ def archive_debrief(report, boat_id=None):
         c.close()
 
 
-def list_debriefs(boat_id=None, race_id=None, limit=200):
+def list_debriefs(boat_id=None, race_id=None, limit=200, no_race=False):
+    """Archived debriefs, newest first. `no_race`: only the practice sails with no race (#322)."""
     c = _conn()
     try:
         # the archived cell count rides along: a debrief row that cannot say how much the boat
@@ -179,6 +180,8 @@ def list_debriefs(boat_id=None, race_id=None, limit=200):
             cond.append("boat_id=?"); args.append(boat_id)
         if race_id:
             cond.append("race_id=?"); args.append(race_id)
+        elif no_race:
+            cond.append("race_id IS NULL")
         if cond:
             q += " WHERE " + " AND ".join(cond)
         q += " ORDER BY created_at DESC LIMIT ?"; args.append(limit)
@@ -451,7 +454,8 @@ def refine(bins, recordings=None, helm_current=1.0):
     forecast = len(excluded) - inferred - mixed
     bins = [b for b in bins if b.get("wind_source") == "measured"]
     races = {b["race_id"] for b in bins}
-    used = sorted({_rec(b) for b in bins}, key=lambda k: (k[0], k[1] or 0))
+    # a practice sail has no race id (NULL, #322): sort it with the races, never against them
+    used = sorted({_rec(b) for b in bins}, key=lambda k: (k[0] or "", k[1] or 0))
     if not bins:
         return {"ok": False,
                 "note": "No measured data yet ("
@@ -518,7 +522,7 @@ def refine(bins, recordings=None, helm_current=1.0):
                "recordings_selected": (None if recordings is None else list(recordings)),
                "by_point_of_sail": {k: round(sum(x["pct"]) / len(x["pct"]))
                                     for k, x in by_pos.items()},
-               "races": sorted(races), "wind_source": "measured",
+               "races": sorted(races, key=lambda r: r or ""), "wind_source": "measured",
                "recordings": [{"race_id": r, "window_start": w} for r, w in used],
                "excluded_forecast_bins": forecast,
                "excluded_inferred_bins": inferred,
@@ -816,7 +820,7 @@ def fit_waves(bins, cur):
                 "deadband": db_info, "current_coeffs": {k: round(v, 4) for k, v in cur.items()},
                 "excluded_not_measured": left_out}
     summary = {"by_point_of_sail": detail, "deadband": db_info,
-               "current_coeffs": {k: round(v, 4) for k, v in cur.items()}, "races": sorted(races),
+               "current_coeffs": {k: round(v, 4) for k, v in cur.items()}, "races": sorted(races, key=lambda r: r or ""),
                "excluded_not_measured": left_out}
     return {"ok": True, "proposed": proposed, "summary": summary, "n_debriefs": len(races),
             "n_bins": len(have_hs)}

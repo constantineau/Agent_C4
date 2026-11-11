@@ -913,21 +913,27 @@ async def debrief_run(body: dict):
     pattern the retro batch uses.
 
     Body: {race_id, playbook_id?, recording?, session_id?/start_ts?/use_marker?}. Naming a session
-    makes this ONE button: the job fetches that recording off the boat log, then judges it."""
+    makes this ONE button: the job fetches that recording off the boat log, then judges it.
+
+    A practice sail (#322) names a session and no race: it is debriefed under the race the boat
+    log gives it, and with none, as a practice sail (speed only; nothing that needs a course)."""
     from . import jobs
     b = body or {}
-    race_id = b.get("race_id")
-    if not race_id:
+    race_id = b.get("race_id") or None
+    named = b.get("session_id") is not None or b.get("start_ts") is not None
+    if not race_id and not named:
         return JSONResponse({"detail": "race_id required"}, status_code=400)
     # the boat the session was SAILED on (#320): the Lab's edit, else the session's own pick,
     # read off the boat log here (never from the request); an "Other boat" with no profile can't
     # be scored (no polar) and is refused, plainly. An uploaded track (no session) → active boat.
     rev = sessionboat.revision()           # before the track is fetched (see _guard)
     ses = None
-    if b.get("session_id") is not None or b.get("start_ts") is not None:
+    if named:
         ses = await run_in_threadpool(_log_session, b)
         if ses is None:
             return {"ok": False, "note": "Couldn't find this session on the boat log. Try again."}
+        if not race_id:
+            race_id = ses.get("race_id") or None       # None: a practice sail, no race
 
     def _boat_now():
         if ses is None:
@@ -943,15 +949,16 @@ async def debrief_run(body: dict):
         rec = b.get("recording")
         if b.get("session_id") is not None or b.get("start_ts") is not None:
             progress("fetching this recording from the boat log…")
-            res, code = load_log_track(b)
+            res, code = load_log_track({**b, "race_id": race_id, "no_race": race_id is None})
             if code != 200:
                 return {"available": False,
                         "note": res.get("detail") or "the boat log could not be fetched"}
             rec = (res.get("window") or {}).get("start_ts")
             progress(f"{res.get('n')} fixes over {(res.get('window') or {}).get('hours')} h"
                      f" · {res.get('sail_changes')} sail change(s)")
-        return judge.run_judge(race_id, b.get("playbook_id"), on_progress=progress, recording=rec,
-                               boat_id=boat_id, archive_guard=_guard)
+        return judge.run_judge(race_id, b.get("playbook_id") if race_id else None,
+                               on_progress=progress, recording=rec, boat_id=boat_id,
+                               archive_guard=_guard, name=(ses or {}).get("name"))
 
     @contextlib.contextmanager
     def _guard():
@@ -992,16 +999,18 @@ async def debrief_run_status():
 
 
 @app.get("/api/debrief/recordings")
-async def debrief_recordings(race_id: str = None):
+async def debrief_recordings(race_id: str = None, no_race: bool = False):
     """What the boat has recorded, and which of it has been debriefed — the tab's home screen.
 
     Joins three things the Lab kept separately until 2026-09-15: the boat log's race SESSIONS
     (what was sailed), the TRACKS this Lab has loaded, and the archived DEBRIEFS. Without this a
-    crew cannot tell whether last weekend's race has been debriefed without re-running it."""
-    return await run_in_threadpool(_recordings, race_id)
+    crew cannot tell whether last weekend's race has been debriefed without re-running it.
+
+    `no_race=1`: the practice sails (#322) — sessions with no race id, which no race lists."""
+    return await run_in_threadpool(_recordings, None if no_race else race_id, bool(no_race))
 
 
-def _recordings(race_id=None):
+def _recordings(race_id=None, no_race=False):
     from . import monitor
     bid = (boats.active_boat() or {}).get("boat_id")
     try:
@@ -1010,10 +1019,12 @@ def _recordings(race_id=None):
     except Exception as exc:
         sessions, agent = [], {"available": False, "note": f"The boat is unreachable ({exc}). "
                                "Recordings already in the Lab are still listed."}
-    tracks = track.list_tracks(race_id) if race_id else []
-    debriefs = learning.list_debriefs(bid, race_id) if race_id else []
+    keyed = bool(race_id) or no_race      # a race, or the practice sails (stored with no race)
+    tracks = track.list_tracks(race_id) if keyed else []
+    nr = {"no_race": True} if no_race else {}
+    debriefs = learning.list_debriefs(bid, race_id, **nr) if keyed else []
     # a session is filed under the boat it was SAILED on (#320), not the active boat or the kit
-    every = learning.list_debriefs(None, race_id) if race_id else []
+    every = learning.list_debriefs(None, race_id, **nr) if keyed else []
 
     def near(a, b):
         # two missing keys are the same recording: a GPX/YB track has no window, and neither
@@ -1033,6 +1044,8 @@ def _recordings(race_id=None):
     out, seen = [], set()
     for ses in sessions:
         if race_id and ses.get("race_id") != race_id:
+            continue
+        if no_race and ses.get("race_id"):
             continue
         w = ses.get("window") or {}
         marker = ses.get("start_ts")
@@ -1072,8 +1085,8 @@ def _recordings(race_id=None):
                     "track": t, "debrief": latest_debrief(rec),
                     "n_debriefs": len([d for d in debriefs if near(d.get("window_start"), rec)])})
     out.sort(key=lambda r: r["start_ts"] or 0, reverse=True)
-    return {"race_id": race_id, "boat_id": bid, "agent": agent, "recordings": out,
-            "debriefs": debriefs}
+    return {"race_id": race_id, "no_race": no_race, "boat_id": bid, "agent": agent,
+            "recordings": out, "debriefs": debriefs}
 
 
 @app.post("/api/debrief/session-boat")
@@ -1326,8 +1339,10 @@ def load_log_track(body):
     button (see `resolve_log_window`); the window used is stored with the track and reported
     back. Stores it exactly like a GPX/YB track; the sail log rides along."""
     body = body or {}
-    rid = body.get("race_id")
-    if not rid or (body.get("start_ts") is None and body.get("session_id") is None):
+    rid = body.get("race_id") or None
+    # `no_race`: a practice sail (#322), stored with no race (track.NO_RACE)
+    if (not rid and not body.get("no_race")) or \
+            (body.get("start_ts") is None and body.get("session_id") is None):
         return {"detail": "race_id and one of session_id / start_ts are required"}, 422
     t, code = fetch_log_track(body)
     if code != 200:

@@ -1,6 +1,6 @@
 """#303 — the Lab routes, plays and debriefs every boat on ITS OWN polar, never sr33's.
 
-Pinned with a second boat (vps/lab/boats/bravo.json: an ORC-cert envelope, no per-sail curves, no
+Pinned with a second boat (vps/lab/testdata/boats/bravo.json: an ORC-cert envelope, no per-sail curves, no
 crossover table) and a synthetic boat with no polar at all:
   * the resolver: sr33 names its own four files; Bravo's polar is its inline cert; no polar → None;
   * an edited profile saved before #303 (no `polar_files`) still gets its seed's files;
@@ -25,6 +25,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 from shared import boat_polar as BP  # noqa: E402
 from app import boats, judge, optimizer, orinassets, playbook, polars, routerun  # noqa: E402
 from app import sailplan, synthesis  # noqa: E402
+import boat_fixtures  # noqa: E402
+boat_fixtures.install()      # bravo is a test-only boat: the shipped library never holds it
 
 ok = True
 
