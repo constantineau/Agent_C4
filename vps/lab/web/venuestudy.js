@@ -203,7 +203,7 @@ function vsPin() {
     .bindTooltip(s.id).addTo(map)));
 }
 
-function vsStartNew() { Vs.open = null; Vs.found = null; Vs.form = vsNewForm(); paintVenueStudy(); }
+function vsStartNew() { Vs.gen = (Vs.gen || 0) + 1; Vs.open = null; Vs.found = null; Vs.form = vsNewForm(); paintVenueStudy(); }
 
 async function vsOpen(key) {
   try {
@@ -237,6 +237,7 @@ function vsRerun() {
     f.start = `${y}-${p(sp.start_md[0])}-${p(sp.start_md[1])}`;
     f.end = `${y + (wraps ? 1 : 0)}-${p(sp.end_md[0])}-${p(sp.end_md[1])}`;
   }
+  Vs.gen = (Vs.gen || 0) + 1;
   Vs.form = f; Vs.open = null; Vs.found = null; paintVenueStudy();
 }
 

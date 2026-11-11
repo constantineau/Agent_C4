@@ -235,6 +235,8 @@ def discover(lat, lon, radius_nm, window=None, sources=None, probe_fn=None, max_
                 dk = (s["kind"], sid)
             if dk not in found or s.get("curated"):
                 found[dk] = dict(s, id=sid, tz=s.get("tz") or (found.get(dk) or {}).get("tz"))
+            elif not found[dk].get("tz") and s.get("tz"):
+                found[dk]["tz"] = s["tz"]        # our KAPN keeps Iowa State's clock for APN
     picks = []
     for kind in ("metar", "ndbc"):
         same = sorted((s for s in found.values() if s["kind"] == kind),

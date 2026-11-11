@@ -154,6 +154,7 @@ g = obsstations.discover(45.07, -83.5, 30, window=win)
 apn = [s for s in g["stations"] if s["kind"] == "metar" and s["id"] in ("KAPN", "APN")]
 check("our curated KAPN and Iowa State's APN are one station, ours wins",
       len(apn) == 1 and apn[0]["id"] == "KAPN" and apn[0].get("curated") and apn[0].get("ticked"))
+check("...keeping Iowa State's clock for it", apn[0].get("tz") == "America/Detroit")
 
 
 class _Down:
