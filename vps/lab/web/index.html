@@ -47,6 +47,9 @@
 
   <main id="view"><div class="loading">Loading…</div></main>
 
+  <!-- a new Lab build is out (#325, app.js checkWebVersion): one tap reloads -->
+  <button id="verbar" class="verbar" hidden onclick="location.reload()">New version. Reload</button>
+
   <!-- unsaved-edits bar: shown while the race definition has edits that aren't saved (app.js syncDirty) -->
   <div id="savebar" class="savebar" role="status" aria-live="polite" hidden>
     <span class="savebar-dot" aria-hidden="true">●</span>

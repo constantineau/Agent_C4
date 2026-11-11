@@ -511,6 +511,12 @@ table.mon-tbl tr.mon-row.old:not(.own) td { color: var(--muted); }
 body.has-savebar main { padding-bottom: 96px; }
 body:not(.is-dirty) .if-dirty, body.is-dirty .if-clean { display: none; }
 .tabs a.dirty::after { content: " ●"; color: var(--warn); }
+/* new Lab build out (#325): a small bar at the top; the save bar keeps the bottom */
+.verbar { position: fixed; z-index: 45; top: calc(8px + env(safe-area-inset-top)); left: 50%;
+  transform: translateX(-50%); min-height: 44px; padding: 0 18px; border-radius: 9px;
+  background: var(--accent); color: var(--ink-on-accent); border: none; font-size: 15px;
+  font-weight: 700; cursor: pointer; font-family: var(--font-body); box-shadow: 0 6px 24px rgba(0,0,0,.55); }
+.verbar[hidden] { display: none; }
 @media (max-width: 600px) { .savebar { right: 16px; bottom: calc(64px + env(safe-area-inset-bottom)); } }
 
 /* ---------- touch targets: 44 px on any touch screen (#81, #84, #104 G45) ----------

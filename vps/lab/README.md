@@ -125,8 +125,13 @@ cheap.
   (`routesafety.bundle_verdict`); **freeze, lock-in, Deploy push and GPX refuse** unless it is ok, and
   so do bundles built before this check. Land is never opened for a route: a mark the chart puts on
   land or in shallow water stops the route at once. For a chart artefact the crew can record a
-  reviewed **chart override** on that mark (`POST /api/races/{id}/chart-override` {course_id, mark,
-  by, why}; empty why removes it). It is saved in the course (`chart_overrides`), opens a pocket of
+  **chart override** on that mark with one click, Override in the safety panel (#325:
+  `POST /api/races/{id}/chart-override` {course_id, mark, remove?, by?, why?}; `by` defaults to
+  "Lab", `why` is optional, `remove: true` removes it; a body with no `remove` and an empty `by`
+  and `why` also removes, for a page from before #325). The panel offers Override only on a
+  `blocked` problem with `override: true`: not on `unreached` (the router didn't get there; the mark
+  is open water) nor on a mark in a race zone, an island disk, off the chart or already overridden.
+  Every problem carries `fix` (what to click) and every refusal ends with what to do. It is saved in the course (`chart_overrides`), opens a pocket of
   water (`GEO_MARK_CARVE_NM`, land/shoal only, never zones or islands) at that mark, is listed in the
   bundle's `safety.overrides` (who, when, why) and signed with it. It never waives a problem.
 - **Mark roundings (#52):** a port/starboard mark is rounded on a small circle
