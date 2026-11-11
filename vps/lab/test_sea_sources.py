@@ -118,8 +118,8 @@ check("a race that says it isn't tidal → no warning", d["warning"] is None)
 d = S.data_block(CUR.ZeroCurrent(S.NO_DATA), wv, {}, LAKE_BOX)
 check("a lake with no current → not tidal, no warning", d["warning"] is None)
 d = S.data_block(CUR.ZeroCurrent(S.OFF), wv, {}, SEA_BOX)
-check("current turned off → said, but no tidal alarm", d["warning"] is None
-      and d["current"] == "none: turned off")
+check("current turned off in tidal water → still loud (Codex on #331)",
+      d["warning"] == S.TIDAL_OFF_WARNING and d["current"] == "none: turned off", d)
 sea_c.result = lambda: loaded_current("SEA")
 
 CUR.SOURCES[:], WAV.SOURCES[:] = REAL_CUR, REAL_WAV
@@ -296,6 +296,13 @@ k0, ks, k1 = H._pick_times(hours, ref + 90.5 * 3600, ref + 99.5 * 3600)
 check("the frames read bracket the window: last at or after its end, first at or before the gun",
       k1 == 100 and (k1 - k0) % ks == 0 and hours[k0] <= ref + 90.5 * 3600, (k0, ks, k1))
 check("…named for the data block", S.describe(field) == "HYCOM ESPC (global)")
+H._cache = {}
+H.MAX_CELLS = 30                           # force a stride: the far edges must still be read
+wide = H.fetch((26.6, 25.8, -80.4, -79.4), t0, t0 + 6 * 3600, lambda *_: None, now=t0)
+check("a strided read still reaches the box's east and north edges",
+      wide is not None and wide.status()["stride"] > 1 and wide.lons[-1] >= -79.4
+      and wide.lats[-1] >= 26.6, wide and (wide.status(), wide.lons[-1], wide.lats[-1]))
+H.MAX_CELLS = 4000
 far = H.fetch((26.4, 26.0, -80.2, -79.8), NOW + 30 * 86400, NOW + 31 * 86400, lambda *_: None,
               now=NOW)
 check("a race past the forecast's reach → None, without asking the server", far is None)

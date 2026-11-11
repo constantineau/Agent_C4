@@ -35,6 +35,7 @@ _NOTE = {
     OFF: "No {k}: turned off.",
 }
 TIDAL_WARNING = "Tidal water, but no current data. The route ignores the tide. Check the tide tables."
+TIDAL_OFF_WARNING = "Tidal water, but the current is turned off. The route ignores the tide."
 
 
 class Coverage:
@@ -200,7 +201,9 @@ def data_block(cur, waves, definition=None, bbox=None):
             out["notes"].append(_NOTE.get(getattr(field, "why", None) or OFF,
                                           _NOTE[OFF]).format(k=k))
     cur_why = getattr(cur, "why", None) if not getattr(cur, "loaded", False) else None
-    if cur_why in (OUTSIDE, NO_DATA, OFFLINE) and is_tidal(definition, bbox):
+    # a route that ignores the tide is said loudly, whatever the reason, turned off included
+    # (Codex on #331: the Orin's current is off by default)
+    if cur_why in (OUTSIDE, NO_DATA, OFFLINE, OFF) and is_tidal(definition, bbox):
         out["tidal"] = True
-        out["warning"] = TIDAL_WARNING
+        out["warning"] = TIDAL_OFF_WARNING if cur_why == OFF else TIDAL_WARNING
     return out

@@ -173,6 +173,14 @@ def fetch(bbox, t_start, t_end, log, now=None):
     cells = (j1 - j0 + 1) * sum(i1 - i0 + 1 for i0, i1, _o in ranges)
     hs = max(1, math.ceil(math.sqrt(cells / MAX_CELLS)))     # a big box reads every hs-th cell
 
+    def reach(a, b, last):
+        """End index from `a` on the stride, at or past `b` (Codex on #331: a stride must not
+        stop short of the box's far edge), within the axis."""
+        return min(a + -(-(b - a) // hs) * hs, last)
+
+    j1 = reach(j0, j1, len(lats) - 1)
+    ranges = [(i0, reach(i0, i1, len(lons) - 1), off) for i0, i1, off in ranges]
+
     out_lons, u_parts, v_parts, times, out_lats = [], [], [], None, None
     for i0, i1, off in ranges:
         sl = f"[{k0}:{ks}:{k1}][{j0}:{hs}:{j1}][{i0}:{hs}:{i1}]"
