@@ -33,6 +33,7 @@ import datetime
 import hashlib
 import math
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -437,31 +438,28 @@ def _build_gfswave(bbox, t_start, t_end, log, grid, label, now=None):
         if not hours:
             log("waves: GFS-Wave's forecast doesn't reach the race yet")
             return None
-        tag = f"gfswave_{grid}_{cyc:%Y%m%d%H}_" + \
-            hashlib.md5(repr((area, hours)).encode()).hexdigest()[:6]
-        joined = os.path.join(WAVE_CACHE, "gfswave", tag + ".grib2")
+        # a private folder per build (Codex on #331): two jobs on the same area and cycle must
+        # not read or delete each other's files
+        os.makedirs(os.path.join(WAVE_CACHE, "gfswave"), exist_ok=True)
+        work = tempfile.mkdtemp(prefix=f"{grid}_{cyc:%Y%m%d%H}_",
+                                dir=os.path.join(WAVE_CACHE, "gfswave"))
         try:
-            parts = []
-            for f in hours:
-                part = joined + f".f{f:03d}"
-                if not os.path.exists(part):
-                    grib.http_download(_gfswave_url(cyc, f, sub, grid), part, timeout=int(FETCH_TIMEOUT))
-                parts.append(part)
+            blob = b""
+            for f in hours:                # a few hundred bytes each: joined in memory
+                part = os.path.join(work, f"f{f:03d}.grib2")
+                grib.http_download(_gfswave_url(cyc, f, sub, grid), part,
+                                   timeout=int(FETCH_TIMEOUT))
+                with open(part, "rb") as f_in:
+                    blob += f_in.read()
+            joined = os.path.join(work, "joined.grib2")
+            atomicio.write_bytes(joined, blob)
+            parsed = _parse_isolated(joined, t_start, t_end, log)
         except Exception as ex:           # not posted yet / no egress → step back a cycle
             log(f"waves: GFS-Wave cycle {cyc:%Y-%m-%d %HZ} not available ({type(ex).__name__})"
                 " — stepping back")
             continue
-        blob = b""
-        for part in parts:                 # a few hundred bytes each: join in memory
-            with open(part, "rb") as f_in:
-                blob += f_in.read()
-        atomicio.write_bytes(joined, blob)
-        parsed = _parse_isolated(joined, t_start, t_end, log)
-        for part in parts + [joined]:      # parsed: the arrays are in memory, the files can go
-            try:
-                os.remove(part)
-            except OSError:
-                pass
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
         if parsed is None:
             log("waves: GFS-Wave parse failed")
             return None

@@ -121,8 +121,12 @@ def lon_ranges(lons, w, e):
 
 
 def _pick_times(epochs, t_start, t_end):
-    """(k0, stride, k1) over the time axis for the window, or None when it holds none of it."""
+    """(k0, stride, k1) over the time axis for the window, or None unless the series covers ALL
+    of it (Codex on #331): a series that ends before the race finishes would hold its last frame
+    as if it were the forecast, and one that starts after the gun has nothing for the start."""
     margin = STEP_H * 3600.0
+    if not epochs or epochs[0] > t_start or epochs[-1] < t_end - margin:
+        return None
     ks = [k for k, e in enumerate(epochs) if t_start - margin <= e <= t_end + margin]
     if not ks:
         return None

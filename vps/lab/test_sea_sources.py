@@ -127,6 +127,7 @@ CUR.SOURCES[:], WAV.SOURCES[:] = REAL_CUR, REAL_WAV
 print("2) the real masks")
 seen = []
 REAL_HFETCH = H.fetch
+REAL_GFSWAVE = WAV._build_gfswave
 CUR._build_lmhofs = lambda *a: seen.append("lmhofs") or loaded_current("NOAA LMHOFS")
 H.fetch = lambda *a, **k: seen.append("hycom") or loaded_current("HYCOM ESPC (global)")
 WAV._build_glwu = lambda *a: seen.append("glwu") or loaded_wave("NOAA GLWU")
@@ -292,10 +293,41 @@ far = H.fetch((26.4, 26.0, -80.2, -79.8), NOW + 30 * 86400, NOW + 31 * 86400, la
               now=NOW)
 check("a race past the forecast's reach → None, without asking the server", far is None)
 
-print("5) GFS-Wave hours")
+late = H.fetch((26.4, 26.0, -80.2, -79.8), ref + 390 * 3600, ref + 410 * 3600, lambda *_: None,
+               now=ref + 300 * 3600)
+check("a series that ends before the race does → None, not its last frame held (Codex on #331)",
+      late is None)
+early = H.fetch((26.4, 26.0, -80.2, -79.8), ref - 6 * 3600, ref + 6 * 3600, lambda *_: None,
+                now=ref)
+check("…nor one that starts after the gun", early is None)
+
+print("5) GFS-Wave: hours that exist, a private folder per build")
 hrs = WAV._gfswave_hours(0, 100 * 3600, 130 * 3600)
 check("hourly files to f120, 3-hourly after, one step each side",
       hrs[0] == 97 and all(h <= 120 or h % 3 == 0 for h in hrs) and hrs[-1] >= 130, hrs)
+
+
+import numpy as np  # noqa: E402
+from app.wind import grib  # noqa: E402
+WAV._build_gfswave = REAL_GFSWAVE
+parsed_at = []
+grib.http_download = lambda url, path, timeout=60: open(path, "wb").write(b"GRIB" + b"0" * 200)
+
+
+def fake_parse(path, t_lo, t_hi, log):
+    parsed_at.append(os.path.dirname(path))
+    lat, lon = np.meshgrid([26.0, 26.2], [-80.0, -79.8], indexing="ij")
+    return lat, lon, np.array([int(t_lo), int(t_hi)]), np.full((2, 2, 2), 0.8, dtype="float32")
+
+
+WAV._parse_isolated = fake_parse
+for k in range(2):
+    WAV._cache.clear()
+    fw = WAV._build_gfswave((26.3, 26.0, -80.1, -79.8), T0, T0 + 6 * 3600, lambda *_: None,
+                            "global.0p16", "NOAA GFS-Wave (global 1/6°)", now=T0)
+check("a stubbed GFS-Wave build loads", fw is not None and abs(fw.wave_at(26.1, -79.9, T0) - 0.8) < 1e-6)
+check("each build works in its own folder (Codex on #331)", len(set(parsed_at)) == 2, parsed_at)
+check("…and leaves nothing behind", os.listdir(os.path.join(os.environ["GRIB_CACHE"], "gfswave")) == [])
 
 print("ALL OK" if ok else "SOME CHECKS FAILED")
 raise SystemExit(0 if ok else 1)
