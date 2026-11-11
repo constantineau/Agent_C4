@@ -34,7 +34,7 @@ run = fn("debRunRecording")
 check("debRunRecording asks with askModal when the recording is already debriefed",
       "x.debrief" in run and "askModal(" in run and run.index("askModal(") < run.index("apiPost("))
 check("cancel stops before anything is posted", re.search(r'if \(go !== "yes"\) return;', run))
-card = fn("debRecordingsCard")
+card = fn("debRecordingsCard") + fn("debRecRows")   # the rows are shared with Practice sails (#322)
 check("Open sits at least 8 px from Re-run", "margin-left:8px" in card)
 
 print("#97 Debrief:")
@@ -64,7 +64,7 @@ no_race = render[:render.index("Deb.playbooks")]
 check("G66 no race no longer returns a bare placeholder", "Add one in the Races tab.</div>'; return;" not in no_race)
 check("G66 no race still loads and paints Fleet retro", "retroLoad()" in no_race and "paintDebrief()" in no_race)
 check("G66 the empty state links to Races and keeps the retro card",
-      re.search(r'if \(!Deb\.raceId\) \{[^}]*href="#races"[^}]*retroCard\(\)', paint, re.S))
+      re.search(r'if \(!Deb\.raceId\) \{[^}]*href="#races".*?retroCard\(\)', paint, re.S))
 
 print("#240 Polar sails use the crew names and the chart's colours:")
 check("the kite is S1 in the display order, never S2",

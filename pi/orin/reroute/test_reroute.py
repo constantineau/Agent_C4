@@ -825,7 +825,7 @@ except job.RunError as e:
     check("…and the run is refused: 'No polar for this boat.'", str(e) == job.NO_POLAR)
 pol, src = job.pick_polar(dict(CARRY, polar=dict(P33, label="x")), REVIEWED, {"source": "deploy"})
 check("a tampered polar block → not used, the profile's own", src == "orin")
-BRAVO = json.load(open(os.path.join(REPO, "vps", "lab", "boats", "bravo.json")))
+BRAVO = json.load(open(os.path.join(REPO, "vps", "lab", "testdata", "boats", "bravo.json")))
 PB = boat_polar.resolve(BRAVO)
 pol, src = job.pick_polar(dict(CARRY, polar=PB), REVIEWED, {"source": "deploy"})
 check("another boat's polar block with sr33's profile → not used", src == "orin"

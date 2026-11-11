@@ -79,7 +79,7 @@ os.environ["DEPTH_GRIDS"] = CAT
 
 BBOX = (N, S, W, E)
 RES = 0.05
-with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "boats", "bravo.json")) as f:
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "testdata", "boats", "bravo.json")) as f:
     BRAVO = json.load(f)["draft_m"] + OB.DRAFT_MARGIN_M          # 1.582 + 0.5
 SR33 = 2.1336 + OB.DRAFT_MARGIN_M
 

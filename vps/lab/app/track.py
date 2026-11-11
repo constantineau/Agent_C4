@@ -675,8 +675,19 @@ def _performance_bins(seg, epochs, wf, polars, cur=None, wave=None, wave_coeffs=
 # not on the race alone. Before 2026-09-15 loading one replaced the other and the debrief silently
 # judged whichever was last fetched. A GPX/YB track has no window and keeps the bare race path,
 # which is also the pre-2026-09-15 file, so existing tracks load unchanged.
+# A practice sail with no race (#322) files its tracks under this key. '@' never survives the
+# race-id sanitizing below, so no race can collide with it.
+NO_RACE = "@norace"
+
+
+def _rid(race_id):
+    if race_id is None:
+        return NO_RACE
+    return "".join(c for c in str(race_id).lower() if c.isalnum() or c in "_-")
+
+
 def _path(race_id, recording=None):
-    rid = "".join(c for c in str(race_id).lower() if c.isalnum() or c in "_-")
+    rid = _rid(race_id)
     if recording is None:
         return os.path.join(TRACK_DIR, f"_track_{rid}.json")
     return os.path.join(TRACK_DIR, f"_track_{rid}__{int(float(recording))}.json")
@@ -732,8 +743,9 @@ def _near(a, b, tol=1.0):
 
 
 def list_tracks(race_id):
-    """Every stored track for this race, newest recording first — meta only, no fixes."""
-    rid = "".join(c for c in str(race_id).lower() if c.isalnum() or c in "_-")
+    """Every stored track for this race (None: the practice sails with no race, #322), newest
+    recording first — meta only, no fixes."""
+    rid = _rid(race_id)
     out = []
     for name in sorted(os.listdir(TRACK_DIR) if os.path.isdir(TRACK_DIR) else []):
         if not (name == f"_track_{rid}.json" or name.startswith(f"_track_{rid}__")):

@@ -2144,7 +2144,7 @@ function pbCtx(b) {
 function safetyPanel(s, what, ctx) {
   if (!s) return "";
   const at = `data-race="${esc((ctx && ctx.race) || "")}" data-course="${esc((ctx && ctx.course) || "")}"`;
-  const ov = (s.overrides || []).map((o) => `<li>${esc(o.mark)}: chart override by ${esc(o.by)}${o.at ? ", " + esc(fmtDate(o.at)) : ""}. ${esc(o.why)}
+  const ov = (s.overrides || []).map((o) => `<li>${esc(o.mark)}: chart override by ${esc(o.by)}${o.at ? ", " + esc(new Date(o.at * 1000).toISOString().slice(0, 16).replace("T", " ") + "Z") : ""}. ${esc(o.why)}
       <button class="mini" data-mark="${esc(o.mark)}" ${at} onclick="chartOverride(this.dataset.mark, true, this.dataset.race, this.dataset.course)">Remove</button></li>`).join("");
   // Cole on #242: no ENC depths (Canada) never fails a route; those legs are named here
   const notes = (s.notes || []).map((n) => `<div class="pill warn" style="display:block;margin-top:6px;text-align:left">
@@ -3438,7 +3438,7 @@ function monFocus(i) {
 /* ---------- Debrief (Lab-4 post-race judge loop) ---------- */
 const Deb = { raceId: null, playbookId: null, playbooks: null, report: null, track: null,
   trackBusy: false, trackMsg: "", recordings: null, agent: null, job: null, poll: null, msg: "",
-  viewing: null };
+  viewing: null, practice: null, practiceMsg: "" };
 // Fleet-retro card state (docs/RETRO_STUDY.md — debrief across the WHOLE fleet of a past race)
 const Retro = { ybId: "bayviewmack2025", msg: "", busy: false, races: null, job: null, report: null, poll: null };
 
@@ -3451,7 +3451,11 @@ async function renderDebrief() {
   }
   if (!Deb.raceId) Deb.raceId = Lab.sel || (Lab.races[0] && Lab.races[0].race_id) || null;
   if (!Deb.raceId) {
-    // Fleet retro needs no race of ours, so it still shows (G66)
+    // Fleet retro and the practice sails need no race of ours, so they still show (G66, #322)
+    await debLoadPractice();
+    try { Deb.job = await (await apiGet("/api/debrief/run/status")).json(); }
+    catch (e) { Deb.job = null; }
+    if (Deb.job && Deb.job.state === "running" && !Deb.poll) Deb.poll = setInterval(debPoll, 4000);
     await retroLoad();
     if (stale("debrief")) return;
     return paintDebrief();
@@ -3530,7 +3534,26 @@ function debWinRange(w) {
 }
 
 // ---- the recordings surface: what the boat sailed, and what has been debriefed ----------------
+// Practice sails (#322): sessions with no race id, which no race lists. Same rows, same Debrief
+// and boat Change; the debrief checks speed only (there is no course).
+async function debLoadPractice() {
+  let p;
+  try {
+    const r = await (await apiGet("/api/debrief/recordings?no_race=1")).json();
+    p = { recordings: r.recordings || [], debriefs: r.debriefs || [], agent: r.agent || null };
+  } catch (e) { p = { recordings: [], debriefs: [], agent: { available: false, note: "the Lab could not list practice sails" } }; }
+  Deb.practice = p;
+}
+
+// The row list a button acts on: "p" = practice sails, else the race's recordings.
+function debList(src) { return src === "p" ? ((Deb.practice || {}).recordings || []) : (Deb.recordings || []); }
+
 async function debLoadRecordings() {
+  if (Deb.raceId) await debLoadRace();
+  await debLoadPractice();
+}
+
+async function debLoadRace() {
   // answers for a race the user has since left are dropped, never stored under the new one
   const race = Deb.raceId;
   let recs, agent, track, debs;
@@ -3546,8 +3569,9 @@ async function debLoadRecordings() {
 
 // One button per recording: the job fetches the boat log for that session (if it isn't loaded
 // already) and judges it. No ordering for the crew to get right.
-async function debRunRecording(i) {
-  const x = (Deb.recordings || [])[i];
+async function debRunRecording(i, src) {
+  const x = debList(src)[i];
+  const practice = src === "p";
   if (!x) return;
   if (x.debrief) {
     const go = await askModal("Run this debrief again?",
@@ -3555,9 +3579,10 @@ async function debRunRecording(i) {
       [{ c: "no", label: "Cancel", cls: "ghost" }, { c: "yes", label: "Run again", cls: "primary" }], "no", "no");
     if (go !== "yes") return;
   }
-  Deb.msg = ""; Deb.report = null; Deb.viewing = null;
-  const body = { race_id: Deb.raceId, playbook_id: Deb.playbookId || undefined,
-                 recording: x.recording };
+  Deb.msg = ""; Deb.practiceMsg = ""; Deb.report = null; Deb.viewing = null;
+  // a practice sail names no race and no plan: the Lab debriefs it as a practice sail
+  const body = practice ? { recording: x.recording }
+    : { race_id: Deb.raceId, playbook_id: Deb.playbookId || undefined, recording: x.recording };
   if (x.session_id != null || x.start_ts != null) {
     body.session_id = x.session_id; body.start_ts = x.start_ts; body.name = x.name;
   }
@@ -3567,18 +3592,20 @@ async function debRunRecording(i) {
   }
   try {
     const r = await (await apiPost("/api/debrief/run", body)).json();
-    if (!r.ok) { Deb.msg = r.note || r.detail || "could not start the debrief"; return paintDebrief(); }
-    Deb.job = { state: "running", progress: [], race_id: Deb.raceId, recording: x.recording };
+    if (!r.ok) { debSetMsg(src, r.note || r.detail || "could not start the debrief"); return paintDebrief(); }
+    Deb.job = { state: "running", progress: [], race_id: practice ? null : Deb.raceId, recording: x.recording };
     if (Deb.poll) clearInterval(Deb.poll);
     Deb.poll = setInterval(debPoll, 4000);
-  } catch (e) { Deb.msg = "could not start the debrief: " + (e.message || e); }
+  } catch (e) { debSetMsg(src, "could not start the debrief: " + (e.message || e)); }
   paintDebrief();
 }
 
 // Which boat a session was sailed on (#320): fix a wrong pick, or give an "Other boat" its
 // profile (e.g. after importing its ORC cert). Debriefs under the old boat stop counting.
-async function debEditBoat(i) {
-  const x = (Deb.recordings || [])[i];
+function debSetMsg(src, m) { if (src === "p") Deb.practiceMsg = m; else Deb.msg = m; }
+
+async function debEditBoat(i, src) {
+  const x = debList(src)[i];
   if (!x || x.start_ts == null) return;
   let list = [];
   try { list = (await (await apiGet("/api/boats")).json()).boats || []; } catch (e) { list = []; }
@@ -3595,8 +3622,8 @@ async function debEditBoat(i) {
   try {
     const r = await apiPost("/api/debrief/session-boat", body);
     const j = await r.json();
-    Deb.msg = r.ok ? "Boat changed to " + j.boat.name + "." : (j.detail || "Couldn't change the boat.");
-  } catch (e) { Deb.msg = "Couldn't change the boat."; }
+    debSetMsg(src, r.ok ? "Boat changed to " + j.boat.name + "." : (j.detail || "Couldn't change the boat."));
+  } catch (e) { debSetMsg(src, "Couldn't change the boat."); }
   await debLoadRecordings();
   paintDebrief();
 }
@@ -3632,14 +3659,12 @@ async function debOpenDebrief(id) {
   if (!stale("debrief")) paintDebrief();
 }
 
-function debRecordingsCard() {
-  const rs = Deb.recordings;
+// One table row per recording; `src` "p" = the practice sails list (its buttons act on that list).
+function debRecRows(rs, src) {
   const j = Deb.job || {};
   const running = j.state === "running";
-  const agentNote = Deb.agent && Deb.agent.available === false
-    ? `<div class="banner warn" style="font-size:12px;margin-bottom:8px">${esc(Deb.agent.note || "the boat agent is unreachable")}</div>` : "";
-  if (!rs) return `<div class="card"><h3>Recordings</h3><div class="loading">Loading…</div></div>`;
-  const rows = rs.map((x, i) => {
+  const arg = (i) => src === "p" ? `${i},'p'` : `${i}`;
+  return rs.map((x, i) => {
     const d = x.debrief;
     const when = x.start_ts ? new Date(x.start_ts * 1000).toISOString().slice(0, 16).replace("T", " ") + "Z" : "—";
     const grew = x.marker_hours != null && x.hours != null && x.hours - x.marker_hours > 0.05
@@ -3651,21 +3676,61 @@ function debRecordingsCard() {
     const isThis = running && j.recording != null && x.recording != null
       && Math.abs(j.recording - x.recording) < 1;
     const onScreen = !running && d && Deb.viewing != null && Deb.viewing === d.id;
+    // a practice sail's stored track whose session left the boat log: no race and no session to
+    // debrief it under, so only its archived debrief opens (Codex on #323)
+    const canRun = !(src === "p" && x.session_id == null);
     const btns = running
       ? (isThis ? '<span class="muted">running…</span>' : "")
-      : `<button class="mini" onclick="debRunRecording(${i})">${d ? "Re-run" : "Debrief"}</button>`
+      : (canRun ? `<button class="mini" onclick="debRunRecording(${arg(i)})">${d ? "Re-run" : "Debrief"}</button>`
+                : '<span class="muted">not on the boat log</span>')
         + (d ? (onScreen ? ' <span class="pill ok" style="margin-left:8px">showing</span>'
                          : ` <button class="mini" style="margin-left:8px" onclick="debOpenDebrief(${d.id})">Open</button>`) : "");
     return `<tr${isThis || onScreen ? ' class="winrow"' : ""}>
       <td><b>${esc(x.name || "recording")}</b><div class="muted" style="font-size:11px">${when}${x.kind ? " · " + esc(x.kind) : ""}</div>${x.kit !== undefined && x.start_ts != null
-        ? `<div style="font-size:11px">Boat: <b>${esc(x.boat_name || "?")}</b>${x.boat_has_profile ? "" : ' <span class="pill warn">no profile</span>'} <a href="javascript:void 0" onclick="debEditBoat(${i})">Change</a></div>` : ""}</td>
+        ? `<div style="font-size:11px">Boat: <b>${esc(x.boat_name || "?")}</b>${x.boat_has_profile ? "" : ' <span class="pill warn">no profile</span>'} <a href="javascript:void 0" onclick="debEditBoat(${arg(i)})">Change</a></div>` : ""}</td>
       <td>${x.hours != null ? x.hours + " h" : "—"}${grew}</td>
       <td>${state}</td>
       <td style="white-space:nowrap">${btns}</td></tr>`;
   }).join("");
-  const prog = running
+}
+
+// The running debrief's progress line, under whichever list started it.
+function debProgress(mine) {
+  const j = Deb.job || {};
+  if (!mine) return "";
+  return j.state === "running"
     ? `<div class="muted" style="font-size:12px;margin-top:6px">Debrief running… <span class="loading-dot"></span><br>${esc((j.progress || []).slice(-3).join(" · "))}</div>`
     : (j.state === "error" ? `<div class="banner warn" style="font-size:12px;margin-top:6px">Debrief failed: ${esc(j.error || "")}</div>` : "");
+}
+
+// Practice sails (#322): sessions with no race. Debrief checks speed only.
+function debPracticeCard() {
+  const p = Deb.practice;
+  if (!p) return `<div class="card"><h3>Practice sails</h3><div class="loading">Loading…</div></div>`;
+  const rows = debRecRows(p.recordings || [], "p");
+  const agentNote = p.agent && p.agent.available === false
+    ? `<div class="banner warn" style="font-size:12px;margin-bottom:8px">${esc(p.agent.note || "the boat agent is unreachable")}</div>` : "";
+  return `<div class="card">
+    <h3>Practice sails <span class="muted" style="font-weight:400">— no race</span></h3>
+    ${agentNote}
+    ${rows ? `<table class="fleet-tbl"><thead><tr><th>Sail</th><th>Length</th><th>State</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
+           : '<div class="placeholder">No practice sails yet.</div>'}
+    ${debProgress(debJobIsPractice())}
+    ${Deb.practiceMsg ? `<div class="muted" style="font-size:12px;margin-top:6px"><b>${esc(Deb.practiceMsg)}</b></div>` : ""}
+    <div class="muted" style="font-size:11px;margin-top:6px">Debrief checks speed only. No race, so no tactics.</div>
+  </div>`;
+}
+
+// Did the practice sails list start the debrief job? (the job knows its race, null for practice)
+function debJobIsPractice() { return (Deb.job || {}).race_id === null; }
+
+function debRecordingsCard() {
+  const rs = Deb.recordings;
+  const agentNote = Deb.agent && Deb.agent.available === false
+    ? `<div class="banner warn" style="font-size:12px;margin-bottom:8px">${esc(Deb.agent.note || "the boat agent is unreachable")}</div>` : "";
+  if (!rs) return `<div class="card"><h3>Recordings</h3><div class="loading">Loading…</div></div>`;
+  const rows = debRecRows(rs, "");
+  const prog = debProgress(!debJobIsPractice());
   return `<div class="card">
     <h3>Recordings <span class="muted" style="font-weight:400">— races the boat logged</span></h3>
     ${agentNote}
@@ -3739,14 +3804,17 @@ function paintDebrief() {
   const running = (Deb.job || {}).state === "running";
   const pbOpts = (Deb.playbooks || []).map((b) => `<option value="${attr(b.id)}" ${b.id === Deb.playbookId ? "selected" : ""}>${esc((b.signed ? "🔒 " : "") + clipText(b.headline || b.id, 90))} · ${b.n_variants} var</option>`).join("");
   let body = "";
+  if (r && r.available) body = debReport(r);
+  else if (r && !r.available) body = `<div class="card"><div class="placeholder">${esc(r.note || "debrief unavailable")}</div></div>`;
   if (!Deb.raceId) {
     document.getElementById("view").innerHTML = `<div class="opt">
       <div class="card"><div class="placeholder">No race yet. <a href="#races">Add one in Races</a>.</div></div>
+      ${debPracticeCard()}
+      ${body}
       ${retroCard()}</div>`;
+    if (running && !Deb.poll) Deb.poll = setInterval(debPoll, 4000);
     return;
   }
-  if (r && r.available) body = debReport(r);
-  else if (r && !r.available) body = `<div class="card"><div class="placeholder">${esc(r.note || "debrief unavailable")}</div></div>`;
 
   document.getElementById("view").innerHTML = `<div class="opt">
     <div class="card">
@@ -3761,6 +3829,7 @@ function paintDebrief() {
       </div>
     </div>
     ${debRecordingsCard()}
+    ${debPracticeCard()}
     ${body}
     ${debTrackCard()}
     ${retroCard()}
@@ -3935,11 +4004,11 @@ function debReport(r) {
       ${c.boat_model_note ? `<p style="margin:4px 0"><b>Boat model:</b> ${esc(c.boat_model_note)}</p>` : ""}
     </div>
     ${debTrackScore(r.actual_track || {})}
-    <div class="card">
+    ${r.no_race ? "" : `<div class="card">
       <h3>Save to Learnings <span class="muted" style="font-weight:400">— check it, then add it</span></h3>
       <textarea id="debLearn" rows="3" style="width:100%;box-sizing:border-box">${esc(c.proposed_learnings || "")}</textarea>
       <div style="margin-top:8px"><button onclick="debApply()">Add to Learnings</button> <span id="debApplyMsg" class="muted" style="font-size:12px"></span></div>
-    </div>`;
+    </div>`}`;
 }
 
 // The tactics half — only when a frozen playbook gave the oracle something to judge against.

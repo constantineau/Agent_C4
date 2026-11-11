@@ -36,13 +36,22 @@ def check(name, cond):
     print(f"  [{'OK ' if cond else 'FAIL'}] {name}")
 
 
+print("0) test-only boats never ship (the Lab serves vps/lab/boats as the live library)")
+_test_boats = sorted(os.listdir(os.path.join(HERE, "testdata", "boats")))
+_shipped = [d for d in (os.path.join(HERE, "boats"), boats.BUNDLED_DIR) if os.path.isdir(d)]
+check("bravo is a test boat", "bravo.json" in _test_boats)
+check("no test boat in the shipped library (repo folder and the image's)",
+      _shipped and not any(os.path.exists(os.path.join(d, f)) for d in _shipped for f in _test_boats))
+check("the live library lists no test boat",
+      not {b["boat_id"] for b in boats.list_boats()} & {f[:-5] for f in _test_boats})
+
 learning.LEARNING_DB = os.path.join(_tmp, "learning.db")
 boats.EDITED_DIR = os.path.join(_tmp, "boats")
 boats.BUNDLED_DIR = os.path.join(_tmp, "bundled")
 os.makedirs(boats.EDITED_DIR)
 os.makedirs(boats.BUNDLED_DIR)
-for bid in ("sr33", "bravo"):
-    shutil.copy(os.path.join(HERE, "boats", f"{bid}.json"), boats.BUNDLED_DIR)
+shutil.copy(os.path.join(HERE, "boats", "sr33.json"), boats.BUNDLED_DIR)
+shutil.copy(os.path.join(HERE, "testdata", "boats", "bravo.json"), boats.BUNDLED_DIR)  # test-only
 with open(os.path.join(boats.BUNDLED_DIR, "broken.json"), "w") as f:
     json.dump({"boat_id": "broken", "name": "Broken", "draft_m": -3}, f)
 
@@ -208,7 +217,7 @@ check("every session-boat edit moves the revision a running debrief checks",
       sessionboat.revision() == _r0 + 1)
 src = open(os.path.join(HERE, "app", "main.py")).read()
 check("the debrief notes the revision before fetching and re-checks it under the lock",
-      src.index("rev = sessionboat.revision()") < src.index("load_log_track(b)",
+      src.index("rev = sessionboat.revision()") < src.index("load_log_track({**b",
                                                             src.index("rev = sessionboat.revision()"))
       < src.index("archive_guard=_guard")
       and "sessionboat.revision() == rev" in src)
