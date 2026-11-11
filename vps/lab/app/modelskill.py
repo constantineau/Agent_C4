@@ -149,7 +149,7 @@ def fetch_forecast(lat, lon, start_date, end_date, our_model, timeout=45):
 _IEM_ONE_AT_A_TIME = threading.Semaphore(1)
 
 
-def fetch_metar(station, start_date, end_date, timeout=60):
+def fetch_metar(station, start_date, end_date, timeout=60, deadline=None):
     """Observed wind from the Iowa State ASOS/METAR archive. `station` = ICAO (KAPN) or 3-char (APN).
     Returns {epoch: (tws_kn, twd_deg)} over [start_date, end_date] UTC. Calm/variable/missing dropped."""
     sid = station[1:] if len(station) == 4 and station[0].upper() == "K" else station
@@ -162,11 +162,22 @@ def fetch_metar(station, start_date, end_date, timeout=60):
     })
     # request drct + sknt together (two data= params)
     url = f"{_METAR}?{qs}&data=sknt"
+    # `deadline` (time.monotonic()): a caller that stops waiting then (Find stations) doesn't queue
+    # behind other METAR requests, or send one, after it has given up
+    wait_s = None if deadline is None else deadline - time.monotonic()
+    if wait_s is not None and (wait_s <= 0 or not _IEM_ONE_AT_A_TIME.acquire(timeout=wait_s)):
+        return {}
+    if wait_s is None:
+        _IEM_ONE_AT_A_TIME.acquire()
     try:
-        with _IEM_ONE_AT_A_TIME:
-            text = _get(url, timeout).decode("utf-8", "replace")
+        if deadline is not None and time.monotonic() >= deadline:
+            return {}
+        text = _get(url, min(timeout, max(1.0, deadline - time.monotonic())) if deadline else timeout,
+                    retries=1 if deadline else 5).decode("utf-8", "replace")
     except Exception:
         return {}
+    finally:
+        _IEM_ONE_AT_A_TIME.release()
     out = {}
     for line in text.splitlines():
         if not line or line.startswith("station"):
@@ -490,11 +501,12 @@ def forecast_series(lat, lon, sd, ed, model, year, include_deep=False):
     return fetch_reforecast(lat, lon, sd, ed, model, year) if include_deep else {}
 
 
-def obs_series(station, sd, ed):
-    """Observed wind for a window from the venue station (METAR range, or NDBC historical/realtime)."""
+def obs_series(station, sd, ed, deadline=None):
+    """Observed wind for a window from the venue station (METAR range, or NDBC historical/realtime).
+    `deadline` bounds the wait for a METAR request (Find stations)."""
     if station["kind"] == "ndbc":
         return fetch_ndbc_window(station["id"], sd, ed)
-    return fetch_metar(station["id"], sd, ed)
+    return fetch_metar(station["id"], sd, ed, deadline=deadline)
 
 
 def score_stations(stations, windows, models, ref_year, include_deep=False, log=None, on_obs=None):

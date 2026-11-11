@@ -268,14 +268,6 @@ def _run(key, name, lat, lon, radius_nm, spec, stations, include_deep, log, toda
             notes.append(f"{m.upper()}: no forecasts matched")
     derived = modelskill.derive_weights({m: s for m, s in scores.items()
                                          if s and m not in modelskill.REFERENCE_ONLY})
-    if not derived:
-        # e.g. older years during an Open-Meteo outage: only HRRR's archive answers, and one model
-        # can't be weighted. Don't swap weights this place already has (a study's, or a race's)
-        # for none.
-        had = modelskill.load_scores(key)
-        if modelskill.derive_weights({m: s for m, s in had.items() if m not in modelskill.REFERENCE_ONLY}):
-            raise ValueError("Too few models came back to replace the weights this place has. "
-                             "They're kept. Try again later.")
     table = []
     for m, s in scores.items():
         if not s:
@@ -307,6 +299,18 @@ def _run(key, name, lat, lon, radius_nm, spec, stations, include_deep, log, toda
     # restart mid-save can't leave new weights behind an old (or missing) study
     c = _conn()
     with c:
+        c.execute("BEGIN IMMEDIATE")          # no other write between the check and the save
+        if not derived:
+            # e.g. older years during an Open-Meteo outage: only HRRR's archive answers, and one
+            # model can't be weighted. Don't swap weights this place already has (a study's, or a
+            # race's) for none.
+            had = {r[0]: {"n": r[1], "vector_rmse_kn": r[2], "speed_bias_kn": r[3], "dir_bias_deg": r[4]}
+                   for r in c.execute("SELECT model,n,vector_rmse_kn,speed_bias_kn,dir_bias_deg "
+                                      "FROM model_skill WHERE venue_key=?", (key,))}
+            if modelskill.derive_weights({m: s for m, s in had.items()
+                                          if m not in modelskill.REFERENCE_ONLY}):
+                raise ValueError("Too few models came back to replace the weights this place has. "
+                                 "They're kept. Try again later.")
         modelskill.save_scores(key, label, src, [str(span[0]) if span else "", str(span[-1]) if span else ""],
                                {m: s for m, s in scores.items() if s}, study=True, conn=c)
         save(key, name, lat, lon, radius_nm, spec, st_keep, result, conn=c)

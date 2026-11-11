@@ -120,7 +120,7 @@ def fake_forecast(lat, lon, sd, ed, model, timeout=45):
 OBS_CALLS = []
 
 
-def fake_obs(st, sd, ed):
+def fake_obs(st, sd, ed, deadline=None):
     OBS_CALLS.append(st["id"])
     return obs_for(st, sd, ed)
 
@@ -360,6 +360,15 @@ _ts = [_thr.Thread(target=modelskill.fetch_metar, args=(x, "2025-11-01", "2025-1
 [t_.join() for t_ in _ts]
 modelskill._get = _orig_get
 check("every METAR fetch goes one at a time (Iowa State errors on parallel requests)", _peak[0] == 1)
+
+_sent = []
+modelskill._get = lambda url, timeout=45, retries=5: (_sent.append(url), b"")[1]
+modelskill._IEM_ONE_AT_A_TIME.acquire()              # another METAR request holds the gate
+_r0 = modelskill.fetch_metar("FLL", "2025-11-01", "2025-11-30", deadline=time.monotonic() + 0.2)
+modelskill._IEM_ONE_AT_A_TIME.release()
+modelskill._get = _orig_get
+check("a check that gave up doesn't queue behind the gate or send anything after its deadline",
+      _r0 == {} and not _sent)
 
 print("7) Lab endpoints")
 from fastapi.testclient import TestClient  # noqa: E402

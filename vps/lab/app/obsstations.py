@@ -188,13 +188,15 @@ SOURCES = [CuratedSource(), IemMetarSource(), NdbcSource()]
 
 
 # ------------------------------------------------------------------------------------- probing
-def probe(station, window):
+def probe(station, window, deadline=None):
     """How many observations a station has in `window` (year, sd, ed). 0 = none (closed, no wind
     sensor, or the archive is down). METAR checks go one at a time (modelskill.fetch_metar's
     gate); NDBC serves static files and takes them in parallel."""
     _, sd, ed = window
     try:
-        return len(modelskill.obs_series(station, sd, ed))
+        if deadline is None:
+            return len(modelskill.obs_series(station, sd, ed))
+        return len(modelskill.obs_series(station, sd, ed, deadline=deadline))
     except Exception:          # noqa: BLE001 — a dead station is just "no data"
         return 0
 
@@ -248,7 +250,9 @@ def discover(lat, lon, radius_nm, window=None, sources=None, probe_fn=None, max_
         # a stalled archive must not hold the request past the gateway cap: whatever hasn't
         # answered by the deadline is left "not checked" (obs None) and the rest come back
         def _check(s):          # a check that only gets its turn after the deadline is skipped
-            return probe_fn(s, window) if time.monotonic() < end else None
+            if time.monotonic() >= end:
+                return None
+            return probe_fn(s, window, deadline=end) if probe_fn is probe else probe_fn(s, window)
         futs = {ex.submit(_check, s): s for s in picks}
         done, late = wait(futs, timeout=max(0.0, end - time.monotonic()))
         for f in done:
