@@ -2144,7 +2144,7 @@ function pbCtx(b) {
 function safetyPanel(s, what, ctx) {
   if (!s) return "";
   const at = `data-race="${esc((ctx && ctx.race) || "")}" data-course="${esc((ctx && ctx.course) || "")}"`;
-  const ov = (s.overrides || []).map((o) => `<li>${esc(o.mark)}: chart override by ${esc(o.by)}${o.at ? ", " + esc(fmtDate(o.at)) : ""}. ${esc(o.why)}
+  const ov = (s.overrides || []).map((o) => `<li>${esc(o.mark)}: chart override by ${esc(o.by)}${o.at ? ", " + esc(new Date(o.at * 1000).toISOString().slice(0, 16).replace("T", " ") + "Z") : ""}. ${esc(o.why)}
       <button class="mini" data-mark="${esc(o.mark)}" ${at} onclick="chartOverride(this.dataset.mark, true, this.dataset.race, this.dataset.course)">Remove</button></li>`).join("");
   // Cole on #242: no ENC depths (Canada) never fails a route; those legs are named here
   const notes = (s.notes || []).map((n) => `<div class="pill warn" style="display:block;margin-top:6px;text-align:left">
