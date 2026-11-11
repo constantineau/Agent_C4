@@ -86,8 +86,10 @@ function vsBody() {
 async function vsFind() {
   const m = document.getElementById("vsFindMsg");
   if (m) m.textContent = "Looking…";
+  const gen = Vs.gen = (Vs.gen || 0) + 1;     // a newer search or a moved pin outdates this one
   try {
     const r = await jsonOrFriendly(await apiPost("/api/venue-study/stations", vsBody()));
+    if (gen !== Vs.gen) return;
     if (r.detail) throw new Error(r.detail);
     Vs.found = r;
     Vs.found.stations.forEach((s) => { s.use = !!s.ticked; });
@@ -179,6 +181,7 @@ function vsDrawMap() {
 
 // The place or radius changed: stations found for the old one no longer apply. Find them again.
 function vsMoved() {
+  Vs.gen = (Vs.gen || 0) + 1;
   if (Vs.found) {
     Vs.found = null;
     const box = document.getElementById("vsStations"); if (box) box.innerHTML = "";

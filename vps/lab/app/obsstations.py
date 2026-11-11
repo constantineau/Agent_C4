@@ -24,7 +24,6 @@ import json
 import math
 import re
 import struct
-import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, wait
 
@@ -189,21 +188,12 @@ SOURCES = [CuratedSource(), IemMetarSource(), NdbcSource()]
 
 
 # ------------------------------------------------------------------------------------- probing
-# Iowa State answers parallel requests from one address with errors (seen live: 4 of 7 airports
-# came back empty when probed 6 at a time, and all had data one at a time), so METAR checks go
-# one at a time; NDBC serves static files and takes them in parallel.
-_SERIAL = {"metar": threading.Semaphore(1)}
-
-
 def probe(station, window):
     """How many observations a station has in `window` (year, sd, ed). 0 = none (closed, no wind
-    sensor, or the archive is down)."""
+    sensor, or the archive is down). METAR checks go one at a time (modelskill.fetch_metar's
+    gate); NDBC serves static files and takes them in parallel."""
     _, sd, ed = window
-    gate = _SERIAL.get(station.get("kind"))
     try:
-        if gate:
-            with gate:
-                return len(modelskill.obs_series(station, sd, ed))
         return len(modelskill.obs_series(station, sd, ed))
     except Exception:          # noqa: BLE001 — a dead station is just "no data"
         return 0

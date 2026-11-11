@@ -143,6 +143,12 @@ def fetch_forecast(lat, lon, start_date, end_date, our_model, timeout=45):
 
 
 # ------------------------------------------------------------------------------------- observed
+# Iowa State answers parallel requests from one address with errors (seen live: 4 of 7 airports
+# came back empty when asked 6 at a time, all fine one at a time). Every METAR fetch in the Lab
+# (Find stations, a venue study, a race-time refresh) goes through this one gate.
+_IEM_ONE_AT_A_TIME = threading.Semaphore(1)
+
+
 def fetch_metar(station, start_date, end_date, timeout=60):
     """Observed wind from the Iowa State ASOS/METAR archive. `station` = ICAO (KAPN) or 3-char (APN).
     Returns {epoch: (tws_kn, twd_deg)} over [start_date, end_date] UTC. Calm/variable/missing dropped."""
@@ -157,7 +163,8 @@ def fetch_metar(station, start_date, end_date, timeout=60):
     # request drct + sknt together (two data= params)
     url = f"{_METAR}?{qs}&data=sknt"
     try:
-        text = _get(url, timeout).decode("utf-8", "replace")
+        with _IEM_ONE_AT_A_TIME:
+            text = _get(url, timeout).decode("utf-8", "replace")
     except Exception:
         return {}
     out = {}

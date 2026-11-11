@@ -338,6 +338,28 @@ modelskill._get = _orig_get
 check("asks for lkwf1h2025.txt.gz", _seen and _seen[0].endswith("/lkwf1h2025.txt.gz"))
 
 # ---------------------------------------------------------------------------------------------
+import threading as _thr  # noqa: E402
+_live, _peak = [0], [0]
+_lk = _thr.Lock()
+
+
+def _count_get(url, timeout=45, retries=5):
+    with _lk:
+        _live[0] += 1
+        _peak[0] = max(_peak[0], _live[0])
+    time.sleep(0.05)
+    with _lk:
+        _live[0] -= 1
+    return b""
+
+
+modelskill._get = _count_get
+_ts = [_thr.Thread(target=modelskill.fetch_metar, args=(x, "2025-11-01", "2025-11-30")) for x in ("FLL", "FXE", "MIA", "PMP")]
+[t_.start() for t_ in _ts]
+[t_.join() for t_ in _ts]
+modelskill._get = _orig_get
+check("every METAR fetch goes one at a time (Iowa State errors on parallel requests)", _peak[0] == 1)
+
 print("7) Lab endpoints")
 from fastapi.testclient import TestClient  # noqa: E402
 from app import auth, main  # noqa: E402
