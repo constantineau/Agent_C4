@@ -319,6 +319,16 @@ rows_ = modelskill.load_scores("vrace")
 check("a race-time refresh that finishes after a study saved keeps the study's rows",
       set(rows_) == {"gfs"} and rows_["gfs"]["study"])
 
+_once.clear()
+modelskill.obs_series = _study_lands_midway
+with modelskill._conn() as _c:
+    _c.execute("DELETE FROM model_skill WHERE venue_key='vrace'")
+modelskill.backfill_deep(dict(gl, key="vrace"), race_date=dt.date(2026, 7, 12))
+modelskill.obs_series = _obs1
+rows_ = modelskill.load_scores("vrace")
+check("...and so does a forced older-years backfill that started before the study",
+      set(rows_) == {"gfs"} and rows_["gfs"]["study"])
+
 print("6) NDBC archive file names are lower case")
 _seen = []
 _orig_get = modelskill._get

@@ -574,9 +574,11 @@ def refresh_venue_skill(venue, models=DEFAULT_MODELS, race_date=None, force=Fals
         # one write transaction: if a venue study (or a deep backfill) saved while this refresh
         # was scoring, keep its rows rather than overwrite them with this quicker race-date score
         c.execute("BEGIN IMMEDIATE")
-        kept = (not force) and c.execute(
-            "SELECT 1 FROM model_skill WHERE venue_key=? AND (study=1 OR deep=1) LIMIT 1",
-            (venue["key"],)).fetchone()
+        # (a study always wins, even over a forced backfill: a studied venue deepens through the
+        # study itself; a forced backfill may replace an older deep score)
+        kept = c.execute(
+            "SELECT 1 FROM model_skill WHERE venue_key=? AND (study=1 OR (deep=1 AND ?)) LIMIT 1",
+            (venue["key"], 0 if force else 1)).fetchone()
         if not kept:
             save_scores(venue["key"], label, src, span, scores, conn=c)
     return load_scores(venue["key"])
