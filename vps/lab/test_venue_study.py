@@ -306,6 +306,22 @@ for _ in range(200):
     time.sleep(0.05)
 check("the job finishes with the saved study", js["state"] == "done" and js["result"]["key"] == st["key"]
       and js["result"]["spec"]["pad_days"] == 0, js.get("error"))
+far = client.post("/api/venue-study/run", headers=H, json={
+    "lat": 39.5, "lon": 2.5, "radius_nm": 40, "month": 8,
+    "stations": [{"id": s_["id"], "kind": s_["kind"], "lat": s_["lat"], "lon": s_["lon"]} for s_ in FL_ST]})
+check("stations from another place are refused (the pin moved after Find stations)",
+      far.status_code == 400 and "Find stations again" in far.json()["detail"])
+before = venuestudy.load(st["key"])
+_fc = modelskill.fetch_forecast
+modelskill.fetch_forecast = lambda *a, **k: {}
+try:
+    venuestudy.run("Fort Lauderdale", 26.10, -80.05, 40, sp, FL_ST, today=TODAY)
+    check("a re-run with nothing coming back fails plainly", False)
+except ValueError as exc:
+    check("a re-run with nothing coming back fails plainly", "Try again later" in str(exc))
+modelskill.fetch_forecast = _fc
+check("...and keeps the last good study and its weights",
+      venuestudy.load(st["key"]) == before and len(modelskill.load_scores(st["key"])) == 5)
 check("delete", client.delete(f"/api/venue-study/{ps['key']}", headers=H).json()["deleted"]
       and not modelskill.load_scores(ps["key"]))
 check("the Lab shell has the page", 'href="#venue"' in open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "web", "index.html")).read())

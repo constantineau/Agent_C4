@@ -652,6 +652,12 @@ def venue_study_run(body: dict):
     sts = [s for s in sts if s["kind"] in ("metar", "ndbc")][:8]
     if not sts:
         return JSONResponse({"detail": "Tick at least one station."}, status_code=400)
+    from . import venue as venue_mod
+    if any(venue_mod._haversine_nm(lat, lon, s["lat"], s["lon"]) > r + 1 for s in sts):
+        # stations found for another place (the pin moved after Find stations) would score the
+        # wrong water under this place's key
+        return JSONResponse({"detail": "Some stations are outside the radius. Find stations again."},
+                            status_code=400)
     name = str(body.get("name") or "").strip()[:80] or venuestudy.venue_key(lat, lon)
     deep = bool(body.get("deep"))
 

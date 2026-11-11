@@ -51,11 +51,11 @@ function vsFormHtml() {
       <label>Name <input class="ein" value="${attr(f.name)}" placeholder="e.g. Fort Lauderdale"
         oninput="Vs.form.name=this.value"></label>
       <label>Lat <input class="ein num" id="vsLat" inputmode="decimal" value="${attr(f.lat)}" placeholder="26.10"
-        oninput="Vs.form.lat=this.value; vsPin()"></label>
+        oninput="Vs.form.lat=this.value; vsMoved()"></label>
       <label>Lon <input class="ein num" id="vsLon" inputmode="decimal" value="${attr(f.lon)}" placeholder="-80.05"
-        oninput="Vs.form.lon=this.value; vsPin()"></label>
+        oninput="Vs.form.lon=this.value; vsMoved()"></label>
       <label>Radius nm <input class="ein num" inputmode="numeric" value="${attr(f.radius_nm)}"
-        oninput="Vs.form.radius_nm=this.value; vsPin()"></label>
+        oninput="Vs.form.radius_nm=this.value; vsMoved()"></label>
     </div>
     <div id="vsMap" class="vs-map"></div>
     <div class="muted" style="font-size:12px">Tap the map to set the place.</div>
@@ -70,7 +70,7 @@ function vsFormHtml() {
     <div class="muted" style="font-size:12px">${f.mode === "dates" ? "Each past year, ±3 weeks around these dates." : "The whole month, each past year."}</div>
     <div style="margin-top:10px"><button class="ghost" onclick="vsFind()">Find stations</button>
       <span id="vsFindMsg" class="muted" style="font-size:12px"></span></div>
-    ${vsStationsHtml()}
+    <div id="vsStations">${vsStationsHtml()}</div>
   </div>`;
 }
 
@@ -169,8 +169,17 @@ function vsDrawMap() {
     f.lat = e.latlng.lat.toFixed(3); f.lon = lon.toFixed(3);
     const a = document.getElementById("vsLat"), b = document.getElementById("vsLon");
     if (a) a.value = f.lat; if (b) b.value = f.lon;
-    vsPin();
+    vsMoved();
   });
+  vsPin();
+}
+
+// The place or radius changed: stations found for the old one no longer apply. Find them again.
+function vsMoved() {
+  if (Vs.found) {
+    Vs.found = null;
+    const box = document.getElementById("vsStations"); if (box) box.innerHTML = "";
+  }
   vsPin();
 }
 

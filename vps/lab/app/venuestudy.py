@@ -229,6 +229,11 @@ def run(name, lat, lon, radius_nm, spec, stations, include_deep=False, log=None,
     log(f"Scoring {len(models)} models at {len(stations)} station(s), {len(windows)} years…")
     scores, years, notes = modelskill.score_stations(stations, windows, models, yesterday.year,
                                                      include_deep=include_deep, log=log, on_obs=keep)
+    if not any(scores.values()):
+        # nothing came back (an archive down, or no wind in the window): keep the last good study
+        # and its weights rather than overwrite them with nothing
+        raise ValueError("No forecasts could be checked against measured wind. "
+                         "The data services may be down. Try again later.")
     covered = [m for m in models
                if any(modelskill.covers(m, s["lat"], s["lon"]) for s in stations)]
     for m in covered:
