@@ -580,6 +580,10 @@ edge["zones"] = [{"type": "exclusion", "geometry": {"north": LAT0 + 3 / 60.0 + 0
                                                     "west": LON0 + 0.05 * DLON, "east": LON0 + 0.3}}]
 check("...the mark just outside a zone its rounding standoff falls in: not offered (Codex on #327)",
       verdict(edge, blk)["blocked"].get("override") is False)
+edge_none = course("none")
+edge_none["zones"] = edge["zones"]
+check("...but a mark with no rounding side has no standoff: still offered",
+      verdict(edge_none, blk)["blocked"].get("override") is True)
 pu = verdict(course("port"), {"leg": 0, "to": "W", "short_nm": 0.8, "reason": "time budget"})
 check("a mark the router just didn't reach: no Override (not the chart), run it again",
       pu["unreached"].get("override") is False and pu["unreached"]["fix"] == O.FIX_RERUN, pu)

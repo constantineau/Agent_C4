@@ -1662,8 +1662,8 @@ def _override_helps(definition, course_id, name, marks, fields):
     override cuts a pocket in the shoreline layers only (land, shoal, obstruction:
     `geo.obstacles.build_for_course`); a race zone, an island disk (the coastline backstop) and
     the edge of the chart are never opened. So: no if the mark already has an override (then
-    something else blocks it), lies in a race zone (or its rounding standoff may) or an island
-    disk, or is outside every chart; yes otherwise."""
+    something else blocks it), lies (or a port/starboard mark's rounding standoff may lie) in a
+    race zone or an island disk, or is outside every chart; yes otherwise."""
     from .geo import obstacles as geo
     if name in geo.chart_overrides(definition, course_id):
         return False
@@ -1675,7 +1675,9 @@ def _override_helps(definition, course_id, name, marks, fields):
     if boxed and not any(f.inside(lat, lon) for f in boxed):
         return False
     # the mark, and anywhere its rounding standoff could be (ROUND_OFFSET_NM off it, either side)
-    near = [(lat, lon)] + [_advance(lat, lon, b, ROUND_OFFSET_NM) for b in range(0, 360, 30)]
+    near = [(lat, lon)]
+    if race_def.course_roundings(definition, course_id).get(name) in ("port", "starboard"):
+        near += [_advance(lat, lon, b, ROUND_OFFSET_NM) for b in range(0, 360, 30)]
     for z in (definition or {}).get("zones") or []:
         if z.get("type") not in ("exclusion", "hazard", "tss"):
             continue
@@ -1685,7 +1687,7 @@ def _override_helps(definition, course_id, name, marks, fields):
             return False
     if any(getattr(f, "source", None) != "enc" for f in fields):
         for isl in geo._course_islands(definition or {}, course_id):
-            if _hav_nm(lat, lon, isl["lat"], isl["lon"]) <= isl["radius_nm"]:
+            if any(_hav_nm(a, o, isl["lat"], isl["lon"]) <= isl["radius_nm"] for a, o in near):
                 return False
     return True
 
