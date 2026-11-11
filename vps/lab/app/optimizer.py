@@ -700,7 +700,8 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, deadline=None,
             placed += 1
         return placed, blocked, back
 
-    def place(cand, parent, nlat, nlon, t, hdg, pen, tk, sail, pl, dmin, dmark_new, tws, twd, sp):
+    def place(cand, parent, nlat, nlon, t, hdg, pen, tk, sail, pl, dmin, dmark_new, tws, twd, sp,
+              calm=False):
         """Offer one candidate node to this generation's prune (keeps the best per bucket)."""
         rng = _hav_nm(slat, slon, nlat, nlon)
         # PRUNE KEY + SCORE. DMG_PRUNE (root-cause fix): rank by distance MADE GOOD toward the mark,
@@ -728,7 +729,7 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, deadline=None,
         if sec not in cand or score > cand[sec]["rng_eff"]:
             cand[sec] = {"lat": nlat, "lon": nlon, "t": t,
                          "parent": parent, "hdg": hdg, "rng": rng, "rng_eff": score,
-                         "pen": pen, "tk": tk, "sail": sail, "pl": pl, "dmin": dmin}
+                         "pen": pen, "tk": tk, "sail": sail, "pl": pl, "dmin": dmin, "calm": calm}
 
     def price(sail_in, node, tws, twa):
         """(sail, realized speed, is_peel) for sailing `twa` from `node` carrying `sail_in`, priced
@@ -829,6 +830,29 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, deadline=None,
             t_end = node["t"] + (t1 + d2 / sp2) * 3600 + tack_s + extra_s
             place(cand, mid, nlat, nlon, t_end, h2, pen, tk, sail2, pl, dmin, dmark_new, tws2, twd2, sp2)
 
+    def becalmed(node, tws, twd):
+        """True when no heading makes way here (every one is under 0.3 kn, priced like a step in
+        `expand`: held sail, helm, sea state). Not the same as boxed in by land: nothing was tried."""
+        return not any(price(node.get("sail"), node, tws, abs(_wrap180(h - twd))) for h in headings)
+
+    def hold(node, tws, twd, dt_h, cand):
+        """#326 BECALMED: the boat can't sail anywhere from `node`, so it waits out this step where
+        it is, drifting with the current (unless that would put it across an obstacle), instead of
+        the node being dropped. A calm over the whole front used to kill the leg ("no clear
+        heading") even when the forecast filled in a new breeze a few hours later. The wait is real
+        clock time, so the ETA carries it. No tack, no sail change, no maneuver cost."""
+        nlat, nlon = node["lat"], node["lon"]
+        if cur is not None:
+            cset, cdrift = cur.current_at(nlat, nlon, node["t"])
+            if cdrift > 0.01:
+                dlat_, dlon_ = _advance(nlat, nlon, cset, cdrift * dt_h)
+                if not (obstacles and obstacles.crosses(nlat, nlon, dlat_, dlon_)):
+                    nlat, nlon = dlat_, dlon_
+        dmark_new = _hav_nm(nlat, nlon, dlat, dlon)
+        place(cand, node, nlat, nlon, node["t"] + dt_h * 3600, node["hdg"], node.get("pen", 0.0),
+              node.get("tk", 0), node.get("sail"), node.get("pl", 0),
+              min(node.get("dmin", direct), dmark_new), dmark_new, tws, twd, 0.0, calm=True)
+
     def direct_lay(node, tws, twd, dmark, bmark):
         """The closing board straight to the mark, priced like any other step in `expand`: the held or
         peeled sail, the realized factor (helm × sea state), and the current — the boat crabs so its
@@ -863,8 +887,11 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, deadline=None,
     frontier = [start]
     reached = None
     snaps = []
+    stop = "steps"                 # why a leg that doesn't arrive stopped (#326); see the loop
+    calm_end = False               # …and whether the whole front was waiting out a calm then
     for _ in range(max_steps):
         if deadline and time.time() > deadline:
+            stop = "time_budget"
             break
         cand = {}
         # ADAPTIVE ENDGAME: shrink this generation's step as the frontier nears the mark, so the
@@ -933,7 +960,16 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, deadline=None,
                 # does need to retreat) — fail open for THIS node so the boat is never stranded
                 _p, blocked, _b = expand(node, headings + vmg, tws, twd, gen_dt, cand, monotone=False)
             blocked_hits += blocked
-        if reached or not cand:
+            if placed == 0 and blocked == 0 and back == 0 and becalmed(node, tws, twd):
+                hold(node, tws, twd, gen_dt, cand)
+        if reached:
+            break
+        if not cand:
+            # why the search died (#326): no forecast wind for any node, else every heading blocked
+            # A front that had wind at the leg start but none now: the forecast ended ("forecast_end")
+            stop = ("blocked" if local else
+                    "forecast_end" if any(wind(n["lat"], n["lon"], t0) for n in frontier) else "no_wind")
+            calm_end = bool(frontier) and all(n.get("calm") for n in frontier)
             break
         frontier = list(cand.values())
         if capture:
@@ -950,7 +986,10 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, deadline=None,
         reached = min(frontier, key=lambda n: _hav_nm(n["lat"], n["lon"], dlat, dlon))
 
     path, node, hdgs, sails, peels = [], reached, [], [], 0
+    calm_s = 0.0                   # time the path spends waiting out a calm (#326)
     while node is not None:
+        if node.get("calm") and node["parent"] is not None:
+            calm_s += node["t"] - node["parent"]["t"]
         path.append({"lat": round(node["lat"], 5), "lon": round(node["lon"], 5), "t": node["t"]})
         sails.append(node.get("sail"))
         peels = max(peels, node.get("pl", 0))     # modeled peels accrue monotonically along the path
@@ -1011,6 +1050,12 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, deadline=None,
                 isochrones.append(poly)
     return {"path": path, "eta": reached["t"], "sailed_nm": round(sailed, 2),
             "reached": arrived,
+            # why it stopped short (#326): "blocked" (every heading blocked), "no_wind" (no forecast
+            # wind for any node, "forecast_end" when it ran out in time), "time_budget", "steps";
+            # None if arrived. `calm_end`: the whole front was becalmed when the wind ran out.
+            "stop": None if arrived else stop,
+            "calm_end": (not arrived) and calm_end,
+            "becalmed_h": round(calm_s / 3600.0, 1),
             "short_nm": 0.0 if arrived else round(_hav_nm(reached["lat"], reached["lon"], dlat, dlon), 2),
             "direct_nm": round(direct, 2), "tacks": tacks,
             "first_heading": round(hdgs[0]) if hdgs else None,
@@ -1286,6 +1331,21 @@ RESOLUTIONS = {
 }
 
 
+def _stop_reason(leg):
+    """Plain words for why a leg stopped short of its mark (#326), from route_leg's `stop`."""
+    stop = leg.get("stop")
+    if stop == "forecast_end":
+        return ("becalmed: no wind until the forecast ends" if leg.get("calm_end")
+                else "the forecast ends before the boat gets there")
+    if stop == "no_wind":
+        return "no forecast wind where the boat got to"
+    if stop == "steps":
+        return "the search ran out of steps (very light wind)"
+    if stop == "time_budget":
+        return "time budget"
+    return "no clear heading reached the mark"
+
+
 def _resolution(name):
     return RESOLUTIONS.get((name or "auto").strip().lower(), RESOLUTIONS["auto"])
 
@@ -1478,6 +1538,7 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
                      if det else None),
             "reached": leg.get("reached", True),
             "wind_filled": leg.get("wind_filled", 0),    # nodes on borrowed nearby wind (#203)
+            "becalmed_h": leg.get("becalmed_h", 0.0),    # hours the route waits out a calm (#326)
         })
         # accumulate the real sails-flown track + carry the ending sail into the next leg (2g)
         route_track += leg.get("sail_track", [])
@@ -1498,7 +1559,8 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
             # (possibly across land) at no time cost and report a too-short finish.
             incomplete = {"leg": len(legs), "to": name, "short_nm": leg.get("short_nm"),
                           "reason": ("time budget" if (deadline and time.time() > deadline)
-                                     else "no clear heading reached the mark"),
+                                     else _stop_reason(leg)),
+                          "stop": leg.get("stop"),
                           "legs_not_routed": [n for _s, n, _a, _o in marks[1:]][len(legs):]}
             t = leg["eta"]
             break
@@ -1521,7 +1583,9 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
         warnings.insert(0, f"Route INCOMPLETE. The leg to {incomplete['to']} stopped "
                            f"{incomplete['short_nm']} nm short of the mark ({incomplete['reason']})"
                            + (f". Not routed after it: {', '.join(rest)}" if rest else "")
-                           + ". Don't use this route. Run it again, or check for land near that mark.")
+                           + (". Don't use this route. Try again with a newer forecast."
+                              if incomplete.get("stop") in ("forecast_end", "no_wind", "steps")
+                              else ". Don't use this route. Run it again, or check for land near that mark."))
     if land_failed:
         degraded = True
         warnings.insert(0, LAND_FAILED)
