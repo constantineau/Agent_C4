@@ -575,6 +575,11 @@ check("...inside an island disk on the coastline backstop: not offered",
       verdict(isl, blk, backstop)["blocked"].get("override") is False)
 check("...the same island under ENC charts (its land is shoreline): offered",
       verdict(isl, blk)["blocked"].get("override") is True)
+edge = course("port")
+edge["zones"] = [{"type": "exclusion", "geometry": {"north": LAT0 + 3 / 60.0 + 0.5, "south": LAT0 + 3 / 60.0 - 0.5,
+                                                    "west": LON0 + 0.05 * DLON, "east": LON0 + 0.3}}]
+check("...the mark just outside a zone its rounding standoff falls in: not offered (Codex on #327)",
+      verdict(edge, blk)["blocked"].get("override") is False)
 pu = verdict(course("port"), {"leg": 0, "to": "W", "short_nm": 0.8, "reason": "time budget"})
 check("a mark the router just didn't reach: no Override (not the chart), run it again",
       pu["unreached"].get("override") is False and pu["unreached"]["fix"] == O.FIX_RERUN, pu)
