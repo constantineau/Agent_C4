@@ -663,9 +663,11 @@ def venue_study_run(body: dict):
                         **({"tz": s["tz"]} if s.get("tz") else {})})
         except (KeyError, TypeError, ValueError):
             continue
-    sts = [s for s in sts if s["kind"] in ("metar", "ndbc")][:8]
+    sts = [s for s in sts if s["kind"] in ("metar", "ndbc")]
     if not sts:
         return JSONResponse({"detail": "Tick at least one station."}, status_code=400)
+    if len(sts) > 8:
+        return JSONResponse({"detail": "Tick 8 stations or fewer."}, status_code=400)
     from . import venue as venue_mod
     if any(venue_mod._haversine_nm(lat, lon, s["lat"], s["lon"]) > r + 1 for s in sts):
         # stations found for another place (the pin moved after Find stations) would score the

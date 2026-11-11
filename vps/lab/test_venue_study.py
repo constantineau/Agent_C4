@@ -348,6 +348,11 @@ check("stations endpoint: found, key, the year it checked",
       and any(s_["id"] == "41122" for s_ in fs["stations"]))
 badr = client.post("/api/venue-study/stations", headers=H, json={"lat": 26.1, "lon": -80.05, "radius_nm": {}, "month": 11})
 check("a junk radius: a plain 400", badr.status_code == 400 and "Radius" in badr.json()["detail"])
+badm = client.post("/api/venue-study/stations", headers=H, json={"lat": 26.1, "lon": -80.05, "month": [11]})
+check("a junk month: a plain 400", badm.status_code == 400 and "month" in badm.json()["detail"])
+many = client.post("/api/venue-study/run", headers=H, json={"lat": 26.1, "lon": -80.05, "month": 11, "stations": [
+    {"id": f"S{i}", "kind": "metar", "lat": 26.1, "lon": -80.05} for i in range(9)]})
+check("more than 8 stations: a plain 400, none silently dropped", many.status_code == 400 and "8" in many.json()["detail"])
 nost = client.post("/api/venue-study/run", headers=H, json={"lat": 26.1, "lon": -80.05, "month": 11, "stations": []})
 check("run with no station ticked: a plain 400", nost.status_code == 400 and "Tick" in nost.json()["detail"])
 go = client.post("/api/venue-study/run", headers=H, json={

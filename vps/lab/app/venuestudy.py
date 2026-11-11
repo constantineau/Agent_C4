@@ -67,7 +67,10 @@ def window_spec(body):
     ignored, the season is what counts) or {month: 1..12}. Raises ValueError with a plain message."""
     body = body or {}
     if body.get("month"):
-        m = int(body["month"])
+        try:
+            m = int(body["month"])
+        except (TypeError, ValueError):
+            raise ValueError("Pick a month.")
         if not 1 <= m <= 12:
             raise ValueError("Pick a month.")
         last = (dt.date(2001 if m < 12 else 2002, m % 12 + 1, 1) - dt.timedelta(days=1)).day
