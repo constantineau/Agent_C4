@@ -127,6 +127,7 @@ def fake_obs(st, sd, ed):
 
 modelskill.fetch_forecast = fake_forecast
 modelskill.obs_series = fake_obs
+modelskill.fetch_reforecast = lambda *a, **k: {}      # the pre-2021 GRIB archive: no network here
 TODAY = dt.date(2026, 11, 11)
 
 # ---------------------------------------------------------------------------------------------
@@ -312,6 +313,7 @@ far = client.post("/api/venue-study/run", headers=H, json={
 check("stations from another place are refused (the pin moved after Find stations)",
       far.status_code == 400 and "Find stations again" in far.json()["detail"])
 before = venuestudy.load(st["key"])
+before_w = modelskill.load_scores(st["key"])
 _fc = modelskill.fetch_forecast
 modelskill.fetch_forecast = lambda *a, **k: {}
 try:
@@ -322,6 +324,34 @@ except ValueError as exc:
 modelskill.fetch_forecast = _fc
 check("...and keeps the last good study and its weights",
       venuestudy.load(st["key"]) == before and len(modelskill.load_scores(st["key"])) == 5)
+_orig_save = venuestudy.save
+venuestudy.save = lambda *a, **k: (_ for _ in ()).throw(OSError("disk full"))
+try:
+    venuestudy.run("Fort Lauderdale", 26.10, -80.05, 40, sp, FL_ST, today=TODAY)
+except OSError:
+    pass
+venuestudy.save = _orig_save
+check("weights and study are saved together: a failed study write leaves the old weights",
+      venuestudy.load(st["key"]) == before
+      and modelskill.load_scores(st["key"])["icon"]["updated_at"] == before_w["icon"]["updated_at"])
+DEEP = []
+_run = venuestudy.run
+venuestudy.run = lambda *a, **k: (DEEP.append(k.get("include_deep")), _run(*a, **k))[1]
+_bd = modelskill.backfill_deep
+modelskill.backfill_deep = lambda *a, **k: DEEP.append("plain")
+from app import store  # noqa: E402
+_gr = store.get_race
+store.get_race = lambda rid: {"race_id": rid, "name": "ORC NA", "courses": []}
+venue.resolve = lambda d, c, bbox=None: venue.resolve_from_bbox(bbox or (26.2, 26.0, -80.1, -79.95))
+dj = client.post("/api/model-skill/backfill", headers=H, json={"race_id": "orcna"}).json()
+for _ in range(200):
+    djs = client.get("/api/model-skill/backfill/status", headers=H).json()
+    if djs["state"] != "running":
+        break
+    time.sleep(0.05)
+check("'Add older years' on a studied venue deepens the study itself", DEEP == [True] and djs["state"] == "done",
+      (DEEP, djs.get("error")))
+venuestudy.run, modelskill.backfill_deep, store.get_race = _run, _bd, _gr
 check("delete", client.delete(f"/api/venue-study/{ps['key']}", headers=H).json()["deleted"]
       and not modelskill.load_scores(ps["key"]))
 check("the Lab shell has the page", 'href="#venue"' in open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "web", "index.html")).read())

@@ -552,10 +552,17 @@ def model_skill_backfill(body: dict):
     if not v or not v.get("station"):
         return JSONResponse({"detail": "venue has no observation station — can't score skill"},
                             status_code=422)
-    from . import jobs, modelskill
+    from . import jobs, modelskill, venuestudy
+    study = venuestudy.load(v["key"]) if v.get("study") else None
 
     def _work(progress):
-        modelskill.backfill_deep(v, modelskill.DEFAULT_MODELS, rd, log=progress)
+        if study:
+            # a studied venue deepens its study (same window and stations), so the study page and
+            # the route keep showing and using the same numbers
+            venuestudy.run(study["name"], study["lat"], study["lon"], study["radius_nm"], study["spec"],
+                           study["stations"], include_deep=True, log=progress)
+        else:
+            modelskill.backfill_deep(v, modelskill.DEFAULT_MODELS, rd, log=progress)
         return modelskill.venue_weights(v, refresh=False)
 
     return jobs.start("model_skill_backfill", _work, meta={"venue": v.get("tag") or v.get("station")})

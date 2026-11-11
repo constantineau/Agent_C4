@@ -42,7 +42,7 @@ def _conn(create=True):
     if not create and not os.path.exists(p):
         return None
     os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
-    c = sqlite3.connect(p, timeout=10)
+    c = modelskill._conn() if create else sqlite3.connect(p, timeout=10)   # model_skill too
     c.execute("""CREATE TABLE IF NOT EXISTS venue_study (
         key TEXT PRIMARY KEY, name TEXT, lat REAL, lon REAL, radius_nm REAL,
         spec TEXT, stations TEXT, result TEXT, updated_at REAL)""")
@@ -264,24 +264,31 @@ def run(name, lat, lon, radius_nm, spec, stations, include_deep=False, log=None,
     span = sorted({y for ys in years.values() for y in ys})
     label = "+".join(s["id"] for s in stations)
     src = "+".join(sorted({s["kind"] for s in stations}))
-    modelskill.save_scores(key, label, src, [str(span[0]) if span else "", str(span[-1]) if span else ""],
-                           {m: s for m, s in scores.items() if s}, study=True)
     result = {"verdict": verdict(table), "table": table, "notes": notes, "climate": climates,
               "deep": include_deep, "years": span, "window_label": spec.get("label"),
               "min_n": modelskill.MIN_N}
     st_keep = [{k: s[k] for k in ("id", "kind", "name", "lat", "lon", "tz") if k in s} for s in stations]
-    save(key, name, lat, lon, radius_nm, spec, st_keep, result)
+    # the routing weights and the study the page shows are written in ONE transaction, so a
+    # restart mid-save can't leave new weights behind an old (or missing) study
+    c = _conn()
+    with c:
+        modelskill.save_scores(key, label, src, [str(span[0]) if span else "", str(span[-1]) if span else ""],
+                               {m: s for m, s in scores.items() if s}, study=True, conn=c)
+        save(key, name, lat, lon, radius_nm, spec, st_keep, result, conn=c)
     log("Done.")
     return load(key)
 
 
 # ---------------------------------------------------------------------------------- store
-def save(key, name, lat, lon, radius_nm, spec, stations, result):
+def save(key, name, lat, lon, radius_nm, spec, stations, result, conn=None):
+    """Write the study record; inside the caller's transaction when `conn` is given."""
     now = dt.datetime.now(dt.timezone.utc).timestamp()
-    with _conn() as c:
-        c.execute("INSERT OR REPLACE INTO venue_study VALUES (?,?,?,?,?,?,?,?,?)",
-                  (key, name, lat, lon, radius_nm, json.dumps(spec), json.dumps(stations),
-                   json.dumps(result), now))
+    if conn is None:
+        with _conn() as c:
+            return save(key, name, lat, lon, radius_nm, spec, stations, result, conn=c)
+    conn.execute("INSERT OR REPLACE INTO venue_study VALUES (?,?,?,?,?,?,?,?,?)",
+                 (key, name, lat, lon, radius_nm, json.dumps(spec), json.dumps(stations),
+                  json.dumps(result), now))
 
 
 def _row(r):

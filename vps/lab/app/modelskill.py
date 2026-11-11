@@ -386,22 +386,26 @@ def _conn():
     return c
 
 
-def save_scores(venue_key, station, obs_source, window, scores, study=False):
+def save_scores(venue_key, station, obs_source, window, scores, study=False, conn=None):
     """Persist one score row per model. Each score dict carries its OWN `n_years` (count of distinct
     seasons that model actually matched) and `deep` (did it use a pre-2021 archive). `study`=True
-    marks rows a Lab venue study wrote: kept until the study is run again (see _fresh)."""
+    marks rows a Lab venue study wrote: kept until the study is run again (see _fresh). `conn`: write
+    inside the caller's transaction (the venue study saves its record in the same one)."""
     now = dt.datetime.now(dt.timezone.utc).timestamp()
-    with _conn() as c:
-        c.execute("DELETE FROM model_skill WHERE venue_key=?", (venue_key,))   # replace the venue set
-        for m, s in scores.items():
-            if not s:
-                continue
-            c.execute("""INSERT OR REPLACE INTO model_skill (venue_key, model, station, obs_source,
-                         n, vector_rmse_kn, speed_bias_kn, dir_bias_deg, window_start, window_end,
-                         updated_at, n_years, deep, study) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                      (venue_key, m, station, obs_source, s["n"], s["vector_rmse_kn"],
-                       s["speed_bias_kn"], s["dir_bias_deg"], window[0], window[1], now,
-                       s.get("n_years", 1), 1 if s.get("deep") else 0, 1 if study else 0))
+    if conn is None:
+        with _conn() as c:                       # its own transaction
+            return save_scores(venue_key, station, obs_source, window, scores, study, conn=c)
+    c = conn                                     # the caller's transaction: no commit here
+    c.execute("DELETE FROM model_skill WHERE venue_key=?", (venue_key,))   # replace the venue set
+    for m, s in scores.items():
+        if not s:
+            continue
+        c.execute("""INSERT OR REPLACE INTO model_skill (venue_key, model, station, obs_source,
+                     n, vector_rmse_kn, speed_bias_kn, dir_bias_deg, window_start, window_end,
+                     updated_at, n_years, deep, study) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                  (venue_key, m, station, obs_source, s["n"], s["vector_rmse_kn"],
+                   s["speed_bias_kn"], s["dir_bias_deg"], window[0], window[1], now,
+                   s.get("n_years", 1), 1 if s.get("deep") else 0, 1 if study else 0))
 
 
 def load_scores(venue_key):

@@ -222,7 +222,10 @@ function vsRerun() {
   if (sp.pad_days === 0 && sp.start_md && sp.start_md[1] === 1) { f.mode = "month"; f.month = sp.start_md[0]; }
   else if (sp.start_md) {
     const y = new Date().getFullYear(), p = (n) => String(n).padStart(2, "0");
-    f.start = `${y}-${p(sp.start_md[0])}-${p(sp.start_md[1])}`; f.end = `${y}-${p(sp.end_md[0])}-${p(sp.end_md[1])}`;
+    // a race over New Year (Dec 26 – Jan 2) ends in the next year
+    const wraps = sp.end_md[0] * 100 + sp.end_md[1] < sp.start_md[0] * 100 + sp.start_md[1];
+    f.start = `${y}-${p(sp.start_md[0])}-${p(sp.start_md[1])}`;
+    f.end = `${y + (wraps ? 1 : 0)}-${p(sp.end_md[0])}-${p(sp.end_md[1])}`;
   }
   Vs.form = f; Vs.open = null; Vs.found = null; paintVenueStudy();
 }
