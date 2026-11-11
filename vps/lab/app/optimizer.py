@@ -987,7 +987,7 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, deadline=None,
     if not reached:
         reached = min(frontier, key=lambda n: _hav_nm(n["lat"], n["lon"], dlat, dlon))
 
-    path, node, hdgs, sails, peels = [], reached, [], [], 0
+    path, node, into, sails, peels = [], reached, [], [], 0
     calm_s = 0.0                   # time the path spends waiting out a calm (#326)
     while node is not None:
         if node.get("calm") and node["parent"] is not None:
@@ -995,10 +995,13 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, deadline=None,
         path.append({"lat": round(node["lat"], 5), "lon": round(node["lon"], 5), "t": node["t"]})
         sails.append(node.get("sail"))
         peels = max(peels, node.get("pl", 0))     # modeled peels accrue monotonically along the path
-        if node["hdg"] is not None:
-            hdgs.append(node["hdg"])
+        into.append(None if node.get("calm") else node["hdg"])   # heading sailed INTO this point
         node = node["parent"]
-    path.reverse(); hdgs.reverse(); sails.reverse()
+    path.reverse(); into.reverse(); sails.reverse()
+    # the SAILED segments as (k, heading leaving path[k]); a calm wait (#326) isn't sailed, so it
+    # isn't a heading, a tack or a realized-speed sample, and the headings stay on their own points
+    segs = [(k, into[k + 1]) for k in range(len(path) - 1) if into[k + 1] is not None]
+    hdgs = [h for _k, h in segs]
     # sail track (2g): collapse consecutive same-DISPLAY sails into the runs actually flown, recording
     # where each begins (sails[k] is the sail flown INTO path[k]). `peels` is the count of MODELED
     # aerodynamic peels (the `pl` the search accrued — jib change-downs J1→J2 share a curve and aren't
@@ -1014,16 +1017,16 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, deadline=None,
     sail_end = sail_track[-1]["sail"] if sail_track else start_sail
     sailed = sum(_hav_nm(path[i]["lat"], path[i]["lon"], path[i + 1]["lat"], path[i + 1]["lon"])
                  for i in range(len(path) - 1))
-    # tacks/gybes = genuine port↔starboard crossings along the path. `hdgs[k]` is the heading sailed on
-    # the segment LEAVING `path[k]` at `path[k]["t"]`, so classify the board against the wind LOCAL to
+    # tacks/gybes = genuine port↔starboard crossings along the path. Each `segs` heading is the one
+    # sailed on the segment LEAVING `path[k]` at `path[k]["t"]`, so classify the board against the wind LOCAL to
     # that point/time — NOT a single frozen leg-start wind. On a leg where the breeze clocks (e.g. a long
     # light beat) the stale-wind version miscounts every shift-following heading swing as a tack and badly
     # over-reports; sampling local wind makes the count the real maneuver tally (tacks upwind / gybes down).
     tacks = 0
     prev_side = None
     rf_sum = hs_sum = 0.0          # realized-factor + sea-state accumulators (the coaching number)
-    for k, h in enumerate(hdgs):
-        p = path[k] if k < len(path) else path[-1]
+    for k, h in segs:
+        p = path[k]
         w = wind(p["lat"], p["lon"], p["t"])
         if not w:
             continue

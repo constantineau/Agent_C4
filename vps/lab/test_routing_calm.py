@@ -43,13 +43,14 @@ class Calm:
     again. No forecast at all after `ends` hours (None, like a real wind field past its window)."""
     loaded = True
 
-    def __init__(self, calm_from=2.0, calm_to=8.0, ends=72.0, twd=0.0):
+    def __init__(self, calm_from=2.0, calm_to=8.0, ends=72.0, twd=0.0, calm_twd=None):
         self.a, self.b, self.ends, self.twd = calm_from * H, calm_to * H, ends * H, twd
+        self.calm_twd = twd if calm_twd is None else calm_twd
 
     def wind_at(self, lat, lon, t):
         if t > self.ends:
             return None
-        return (0.1, self.twd) if self.a <= t < self.b else (8.0, self.twd)
+        return (0.1, self.calm_twd) if self.a <= t < self.b else (8.0, self.twd)
 
     def detail_at(self, lat, lon, t):
         w = self.wind_at(lat, lon, t)
@@ -106,6 +107,12 @@ leg = OPT.route_leg(Calm(calm_from=0, calm_to=3), P, S_LAT, S_LON, 0.0, M_LAT, M
 print(f"     calm + current onto the shore: reached={leg['reached']} stop={leg.get('stop')}")
 check("a drift onto the shore isn't waited out at anchor (no route)", leg["reached"] is False
       and leg.get("stop") == "blocked")
+
+print("2b) a calm at the gun doesn't skew the tack count")
+late = OPT.route_leg(Calm(calm_from=0, calm_to=4, calm_twd=180.0), P, S_LAT, S_LON, 0.0, M_LAT, M_LON)
+print(f"     tacks after a 4 h calm at the gun: {late['tacks']}, steady wind: {steady['tacks']}")
+check("same tacks as sailing it in steady wind (calm points aren't headings)",
+      late["reached"] and late["tacks"] == steady["tacks"])
 
 print("3) calm until the forecast ends")
 leg = OPT.route_leg(Calm(calm_from=2, calm_to=99, ends=20), P, S_LAT, S_LON, 0.0, M_LAT, M_LON)
