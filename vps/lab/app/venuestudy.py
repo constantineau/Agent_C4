@@ -22,6 +22,7 @@ import datetime as dt
 import json
 import os
 import sqlite3
+import threading
 
 from . import modelskill
 
@@ -47,6 +48,17 @@ def _conn(create=True):
         key TEXT PRIMARY KEY, name TEXT, lat REAL, lon REAL, radius_nm REAL,
         spec TEXT, stations TEXT, result TEXT, updated_at REAL)""")
     return c
+
+
+# One run per place at a time, across both ways in (the Venue study page and the Gameplan's "Add
+# older years"), and no delete while one runs: a run saves when it finishes and would undo it.
+_busy: set = set()
+_busy_lock = threading.Lock()
+
+
+def busy(key):
+    with _busy_lock:
+        return key in _busy
 
 
 # --------------------------------------------------------------------------------- window
@@ -209,6 +221,18 @@ def run(name, lat, lon, radius_nm, spec, stations, include_deep=False, log=None,
         raise ValueError("Tick at least one station.")
     log = log or (lambda m: None)
     key = venue_key(lat, lon)
+    with _busy_lock:
+        if key in _busy:
+            raise ValueError("A study is already running here.")
+        _busy.add(key)
+    try:
+        return _run(key, name, lat, lon, radius_nm, spec, stations, include_deep, log, today)
+    finally:
+        with _busy_lock:
+            _busy.discard(key)
+
+
+def _run(key, name, lat, lon, radius_nm, spec, stations, include_deep, log, today):
     windows, yesterday = windows_for(spec, include_deep, today)
     if not windows:
         raise ValueError("No past years in that window yet.")
@@ -322,6 +346,9 @@ def list_all():
 
 
 def delete(key):
+    """Remove a study and its routing weights. Refused (ValueError) while a run there is going."""
+    if busy(key):
+        raise ValueError("A study is running here. Delete it when it's done.")
     c = _conn(create=False)
     if c is None:
         return False

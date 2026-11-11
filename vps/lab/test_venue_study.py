@@ -183,6 +183,22 @@ check("a stalled station doesn't hold Find stations: answered by the deadline, m
       time.time() - t0 < 3 and next(s_ for s_ in sl["stations"] if s_["id"] == "FXE")["obs"] is None
       and next(s_ for s_ in sl["stations"] if s_["id"] == "FLL")["obs"] == 10
       and any("not checked" in n for n in sl["notes"]))
+class _Stalled:
+    name, kind = "Slow list", "metar"
+
+    def find(self, *a):
+        _hold2.wait(5)
+        return []
+
+
+_hold2 = threading.Event()
+t0 = time.time()
+sl2 = obsstations.discover(26.10, -80.05, 40, window=win, deadline_s=0.5,
+                           sources=[_Stalled(), obsstations.NdbcSource()], probe_fn=lambda s_, w_: 5)
+_hold2.set()
+check("a stalled station list doesn't hold it either: the others come back, with a note",
+      time.time() - t0 < 3 and any(s_["id"] == "41122" for s_ in sl2["stations"])
+      and any("Slow list: no answer in time" == n for n in sl2["notes"]))
 empty = obsstations.discover(-50.0, -140.0, 20, window=win)
 check("nothing in range: a plain note", not empty["stations"] and "bigger radius" in empty["notes"][0])
 
@@ -369,16 +385,26 @@ for _ in range(200):
 check("'Add older years' on a studied venue deepens the study itself", DEEP == [True] and djs["state"] == "done",
       (DEEP, djs.get("error")))
 venuestudy.run, modelskill.backfill_deep, store.get_race = _run, _bd, _gr
-from app import jobs as _jobs  # noqa: E402
 _gate = threading.Event()
-_jobs.start("venue_study", lambda progress: _gate.wait(5), meta={"key": ps["key"]})
+_obs0 = modelskill.obs_series
+modelskill.obs_series = lambda st_, sd_, ed_: (_gate.wait(5), _obs0(st_, sd_, ed_))[1]
+_th = threading.Thread(target=lambda: venuestudy.run("Palma", 39.50, 2.50, 40, venuestudy.window_spec({"month": 8}),
+                                                     PAL_ST, include_deep=True, today=TODAY))
+_th.start()
+time.sleep(0.2)
 busy = client.delete(f"/api/venue-study/{ps['key']}", headers=H)
+try:
+    venuestudy.run("Palma", 39.50, 2.50, 40, venuestudy.window_spec({"month": 8}), PAL_ST, today=TODAY)
+    second = False
+except ValueError as exc:
+    second = "already running" in str(exc)
 _gate.set()
-for _ in range(100):
-    if _jobs.status("venue_study")["state"] != "running":
-        break
-    time.sleep(0.05)
-check("no delete while a study runs at that place", busy.status_code == 409 and venuestudy.load(ps["key"]))
+_th.join()
+modelskill.obs_series = _obs0
+check("no delete while a run (here the older-years one) is going at that place",
+      busy.status_code == 409 and venuestudy.load(ps["key"]))
+check("and no second run at the same place meanwhile", second)
+check("free again once it's done", not venuestudy.busy(ps["key"]))
 check("delete", client.delete(f"/api/venue-study/{ps['key']}", headers=H).json()["deleted"]
       and not modelskill.load_scores(ps["key"]))
 check("the Lab shell has the page", 'href="#venue"' in open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "web", "index.html")).read())

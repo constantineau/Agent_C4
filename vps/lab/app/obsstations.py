@@ -36,7 +36,9 @@ _NDBC_TABLE = "https://www.ndbc.noaa.gov/data/stations/station_table.txt"
 
 CACHE_S = 24 * 3600
 MAX_PER_KIND = 8          # probe at most this many of each kind (nearest first)
-PROBE_DEADLINE_S = 120    # Find stations answers by then (gateway cap ~300 s); late checks = not checked
+DEADLINE_S = 150          # Find stations answers by then (gateway cap ~300 s): station lists and
+                          # data checks share it; a list that is late is a note, a late check is
+                          # "not checked"
 _cache: dict = {}
 
 
@@ -49,8 +51,8 @@ def _cached(key, fn):
     return val
 
 
-def _get_text(url, timeout=45):
-    return modelskill._get(url, timeout).decode("utf-8", "replace")
+def _get_text(url, timeout=30):
+    return modelskill._get(url, timeout, retries=2).decode("utf-8", "replace")
 
 
 # ------------------------------------------------------------------------------------- METAR (IEM)
@@ -221,10 +223,17 @@ def discover(lat, lon, radius_nm, window=None, sources=None, probe_fn=None, max_
     stations with data, plus the nearest of each kind with data."""
     sources = SOURCES if sources is None else sources
     probe_fn = probe_fn or probe
+    end = time.monotonic() + (DEADLINE_S if deadline_s is None else deadline_s)
     found, notes = {}, []
-    for src in sources:
+    ex = ThreadPoolExecutor(max_workers=max(workers, len(sources)))
+    srcs = {ex.submit(src.find, lat, lon, radius_nm): src for src in sources}
+    wait(srcs, timeout=max(0.0, end - time.monotonic()))
+    for f, src in srcs.items():             # in source order: curated first
+        if not f.done():
+            notes.append(f"{src.name}: no answer in time")
+            continue
         try:
-            got = src.find(lat, lon, radius_nm)
+            got = f.result()
         except Exception:      # noqa: BLE001 — one catalogue down must not hide the others
             notes.append(f"{src.name}: could not load the station list")
             continue
@@ -246,16 +255,15 @@ def discover(lat, lon, radius_nm, window=None, sources=None, probe_fn=None, max_
     if window:
         # a stalled archive must not hold the request past the gateway cap: whatever hasn't
         # answered by the deadline is left "not checked" (obs None) and the rest come back
-        ex = ThreadPoolExecutor(max_workers=workers)
         futs = {ex.submit(probe_fn, s, window): s for s in picks}
-        done, late = wait(futs, timeout=PROBE_DEADLINE_S if deadline_s is None else deadline_s)
+        done, late = wait(futs, timeout=max(0.0, end - time.monotonic()))
         for f in done:
             futs[f]["obs"] = f.result()
         for f in late:
             futs[f]["obs"] = None
-        ex.shutdown(wait=False, cancel_futures=True)
         if late:
             notes.append(f"{len(late)} station(s) not checked in time. You can still tick them.")
+    ex.shutdown(wait=False, cancel_futures=True)
     out = sorted(picks, key=lambda s: s["dist_nm"])
     for kind in ("metar", "ndbc"):
         with_data = [s for s in out if s["kind"] == kind and (not window or s.get("obs"))]
