@@ -3676,9 +3676,13 @@ function debRecRows(rs, src) {
     const isThis = running && j.recording != null && x.recording != null
       && Math.abs(j.recording - x.recording) < 1;
     const onScreen = !running && d && Deb.viewing != null && Deb.viewing === d.id;
+    // a practice sail's stored track whose session left the boat log: no race and no session to
+    // debrief it under, so only its archived debrief opens (Codex on #323)
+    const canRun = !(src === "p" && x.session_id == null);
     const btns = running
       ? (isThis ? '<span class="muted">running…</span>' : "")
-      : `<button class="mini" onclick="debRunRecording(${arg(i)})">${d ? "Re-run" : "Debrief"}</button>`
+      : (canRun ? `<button class="mini" onclick="debRunRecording(${arg(i)})">${d ? "Re-run" : "Debrief"}</button>`
+                : '<span class="muted">not on the boat log</span>')
         + (d ? (onScreen ? ' <span class="pill ok" style="margin-left:8px">showing</span>'
                          : ` <button class="mini" style="margin-left:8px" onclick="debOpenDebrief(${d.id})">Open</button>`) : "");
     return `<tr${isThis || onScreen ? ' class="winrow"' : ""}>

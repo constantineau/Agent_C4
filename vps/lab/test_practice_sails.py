@@ -227,6 +227,9 @@ check("its Debrief posts no race and no plan", m and 'practice ? { recording: x.
 check("Debrief and Change act on the practice list",
       "debRunRecording(${arg(i)})" in JS and "debEditBoat(${arg(i)})" in JS
       and "function debList(src)" in JS)
+check("a practice track whose session left the boat log offers no Debrief (it can't run)",
+      'const canRun = !(src === "p" && x.session_id == null);' in JS
+      and "(canRun ? `<button" in JS)
 check("a practice debrief has no 'Save to Learnings' (it writes a race's notes)",
       '${r.no_race ? "" : `<div class="card">' in JS)
 check("Cole's wording: 'Practice sails', never 'without a race'",
