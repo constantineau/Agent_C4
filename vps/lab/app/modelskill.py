@@ -173,7 +173,8 @@ def fetch_metar(station, start_date, end_date, timeout=60, deadline=None):
         if deadline is not None and time.monotonic() >= deadline:
             return {}
         text = _get(url, min(timeout, max(1.0, deadline - time.monotonic())) if deadline else timeout,
-                    retries=1 if deadline else 5).decode("utf-8", "replace")
+                    retries=4 if deadline else 5).decode("utf-8", "replace")   # Iowa State
+        # throttles quick back-to-back requests with 429/503: the retries + backoff are needed
     except Exception:
         return {}
     finally:

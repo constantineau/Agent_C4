@@ -228,6 +228,7 @@ function vsRerun() {
   const s = Vs.open;
   const f = vsNewForm();
   f.name = s.name; f.lat = String(s.lat); f.lon = String(s.lon); f.radius_nm = s.radius_nm;
+  f.deep = !!(s.result && s.result.deep);     // a study with older years is re-run with them
   const sp = s.spec || {};
   if (sp.pad_days === 0 && sp.start_md && sp.start_md[1] === 1) { f.mode = "month"; f.month = sp.start_md[0]; }
   else if (sp.start_md) {
