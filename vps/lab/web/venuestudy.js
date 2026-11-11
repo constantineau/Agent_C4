@@ -76,7 +76,9 @@ function vsFormHtml() {
 
 function vsBody() {
   const f = Vs.form;
-  const b = { name: f.name, lat: Number(f.lat), lon: Number(f.lon), radius_nm: Number(f.radius_nm) || 40 };
+  // a blank lat/lon stays blank (the server says "set the place"), never 0
+  const num = (v) => (String(v).trim() === "" ? null : Number(v));
+  const b = { name: f.name, lat: num(f.lat), lon: num(f.lon), radius_nm: Number(f.radius_nm) || 40 };
   if (f.mode === "month") b.month = Number(f.month) || null; else { b.start = f.start; b.end = f.end || f.start; }
   return b;
 }
@@ -90,6 +92,7 @@ async function vsFind() {
     Vs.found = r;
     Vs.found.stations.forEach((s) => { s.use = !!s.ticked; });
   } catch (e) { if (m) m.textContent = String(e.message || e); return; }
+  if (stale("venue")) return;          // left the tab meanwhile
   paintVenueStudy();
 }
 
@@ -205,6 +208,7 @@ async function vsOpen(key) {
     if (!r.ok) throw new Error();
     Vs.open = await r.json(); Vs.climIdx = 0;
   } catch (e) { Vs.open = null; }
+  if (stale("venue")) return;
   paintVenueStudy();
 }
 

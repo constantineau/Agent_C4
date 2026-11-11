@@ -326,6 +326,8 @@ fs = client.post("/api/venue-study/stations", headers=H,
 check("stations endpoint: found, key, the year it checked",
       fs["key"] == st["key"] and isinstance(fs["checked_year"], int)
       and any(s_["id"] == "41122" for s_ in fs["stations"]))
+badr = client.post("/api/venue-study/stations", headers=H, json={"lat": 26.1, "lon": -80.05, "radius_nm": {}, "month": 11})
+check("a junk radius: a plain 400", badr.status_code == 400 and "Radius" in badr.json()["detail"])
 nost = client.post("/api/venue-study/run", headers=H, json={"lat": 26.1, "lon": -80.05, "month": 11, "stations": []})
 check("run with no station ticked: a plain 400", nost.status_code == 400 and "Tick" in nost.json()["detail"])
 go = client.post("/api/venue-study/run", headers=H, json={
