@@ -18,7 +18,10 @@ Pins:
      (Canada) passes but the verdict names those legs ("No depth data: check the paper chart");
   8) #44.1b an override pocket moves with its mark (the cache key has it);
   9) #221-3 a closing board on borrowed wind counts in `wind_filled`;
- 10) #242 the bundle verdict and the refusal text Freeze, Deploy and GPX use.
+ 10) #242 the bundle verdict and the refusal text Freeze, Deploy and GPX use;
+ 11) #325 one-click override: Override is offered only where a chart override opens the mark
+     (not a race zone, an island disk, off the chart, nor a mark the router just didn't reach),
+     and every refusal says what to click.
 """
 import math
 import os
@@ -275,6 +278,9 @@ check("a mark inside a zone: stopped, the mark named",
       (rz.get("incomplete") or {}).get("blocked_mark") == "W", rz.get("incomplete"))
 check("...and the verdict says so", "blocked" in probs and probs["blocked"]["mark"] == "W",
       list(probs))
+check("...a zone isn't opened by a chart override: none offered, move the mark (#325)",
+      probs["blocked"].get("override") is False and probs["blocked"]["fix"] == O.FIX_MOVE
+      and probs["blocked"]["text"] == O.SAFE_BLOCKED_FIXED.format(mark="W"), probs["blocked"])
 check("...not ok", (rz.get("safety") or {}).get("ok") is False)
 check("zones only, no shoreline: land not checked", "land" in probs)
 check("no depth chart: depths not checked", probs.get("depth", {}).get("text") == O.SAFE_DEPTH_NONE)
@@ -511,7 +517,12 @@ d_ov, err = RS.set_override(d_ov, "c", "W", "Cole", "chart shows rock that isn't
 check("override recorded with who/when/why",
       err is None and d_ov["courses"][0]["chart_overrides"]["W"] == {"by": "Cole", "at": 5,
                                                                     "why": "chart shows rock that isn't there"})
-check("override needs a name", RS.set_override(course("port"), "c", "W", "", "x")[1] is not None)
+d_one, err1 = RS.set_override(course("port"), "c", "W", now=7)
+check("one click (#325): no name, no reason: by Lab, why blank",
+      err1 is None and d_one["courses"][0]["chart_overrides"]["W"] == {"by": "Lab", "at": 7, "why": ""},
+      d_one["courses"][0].get("chart_overrides"))
+d_one, _ = RS.set_override(d_one, "c", "W", "", "", remove=True)
+check("remove takes it off", "chart_overrides" not in d_one["courses"][0])
 check("override on an unknown mark refused", RS.set_override(course("port"), "c", "Nope", "C", "x")[1])
 d_two = course("port")
 d_two["courses"].append(dict(d_two["courses"][0], id="other"))
@@ -520,8 +531,70 @@ check("override on a course that isn't in the race refused, nothing recorded (Co
       err2 == "No such course." and not any(c.get("chart_overrides") for c in d_two["courses"]))
 check("no course named: the race's first course, as the router picks",
       RS.set_override(course("port"), None, "W", "C", "x")[1] is None)
-d_ov, _ = RS.set_override(d_ov, "c", "W", "", "")
-check("empty why removes it", "chart_overrides" not in d_ov["courses"][0])
+d_ov, _ = RS.set_override(d_ov, "c", "W", "", "", remove=True)
+check("remove removes it", "chart_overrides" not in d_ov["courses"][0])
+
+print("11) #325 Override only where it helps; every refusal says what to click")
+
+
+class Field:                 # a checked chart: land + depths ok, a box round the test water
+    land, depth, source = "ok", "ok", "enc"
+
+    def inside(self, lat, lon):
+        return abs(lat - LAT0) < 0.5 and abs(lon - LON0) < 0.5
+
+
+def verdict(d, incomplete, fields=None):
+    c = d["courses"][0]
+    mk = [(0, "Start", c["start"]["lat"], c["start"]["lon"])] + \
+         [(i + 1, m["name"], m["lat"], m["lon"]) for i, m in enumerate(c["marks"])] + \
+         [(len(c["marks"]) + 1, "Finish", LAT0, LON0 + 0.0001)]
+    f = fields if fields is not None else Field()
+    s = O.route_safety(d, "c", mk, [{"lat": LAT0, "lon": LON0}], [], incomplete, f, None, False)
+    return {p["code"]: p for p in s["problems"]}
+
+
+blk = {"leg": 0, "to": "W", "short_nm": 3.0, "blocked_mark": "W"}
+pb = verdict(course("port"), blk)
+check("a mark the chart blocks: Override offered", pb["blocked"].get("override") is True
+      and pb["blocked"]["fix"] == O.FIX_OVERRIDE, pb)
+pb = verdict(course("port", overrides={"W": {"by": "Lab", "at": 1, "why": ""}}), blk)
+check("...still blocked with an override on it: not offered again, move it",
+      pb["blocked"].get("override") is False and pb["blocked"]["fix"] == O.FIX_MOVE, pb)
+far = course("port", marks=[{"name": "W", "type": "mark", "rounding": "port", "lat": LAT0 + 0.9,
+                             "lon": LON0}])
+pb = verdict(far, blk)
+check("...off the chart: not offered", pb["blocked"].get("override") is False, pb)
+isl = course("port", marks=[{"name": "W", "type": "mark", "rounding": "port", "lat": LAT0 + 3 / 60.0,
+                             "lon": LON0},
+                            {"name": "Rock", "type": "island", "rounding": "port", "lat": LAT0 + 3 / 60.0,
+                             "lon": LON0 + 0.2 * DLON, "radius_nm": 0.5}])
+backstop = Field()
+backstop.source = "gshhg"
+check("...inside an island disk on the coastline backstop: not offered",
+      verdict(isl, blk, backstop)["blocked"].get("override") is False)
+check("...the same island under ENC charts (its land is shoreline): offered",
+      verdict(isl, blk)["blocked"].get("override") is True)
+pu = verdict(course("port"), {"leg": 0, "to": "W", "short_nm": 0.8, "reason": "time budget"})
+check("a mark the router just didn't reach: no Override (not the chart), run it again",
+      pu["unreached"].get("override") is False and pu["unreached"]["fix"] == O.FIX_RERUN, pu)
+
+b_blk = dict(b_ok, consensus={"safety": {"ok": False, "problems": [
+    {"code": "blocked", "mark": "W", "text": "W is on land.", "override": True}]}})
+why = RS.refusal(dict(b_blk, safety=RS.bundle_verdict(b_blk))) or ""
+check("refusal on a chart block says click Override, then build", "Click Override" in why
+      and "W" in why and "build the playbook again" in why, why)
+b_old = dict(b_ok, consensus={"safety": {"ok": False, "problems": [
+    {"code": "blocked", "mark": "W", "text": "W is on land."}]}})
+check("...a verdict from before #325 (no `override`): the same",
+      "Click Override" in (RS.refusal(dict(b_old, safety=RS.bundle_verdict(b_old))) or ""))
+b_mv = dict(b_ok, consensus={"safety": {"ok": False, "problems": [
+    {"code": "blocked", "mark": "W", "text": "W is in a race zone.", "override": False}]}})
+why = RS.refusal(dict(b_mv, safety=RS.bundle_verdict(b_mv))) or ""
+check("refusal on a zone block says move it", "Move W in Course & Marks" in why
+      and "Override" not in why, why)
+why = RS.refusal(dict(b_bad, safety=vb)) or ""
+check("any other refusal says build again", why.endswith(RS.FIX_REBUILD), why)
 
 print("ALL OK" if ok else "SOME FAILED")
 raise SystemExit(0 if ok else 1)

@@ -1628,14 +1628,63 @@ SAFE_LAND_FAILED = "Shoreline didn't load. Land not checked."
 SAFE_DEPTH_NONE = "No depth chart. Depths not checked."
 SAFE_DEPTH_FAILED = "Depth chart didn't load. Depths not checked."
 SAFE_BOX = "Route leaves the chart area."
-SAFE_BLOCKED = "{mark} is on land, in shallow water or in a no-go zone on the chart."
+SAFE_BLOCKED = "{mark} is on land or in shallow water on the chart."
 SAFE_UNREACHED = "Route doesn't reach {mark}."
 SAFE_SIDE = "Route leaves {mark} on the wrong side."
+SAFE_BLOCKED_FIXED = "{mark} is in a race zone, by an island or off the chart."
+# what to click, beside each problem (#325): the Lab shows it under the problem; Freeze, Lock-in,
+# Deploy and GPX refusals say it too (routesafety.refusal)
+FIX_OVERRIDE = "Chart wrong? Click Override."
+FIX_MOVE = "Move it in Course & Marks."
+FIX_RERUN = "Run it again."
+FIX_AVOID = "Tick Avoid land & zones and run again."
+FIX_CHARTS = "Pick charts with depths and run again."
 # not a problem (Cole's decision on #242): water no chart or depth grid gives a depth for (NOAA ENC
 # is US-only). The route isn't refused there; the verdict marks the legs and the Lab shows this.
 SAFE_NO_DEPTH = "No depth data: check the paper chart."
 # depths from a depth grid that is not a chart (#292): checked, but the leg says which grid
 SAFE_GRID_DEPTH = "Depths from {label}, not a chart: check the paper chart."
+
+
+def _in_ring(lat, lon, ring):
+    """Ray cast: is (lat, lon) inside `ring` [(lon, lat), ...]?"""
+    inside, n = False, len(ring)
+    for i in range(n):
+        x1, y1 = ring[i]
+        x2, y2 = ring[(i + 1) % n]
+        if (y1 > lat) != (y2 > lat) and lon < x1 + (lat - y1) * (x2 - x1) / (y2 - y1):
+            inside = not inside
+    return inside
+
+
+def _override_helps(definition, course_id, name, marks, fields):
+    """Would a chart override open nav mark `name`, which the route found blocked? (#325) An
+    override cuts a pocket in the shoreline layers only (land, shoal, obstruction:
+    `geo.obstacles.build_for_course`); a race zone, an island disk (the coastline backstop) and
+    the edge of the chart are never opened. So: no if the mark already has an override (then
+    something else blocks it), lies in a race zone or an island disk, or is outside every chart;
+    yes otherwise."""
+    from .geo import obstacles as geo
+    if name in geo.chart_overrides(definition, course_id):
+        return False
+    at = next(((la, lo) for _s, n, la, lo in marks if n == name), None)
+    if at is None:
+        return False
+    lat, lon = at
+    boxed = [f for f in fields if hasattr(f, "inside")]
+    if boxed and not any(f.inside(lat, lon) for f in boxed):
+        return False
+    for z in (definition or {}).get("zones") or []:
+        if z.get("type") not in ("exclusion", "hazard", "tss"):
+            continue
+        rings = geo._zone_rings(z.get("geometry"))
+        if rings and _in_ring(lat, lon, rings[0]) and not any(_in_ring(lat, lon, h) for h in rings[1:]):
+            return False
+    if any(getattr(f, "source", None) != "enc" for f in fields):
+        for isl in geo._course_islands(definition or {}, course_id):
+            if _hav_nm(lat, lon, isl["lat"], isl["lon"]) <= isl["radius_nm"]:
+                return False
+    return True
 
 
 def route_safety(definition, course_id, marks, full_path, leg_end_idx, incomplete, obstacles,
@@ -1648,26 +1697,34 @@ def route_safety(definition, course_id, marks, full_path, leg_end_idx, incomplet
     from .geo import obstacles as geo
     problems = []
 
-    def add(code, text, mark=None):
+    def add(code, text, mark=None, fix=FIX_RERUN, **extra):
         if not any(p["code"] == code and p.get("mark") == mark for p in problems):
-            problems.append({"code": code, "mark": mark, "text": text})
+            problems.append(dict({"code": code, "mark": mark, "text": text, "fix": fix}, **extra))
 
     fields = [f for f in [obstacles] + list(leg_obstacles or []) if f is not None]
     if land_failed:
         add("land", SAFE_LAND_FAILED)
     elif not fields or all(getattr(f, "land", "off") == "off" for f in fields):
-        add("land", SAFE_LAND_OFF)
+        add("land", SAFE_LAND_OFF, fix=FIX_AVOID)
     depths = {getattr(f, "depth", "none") for f in fields}
     if "failed" in depths:
         add("depth", SAFE_DEPTH_FAILED)
     elif not fields or depths != {"ok"}:
-        add("depth", SAFE_DEPTH_NONE)
+        add("depth", SAFE_DEPTH_NONE, fix=FIX_CHARTS)
     if incomplete:
         if incomplete.get("blocked_mark"):
+            # the chart (or a race zone / island) puts the mark itself where the boat can't go.
+            # `override`: would a chart override open it? (#325) Only the Lab offers the button then
             m = incomplete["blocked_mark"]
-            add("blocked", SAFE_BLOCKED.format(mark=m), m)
+            if _override_helps(definition, course_id, m, marks, fields):
+                add("blocked", SAFE_BLOCKED.format(mark=m), m, fix=FIX_OVERRIDE, override=True)
+            else:
+                add("blocked", SAFE_BLOCKED_FIXED.format(mark=m), m, fix=FIX_MOVE, override=False)
         else:
-            add("unreached", SAFE_UNREACHED.format(mark=incomplete.get("to")), incomplete.get("to"))
+            # the router ran out of time or found no clear heading: the mark itself is open
+            # water, so a chart override (a pocket AT the mark) can't help (#325)
+            add("unreached", SAFE_UNREACHED.format(mark=incomplete.get("to")), incomplete.get("to"),
+                override=False)
 
     pts = [(p["lat"], p["lon"]) for p in full_path]
 

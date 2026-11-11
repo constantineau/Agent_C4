@@ -8,8 +8,8 @@ Pins (no network, temp dirs):
     the readiness banner) refuses it;
   * the GPX export refuses it;
   * a bundle that passed is frozen, locked in and exported as before;
-  * the chart-override route records who/when/why on the course's nav mark, refuses an unknown
-    mark or no name, and an empty why removes it.
+  * the chart-override route records who/when/why on the course's nav mark (one click, #325: no
+    name is "Lab", the reason optional), refuses an unknown mark, and `remove` removes it.
 """
 import os
 import tempfile
@@ -137,11 +137,15 @@ check("the answer carries the course's overrides as saved (the Lab merges them, 
       r.json().get("course_id") == "c" and r.json().get("chart_overrides", {}).get("Finish") == ov)
 r = client.post("/api/races/r1/chart-override", json={"course_id": "c", "mark": "Nowhere", "by": "C", "why": "x"})
 check("unknown mark: refused", r.status_code == 400)
-r = client.post("/api/races/r1/chart-override", json={"course_id": "c", "mark": "A", "by": "", "why": "x"})
-check("no name: refused", r.status_code == 400)
+r = client.post("/api/races/r1/chart-override", json={"course_id": "c", "mark": "A"})
+check("one click (#325): no name, no reason: saved as the Lab",
+      r.status_code == 200 and RACE["courses"][0]["chart_overrides"]["A"]["by"] == "Lab"
+      and RACE["courses"][0]["chart_overrides"]["A"]["why"] == "", r.text[:120])
+r = client.post("/api/races/r1/chart-override", json={"course_id": "c", "mark": "A", "remove": True})
+check("remove: one click", r.status_code == 200 and "A" not in RACE["courses"][0]["chart_overrides"])
 r = client.post("/api/races/r1/chart-override", json={"course_id": "c", "mark": "Finish", "by": "", "why": ""})
-check("empty why removes it", r.status_code == 200 and "chart_overrides" not in RACE["courses"][0]
-      and r.json().get("chart_overrides") == {})
+check("empty who + why (a Lab page from before #325) removes it", r.status_code == 200
+      and "chart_overrides" not in RACE["courses"][0] and r.json().get("chart_overrides") == {})
 
 print("chart overrides survive any other save of the race (Codex on #287)")
 import copy  # noqa: E402
