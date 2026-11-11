@@ -22,6 +22,11 @@ unchanged). The cfgrib parse runs in an ISOLATED subprocess so a native eccodes 
 skipped field instead of killing the optimize worker (mirrors `wind/grib.IsolatedGribParser`). The
 degradation MODEL (how Hs slows the boat) lives in `optimizer._wave_factor` so it's shared by any
 source and stays deliberately conservative.
+
+Sources (#308): GLWU is one `seasource.SeaSource`, chosen by its water mask; NOAA GFS-Wave
+(`GFSWaveSource`, the global WAVEWATCH III run, 1/6°) covers the open sea through the same NOMADS
+GRIB filter and the same isolated parse. The course area picks the source (seasource.pick); an
+empty field says why in `why`.
 """
 import bisect
 import datetime
@@ -35,6 +40,8 @@ import time
 import urllib.parse
 
 import numpy as np
+
+from . import atomicio, seasource
 
 ENABLED = os.environ.get("WAVES_ENABLED", "1").strip().lower() in ("1", "true", "yes", "on")
 # A uniform sea state (m) for what-ifs / demos / tests when no real provider is wired — 0 = off.
@@ -53,8 +60,13 @@ GLWU_FILTER = os.environ.get("WAVES_GLWU_FILTER",
 GLWU_PRODUCT = os.environ.get("WAVES_GLWU_PRODUCT", "grlc_2p5km")
 GLWU_CYCLES = (1, 7, 13, 19)
 WAVE_CACHE = os.environ.get("GRIB_CACHE", "/srv/gribcache")
-# Great-Lakes bounding box (s, n, w, e) — quick reject for non-Great-Lakes races.
-_DOMAIN = (41.0, 49.5, -93.0, -76.0)
+# --- GFS-Wave provider config (global WAVEWATCH III, one GRIB per forecast hour) -----------------
+GFSWAVE_FILTER = os.environ.get("WAVES_GFSWAVE_FILTER",
+                                "https://nomads.ncep.noaa.gov/cgi-bin/filter_gfswave.pl")
+GFSWAVE_STEP_H = float(os.environ.get("WAVES_GFSWAVE_STEP_H", "3"))
+GFSWAVE_MAX_FILES = int(os.environ.get("WAVES_GFSWAVE_MAX_FILES", "40"))   # downloads per build
+GFSWAVE_LAG_H = float(os.environ.get("WAVES_GFSWAVE_LAG_H", "6"))          # posted ~5-6 h after
+GFSWAVE_MAX_FHR = 384          # hourly to f120, then 3-hourly
 
 # Built fields, reused only for the same dataset cycle, area, full time span and processing (#44.2).
 # key -> (field, built_at, exact); `exact` = built from the cycle it was keyed on, not a fallback.
@@ -75,6 +87,8 @@ name = "swh" if "swh" in ds.data_vars else list(ds.data_vars)[0]
 v = ds[name]
 lat = np.asarray(ds["latitude"].values, dtype="float64")
 lon = np.asarray(ds["longitude"].values, dtype="float64")
+if lat.ndim == 1 and lon.ndim == 1:                    # a regular grid (GFS-Wave): 2-D like GLWU
+    lon, lat = np.meshgrid(lon, lat)
 lon = np.where(lon > 180.0, lon - 360.0, lon)          # 0..360 -> -180..180
 vt = np.asarray(ds["valid_time"].values).astype("datetime64[s]").astype("int64")
 arr = np.asarray(v.values, dtype="float32")
@@ -101,6 +115,8 @@ print("OK")
 class WaveField:
     loaded = False
     source = None
+    label = None           # the source's name for people (the data block)
+    why = None             # an empty field: why (seasource.OUTSIDE, NO_DATA, OFF, OFFLINE)
 
     def wave_at(self, lat, lon, epoch):
         return 0.0
@@ -127,8 +143,10 @@ class WaveField:
 
 
 class ZeroWave(WaveField):
-    """Flat water everywhere — the default outside the Great Lakes / on any miss (route unchanged)."""
-    pass
+    """Flat water everywhere — outside every source / on any miss (route unchanged)."""
+
+    def __init__(self, why=None):
+        self.why = why
 
 
 class ConstantWave(WaveField):
@@ -152,10 +170,20 @@ class GLWUWave(WaveField):
     NaN cells are land → 0 (flat). Mirrors `current.GLOFSCurrent`."""
     loaded = True
     source = "glwu"
+    label = "NOAA GLWU"
 
-    def __init__(self, lat2d, lon2d, slices, meta):
+    def __init__(self, lat2d, lon2d, slices, meta, source=None, label=None, nearest_water=False):
+        if source:
+            self.source = source
+        if label:
+            self.label = label
         self.lat2d = lat2d                  # 2-D latitude grid
         self.lon2d = lon2d                  # 2-D longitude grid (normalised -180..180)
+        # a coarse grid (GFS-Wave, 1/6°): a point by the shore samples the nearest SEA cell, not
+        # the land cell it falls in (which would read as flat water)
+        self._land = None
+        if nearest_water and slices:
+            self._land = ~np.isfinite(slices[0][1])
         self.slices = slices                # [(epoch, hs2d)] sorted by epoch
         self.epochs = [s[0] for s in slices]
         self.meta = meta
@@ -174,6 +202,8 @@ class GLWUWave(WaveField):
         if kk in self._ji:
             return self._ji[kk]
         d2 = (self.lat2d - lat) ** 2 + ((self.lon2d - lon) * self._coslat) ** 2
+        if self._land is not None:
+            d2 = np.where(self._land, np.inf, d2)
         j, i = np.unravel_index(int(np.argmin(d2)), d2.shape)
         # reject if the nearest cell is absurdly far (position outside the GLWU grid)
         ji = None if float(d2[j, i]) > 0.25 else (int(j), int(i))   # ~0.5° → outside
@@ -207,7 +237,8 @@ class GLWUWave(WaveField):
         return hs if hs > 0 else 0.0
 
     def status(self):
-        return {"loaded": True, "source": self.source, "frames": len(self.slices), **self.meta}
+        return {"loaded": True, "source": self.source, "label": self.label,
+                "frames": len(self.slices), **self.meta}
 
 
 def _cycle_for(epoch, back=0):
@@ -302,10 +333,6 @@ def _build_glwu(bbox, t_start, t_end, log):
     n, s, w, e = bbox[0], bbox[1], bbox[2], bbox[3]
     if n < s:                                   # course_bbox is (north, south, west, east)
         n, s = s, n
-    dom_s, dom_n, dom_w, dom_e = _DOMAIN
-    if n < dom_s or s > dom_n or e < dom_w or w > dom_e:
-        log("waves: course outside the Great Lakes (GLWU) domain — flat water")
-        return None
     sub = (s - 0.1, n + 0.1, w - 0.1, e + 0.1)  # (s, n, w, e) with a small margin
 
     area = (round(s, 2), round(n, 2), round(w, 2), round(e, 2))
@@ -344,20 +371,151 @@ def _build_glwu(bbox, t_start, t_end, log):
     return None
 
 
+def _gfswave_cycle(epoch, back=0, now=None):
+    """Freshest posted GFS-Wave cycle (00/06/12/18Z) at or before min(race start, now) − lag."""
+    def utc(x):
+        return datetime.datetime.fromtimestamp(x, datetime.timezone.utc).replace(tzinfo=None)
+    now_dt = utc(time.time() if now is None else now)
+    probe = min(utc(epoch), now_dt) - \
+        datetime.timedelta(hours=GFSWAVE_LAG_H)
+    base = probe.replace(hour=(probe.hour // 6) * 6, minute=0, second=0, microsecond=0)
+    return base - datetime.timedelta(hours=6 * back)
+
+
+def _gfswave_url(cyc, fhr, sub, grid):
+    s, n, w, e = sub
+    qs = urllib.parse.urlencode({
+        "dir": f"/gfs.{cyc:%Y%m%d}/{cyc.hour:02d}/wave/gridded",
+        "file": f"gfswave.t{cyc.hour:02d}z.{grid}.f{fhr:03d}.grib2",
+        "var_HTSGW": "on", "lev_surface": "on", "subregion": "",
+        "leftlon": w, "rightlon": e, "toplat": n, "bottomlat": s,
+    })
+    return f"{GFSWAVE_FILTER}?{qs}"
+
+
+def _gfswave_hours(cyc_ep, t_start, t_end):
+    """Forecast hours over the window: every GFSWAVE_STEP_H on the files that exist (hourly to
+    f120, 3-hourly after), one before and one after, capped."""
+    def exists(f):
+        return 0 <= f <= GFSWAVE_MAX_FHR and (f <= 120 or f % 3 == 0)
+    lo = int(math.floor((t_start - cyc_ep) / 3600.0)) - int(GFSWAVE_STEP_H)
+    hi = int(math.ceil((t_end - cyc_ep) / 3600.0)) + int(GFSWAVE_STEP_H)
+    out, f, step = [], max(lo, 0), max(1, int(GFSWAVE_STEP_H))
+    while f <= min(hi, GFSWAVE_MAX_FHR) and len(out) < GFSWAVE_MAX_FILES:
+        g = f
+        while not exists(g) and g <= GFSWAVE_MAX_FHR:
+            g += 1
+        if g > GFSWAVE_MAX_FHR or (out and g == out[-1]):
+            f += step
+            continue
+        out.append(g)
+        f = g + step
+    return out
+
+
+def _build_gfswave(bbox, t_start, t_end, log, grid, label, now=None):
+    """GFS-Wave significant-wave-height field over the course bbox + window, or None. One small
+    GRIB-filter download per forecast hour, joined into one file and parsed once in isolation."""
+    from .wind import grib
+    now = time.time() if now is None else now
+    n, s, w, e = bbox[0], bbox[1], bbox[2], bbox[3]
+    if n < s:
+        n, s = s, n
+    sub = (s - 0.25, n + 0.25, w - 0.25, e + 0.25)    # a few 1/6° cells beyond the course
+    area = (round(s, 2), round(n, 2), round(w, 2), round(e, 2))
+    want = _gfswave_cycle(t_start, now=now)
+    key = ("gfswave", grid, CACHE_VERSION, f"{want:%Y%m%d%H}", *area, int(t_start), int(t_end),
+           GFSWAVE_STEP_H)
+    hit = _cache_get(key, now)
+    if hit is not None:
+        log("waves: GFS-Wave field (cached)")
+        return hit
+    for back in range(CYCLE_FALLBACKS + 1):
+        cyc = want - datetime.timedelta(hours=6 * back)
+        cyc_ep = cyc.replace(tzinfo=datetime.timezone.utc).timestamp()
+        hours = _gfswave_hours(cyc_ep, t_start, t_end)
+        if not hours:
+            log("waves: GFS-Wave's forecast doesn't reach the race yet")
+            return None
+        tag = f"gfswave_{grid}_{cyc:%Y%m%d%H}_" + \
+            hashlib.md5(repr((area, hours)).encode()).hexdigest()[:6]
+        joined = os.path.join(WAVE_CACHE, "gfswave", tag + ".grib2")
+        try:
+            parts = []
+            for f in hours:
+                part = joined + f".f{f:03d}"
+                if not os.path.exists(part):
+                    grib.http_download(_gfswave_url(cyc, f, sub, grid), part, timeout=int(FETCH_TIMEOUT))
+                parts.append(part)
+        except Exception as ex:           # not posted yet / no egress → step back a cycle
+            log(f"waves: GFS-Wave cycle {cyc:%Y-%m-%d %HZ} not available ({type(ex).__name__})"
+                " — stepping back")
+            continue
+        blob = b""
+        for part in parts:                 # a few hundred bytes each: join in memory
+            with open(part, "rb") as f_in:
+                blob += f_in.read()
+        atomicio.write_bytes(joined, blob)
+        parsed = _parse_isolated(joined, t_start, t_end, log)
+        for part in parts + [joined]:      # parsed: the arrays are in memory, the files can go
+            try:
+                os.remove(part)
+            except OSError:
+                pass
+        if parsed is None:
+            log("waves: GFS-Wave parse failed")
+            return None
+        lat2d, lon2d, epochs, hs = parsed
+        if len(epochs) == 0 or lat2d.size == 0 or not np.isfinite(hs).any():
+            log(f"waves: GFS-Wave cycle {cyc:%Y-%m-%d %HZ} has no sea in the window")
+            return None
+        slices = [(int(epochs[i]), hs[i]) for i in range(len(epochs))]
+        meta = {"cycle": f"{cyc:%Y-%m-%d %HZ}", "product": grid, "domain": "global"}
+        field = GLWUWave(lat2d, lon2d, slices, meta, source="gfs-wave", label=label,
+                         nearest_water=True)
+        _cache_put(key, field, back == 0, now)
+        log(f"waves: GFS-Wave {len(slices)} frames from {cyc:%Y-%m-%d %HZ} "
+            f"(peak {field.peak_hs():.1f} m)")
+        return field
+    log("waves: no GFS-Wave data for the window")
+    return None
+
+
+class GLWUSource(seasource.SeaSource):
+    """NOAA GLWU: all five Great Lakes (and Lake St Clair), 2.5 km."""
+    kind, id, name, resolution_km, sea, mask = "waves", "glwu", "NOAA GLWU", 2.5, False, "glwu"
+
+    def fetch(self, bbox, t_start, t_end, log):
+        return _build_glwu(bbox, t_start, t_end, log)
+
+
+class GFSWaveSource(seasource.SeaSource):
+    """NOAA GFS-Wave (WAVEWATCH III), one of its gridded products: `global.0p16` (1/6°, about
+    15°S to 52°N) and `global.0p25` (1/4°, the whole globe) for the rest."""
+    kind, id, sea = "waves", "gfs-wave", True
+
+    def __init__(self, grid, resolution_km, name):
+        self.grid, self.resolution_km, self.name = grid, resolution_km, name
+        self.mask = "gfs-wave-" + grid.replace(".", "-")
+
+    def fetch(self, bbox, t_start, t_end, log):
+        return _build_gfswave(bbox, t_start, t_end, log, self.grid, self.name)
+
+
+# Every wave source; the course area picks one (finest covering first).
+SOURCES = [GLWUSource(),
+           GFSWaveSource("global.0p16", 18.0, "NOAA GFS-Wave (global 1/6°)"),
+           GFSWaveSource("global.0p25", 28.0, "NOAA GFS-Wave (global 1/4°)")]
+
+
 def build_wavefield(bbox, t_start, t_end, on_progress=None):
     """Best-effort sea-state field over the course bbox + window. A uniform `ConstantWave` what-if
-    (`WAVES_CONST_HS`) wins if set; otherwise the real `GLWUWave` (Great Lakes); any miss / outside the
-    domain → `ZeroWave` (route unchanged), like the GRIB/current layers."""
+    (`WAVES_CONST_HS`) wins if set; otherwise the source that covers the area (seasource.pick);
+    any miss / outside every source → `ZeroWave(why)` (route unchanged), saying why."""
     log = on_progress or (lambda *_: None)
     if not ENABLED:
-        return ZeroWave()
+        return ZeroWave(seasource.OFF)
     if CONST_HS > 0:
         log(f"waves: uniform {CONST_HS} m sea state (what-if)")
         return ConstantWave(CONST_HS)
-    try:
-        field = _build_glwu(bbox, t_start, t_end, log)
-        if field is not None:
-            return field
-    except Exception as ex:                     # never let the wave layer break an optimize
-        log(f"waves: GLWU build failed ({type(ex).__name__}) — flat water")
-    return ZeroWave()
+    return seasource.build(SOURCES, bbox, t_start, t_end, log, ZeroWave, "waves")

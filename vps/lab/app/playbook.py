@@ -695,12 +695,13 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
         buoy_promises = {}
 
     # water current (set & drift) — every playbook route crabs through the SAME current as the main
-    # optimize, so the variants/consensus reflect a fair/foul stream, not just wind. Off-domain / miss
-    # → ZeroCurrent (routes unchanged). Built once here and shared across consensus + every sub-field.
-    from . import current as currentmod, wave as wavemod
+    # optimize, so the variants/consensus reflect a fair/foul stream, not just wind. No source for
+    # the area / miss → ZeroCurrent(why) (routes unchanged, and every route's `data` says so, #308).
+    # Built once here and shared across consensus + every sub-field.
+    from . import current as currentmod, wave as wavemod, seasource
     cur = currentmod.build_currentfield(bbox, start_epoch, t_end, on_progress=log.append)
     waves = (wavemod.build_wavefield(bbox, start_epoch, t_end, on_progress=log.append)
-             if use_waves else wavemod.ZeroWave())
+             if use_waves else wavemod.ZeroWave(seasource.OFF))
 
     subs = _subfields(wf)
     per = max(40, int(time_budget_s / (len(subs) + 1)))     # split the budget across routes
@@ -775,6 +776,7 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
             # the route's own health (forecast ended, shoreline, …): shown before Deploy (#51)
             "degraded": bool(rep.get("degraded")), "warnings": list(rep.get("warnings") or []),
             "safety": rep.get("safety"),
+            "data": rep.get("data"),       # #308: the current and wave sources, or "none: why"
             "route": {"legs": rep.get("legs"), "path": rep.get("path"),
                       "leg_end_idx": rep.get("leg_end_idx"),
                       "total_sailed_nm": rep.get("total_sailed_nm"),
@@ -832,6 +834,7 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
             "degraded": bool(consensus.get("degraded")),
             "warnings": list(consensus.get("warnings") or []),
             "safety": consensus.get("safety"),
+            "data": consensus.get("data"),
         },
         # every route's warnings, once each: what the Lab shows on the playbook and on Deploy
         "degraded": (bool(consensus.get("degraded")) or any(v["degraded"] for v in variants)
@@ -848,6 +851,7 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
                       for c in candidates],
         "dropped_scenarios": dropped,     # per-model routes that didn't finish (#31) — not used
         "windfield": wf.status(), "current": cur.status(), "waves": waves.status(),
+        "data": consensus.get("data"),     # #308: one current and wave field for every route here
         "realized": consensus.get("realized"), "log": log,
         "skipped_marks": consensus.get("skipped_marks", []),
         "buoy_promises": buoy_promises,   # station_id -> [[t, tws_kn, twd_deg]…] from the blend

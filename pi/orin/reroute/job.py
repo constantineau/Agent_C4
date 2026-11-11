@@ -49,8 +49,9 @@ MODELS = tuple(m.strip() for m in os.environ.get("REROUTE_MODELS", "gfs,hrrr").s
 BOAT_ID = boat_id_setting.require("REROUTE_BOAT")   # no default: never re-route as another boat (#307)
 ROUTE_BUDGET_S = float(os.environ.get("REROUTE_ROUTE_BUDGET_S", "300"))   # optimizer time cap
 RESOLUTION = os.environ.get("REROUTE_RESOLUTION", "auto")
-USE_CURRENT = os.environ.get("REROUTE_CURRENT", "0") == "1"   # LMHOFS: network only
-USE_WAVES = os.environ.get("REROUTE_WAVES", "0") == "1"       # GLWU: network only
+# current / sea state: the Lab's sources, picked by the course area (#308); network only
+USE_CURRENT = os.environ.get("REROUTE_CURRENT", "0") == "1"
+USE_WAVES = os.environ.get("REROUTE_WAVES", "0") == "1"
 # the carried chart format: land only, no waypoint pockets (vps/lab/app/orinassets.CHART_KIND). Older formats
 # ("land" had pockets at every original mark, clearing shore for good) count as out of date.
 CHART_KIND = "land-v2"
@@ -291,6 +292,15 @@ def load_obstacles(definition, course_id, full_definition, full_course_id, boat,
 
 
 # ---- the comparison with the plan -------------------------------------------------------------
+def _sea_none(online):
+    """The `data` block when no route came back: what the run would have had (#308)."""
+    from app import current, seasource, wave
+    def why(use):
+        return seasource.OFF if not use else (seasource.NO_DATA if online else seasource.OFFLINE)
+    return seasource.data_block(current.ZeroCurrent(why(USE_CURRENT)),
+                                wave.ZeroWave(why(USE_WAVES)))
+
+
 def vs_plan(plan, lat, lon, now, finish_eta):
     """Minutes saved against the plan: the plan's own time left from the boat's nearest point on
     it, minus the new route's time left. Positive = the new route is faster."""
@@ -475,7 +485,7 @@ def run(req, now=None, on_progress=None, on_phase=None, is_online=None):
     # cached cycle inside the loader (GribSource.prev_cycle); everything that loaded fine is kept
     res = routerun.run_course(
         d, cid, now, sources, avoid=True, per_model=False, resolution=RESOLUTION,
-        use_waves=USE_WAVES and online, use_current=USE_CURRENT and online,
+        use_waves=USE_WAVES, use_current=USE_CURRENT, offline=not online,
         on_progress=say, on_phase=phase, boat=boat, model_skill=False, obstacles=field,
         leg_obstacles=leg_fields,
         time_budget_s=ROUTE_BUDGET_S, fallback_tries=None if online else 0,
@@ -496,6 +506,8 @@ def run(req, now=None, on_progress=None, on_phase=None, is_online=None):
            "asked_at": req.get("asked_at"), "computed_from": int(now),
            "from": {"lat": round(lat, 5), "lon": round(lon, 5)},
            "marks": names, "weather": weather, "boat": boat_info,
+           # #308: the current and wave sources this route used, or "none: why", in words
+           "data": res.get("data") or _sea_none(online),
            # which polar this route sailed on: the deployed boat's, or the profile's own here
            "polar": dict(boat_polar.summary(polar), **{"from": polar_from})}
     if not res.get("available"):
@@ -509,6 +521,10 @@ def run(req, now=None, on_progress=None, on_phase=None, is_online=None):
                  "point_of_sail": lg.get("point_of_sail"), "first_heading": lg.get("first_heading"),
                  "reached": lg.get("reached", True)} for lg in res.get("legs") or []]
         warnings = list(res.get("warnings") or [])
+        # sea data asked for but missing, plainly, after the rest (the tidal warning is already
+        # first); a layer turned off in the settings is only in `data`
+        warnings += [n for n in (out["data"].get("notes") or [])
+                     if n not in warnings and not n.endswith(": turned off.")]
         if chart_note:
             warnings.insert(0, chart_note)
         if not full:

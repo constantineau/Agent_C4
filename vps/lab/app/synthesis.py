@@ -807,6 +807,7 @@ def synthesize(definition, course_id, start_epoch, models, ensemble_members=0, t
             "route": v.get("route"),
             "degraded": bool(v.get("degraded")), "warnings": list(v.get("warnings") or []),
             "safety": v.get("safety"),
+            "data": v.get("data"),         # #308: the current and wave sources, or "none: why"
         })
 
     # ---- Playbook v2: the play library from the scenario fan (docs/PLAYBOOK_V2.md) --------------
@@ -848,6 +849,8 @@ def synthesize(definition, course_id, start_epoch, models, ensemble_members=0, t
         # the routes' own warnings (forecast ended, shoreline, …): the Lab shows them before Deploy
         "degraded": bool(playbook.get("degraded")),
         "warnings": list(playbook.get("warnings") or []),
+        # #308: the current and wave sources every route above used, or "none: why", in words
+        "data": playbook.get("data"),
         "boat_model": boat_model,      # polars/sail crossovers + draft frozen into the homework
         # the speed-model inputs every route above was built with, so the debrief's best route can
         # be sailed by the same boat (#244) even after the boat's settings change
