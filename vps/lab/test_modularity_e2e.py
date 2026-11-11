@@ -1,6 +1,6 @@
 """Modularity acceptance test (#315, map #316): a second boat on a race far from Lake Huron.
 
-Agent C4 must work for ANY boat and ANY regatta. This runs Bravo (vps/lab/boats/bravo.json, its
+Agent C4 must work for ANY boat and ANY regatta. This runs Bravo (vps/lab/testdata/boats/bravo.json, its
 own ORC cert polar) on a synthetic offshore race in the English Channel — tidal water, outside the
 Great Lakes and outside US charts — through the Lab's route, playbook and debrief, and through the
 Orin's onboard re-route. (The Pi engine half is vps/agent/test_modularity_e2e_onboard.py.)
@@ -44,7 +44,6 @@ os.environ.pop("REROUTE_BOAT", None)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
-BOATS = next(p for p in (os.path.join(HERE, "boats"), "/srv/boats") if os.path.isdir(p))
 
 import numpy as np  # noqa: E402
 import pytest  # noqa: E402
@@ -125,7 +124,7 @@ WIGHT = [[(-1.58, 50.57), (-1.07, 50.57), (-1.07, 50.77), (-1.58, 50.77), (-1.58
 
 
 def load_bravo():
-    with open(os.path.join(BOATS, "bravo.json")) as f:
+    with open(os.path.join(HERE, "testdata", "boats", "bravo.json")) as f:
         return json.load(f)
 
 
@@ -135,6 +134,8 @@ assert BRAVO.get("cert_polar"), "bravo.json must carry its own polar"
 
 # ---- the Lab, with no network ----------------------------------------------------------------
 from app import boats, judge, synthesis, main, racestart, fleetimport, retro  # noqa: E402
+import boat_fixtures  # noqa: E402
+boat_fixtures.install()      # bravo is a test-only boat: the shipped library never holds it
 from app import wind as WIND  # noqa: E402
 from app.geo import coastline  # noqa: E402
 from app.wind import grib, windfield  # noqa: E402

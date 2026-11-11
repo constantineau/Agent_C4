@@ -85,7 +85,7 @@ def xfail(ticket, why):
     return pytest.mark.xfail(strict=True, raises=AssertionError, reason=f"{why} ({ticket})")
 
 
-with open(os.path.join(REPO, "vps", "lab", "boats", "bravo.json")) as _f:
+with open(os.path.join(REPO, "vps", "lab", "testdata", "boats", "bravo.json")) as _f:
     BRAVO = json.load(_f)
 POLAR = [tuple(map(float, p)) for p in BRAVO["cert_polar"]]
 

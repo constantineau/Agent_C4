@@ -120,9 +120,14 @@ def _oracle_windfield(bbox, start, t_end, models, race_id, log):
 _ACTIVE = object()     # "read the active boat now" (callers that did not capture it at start)
 
 
+NO_RACE_NOTE = "Practice sail: no race, so no tactics."
+
+
 def run_judge(race_id, playbook_id=None, models=None, on_progress=None, recording=None,
-              boat_id=None, archive_guard=None):
-    """Debrief one RECORDING of a race.
+              boat_id=None, archive_guard=None, name=None):
+    """Debrief one RECORDING of a race — or, with `race_id` None, of a practice sail that has no
+    race (#322): the performance half only (it needs no course), the tactics half skipped by name.
+    `name` labels a practice sail's report (the session's name).
 
     Two halves, and they have different prerequisites — which is the whole point:
       - the PERFORMANCE half (boat speed vs its polar, the trust sweep, the bins the learning loop
@@ -141,20 +146,30 @@ def run_judge(race_id, playbook_id=None, models=None, on_progress=None, recordin
     if boat_id and not boat:
         return {"available": False, "note": "No profile for this session's boat."}
     wave_coeffs = boats.wave_coeffs(boat)        # None = the optimizer's env priors
-    d = store.get_race(race_id)
-    if not d:
-        return {"available": False, "note": "unknown race"}
+    no_race = race_id is None
+    if no_race:
+        # a practice sail: no race definition, no course, no playbook. Everything that needs a
+        # course (the oracle route, marks, sides, regret) is skipped; the boat's speed is not.
+        d, pbs, pb = {"name": name or "Practice sail"}, [], None
+    else:
+        d = store.get_race(race_id)
+        if not d:
+            return {"available": False, "note": "unknown race"}
     t = track.load_track(race_id, recording)
-    pbs = [b for b in pbstore.list_bundles() if b.get("race_id") == race_id]
-    pid = playbook_id or (pbs[0]["id"] if pbs else None)
-    pb = pbstore.get(pid) if pid else None
+    if not no_race:
+        pbs = [b for b in pbstore.list_bundles() if b.get("race_id") == race_id]
+        pid = playbook_id or (pbs[0]["id"] if pbs else None)
+        pb = pbstore.get(pid) if pid else None
+    else:
+        pid = None
     if not pb and not t:
         return {"available": False, "playbooks": pbs,
                 "note": "Nothing to debrief yet. Upload a GPX above, or load the boat's log for "
-                        "a race."}
+                        "a race." if not no_race else "No track for this sail on the boat log."}
     tac = _tactics(d, race_id, pb, models, log, boat=boat) if pb else {
         "available": False,
-        "note": "No frozen playbook for this race, so this checks speed only. Freeze a playbook "
+        "note": NO_RACE_NOTE if no_race else
+                "No frozen playbook for this race, so this checks speed only. Freeze a playbook "
                 "in Gameplan next time to check tactics too."}
     if pb and not tac.get("available") and not t:
         return {"available": False, "note": tac.get("note"),
@@ -172,7 +187,7 @@ def run_judge(race_id, playbook_id=None, models=None, on_progress=None, recordin
     scored = _score_actual_track(t, tac.get("oracle") or {}, tac.get("marks") or [], start,
                                  tac.get("wf"), cur, wv, wave_coeffs=wave_coeffs, boat=boat)
     report = {
-        "available": True, "race_id": race_id, "race_name": d.get("name"),
+        "available": True, "race_id": race_id, "race_name": d.get("name"), "no_race": no_race,
         "playbook_id": pid if pb else None, "course_id": tac.get("course_id"),
         "start_epoch": start, "recording": (t or {}).get("window"),
         "tactics_available": bool(tac.get("available")),
@@ -500,7 +515,8 @@ def _performance_critique(r):
         assess += (f" {at['trust']['refused_samples']} sample(s) were refused from the learning "
                    f"inputs on {', '.join(at['trust'].get('refused_channels') or ['a channel'])} — "
                    "the instruments contradicted each other there.")
-    assess += " No frozen playbook, so nothing here judges the tactics."
+    assess += (" Practice sail, no race, so nothing here judges the tactics." if r.get("no_race")
+               else " No frozen playbook, so nothing here judges the tactics.")
     lesson = ""
     if helm is not None:
         lesson = (f"The boat sailed {helm}% of its rated polar over this recording — "
