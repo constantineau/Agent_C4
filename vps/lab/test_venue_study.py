@@ -299,6 +299,26 @@ modelskill.refresh_venue_skill(gl, race_date=dt.date(2026, 7, 12), force=True)
 check("the race-time path still scores HRRR on the Great Lakes", any(c_[0] == "hrrr" for c_ in FC_CALLS))
 
 # ---------------------------------------------------------------------------------------------
+_obs1 = modelskill.obs_series
+_once = []
+
+
+def _study_lands_midway(st_, sd_, ed_):
+    if not _once:              # a study saves while the race-time refresh is still scoring
+        _once.append(1)
+        modelskill.save_scores("vrace", "X", "metar", ["2021", "2025"],
+                               {"gfs": {"n": 99, "vector_rmse_kn": 1.0, "speed_bias_kn": 0, "dir_bias_deg": 0}},
+                               study=True)
+    return _obs1(st_, sd_, ed_)
+
+
+modelskill.obs_series = _study_lands_midway
+modelskill.refresh_venue_skill(dict(gl, key="vrace"), race_date=dt.date(2026, 7, 12))
+modelskill.obs_series = _obs1
+rows_ = modelskill.load_scores("vrace")
+check("a race-time refresh that finishes after a study saved keeps the study's rows",
+      set(rows_) == {"gfs"} and rows_["gfs"]["study"])
+
 print("6) NDBC archive file names are lower case")
 _seen = []
 _orig_get = modelskill._get

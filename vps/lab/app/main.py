@@ -583,8 +583,9 @@ def _study_point(body):
         raise ValueError("Set the place: tap the map or type lat and lon.")
     if not (-90 <= lat <= 90 and -180 <= lon <= 180):
         raise ValueError("Lat or lon is out of range.")
+    raw = body.get("radius_nm")
     try:
-        r = float(body.get("radius_nm") or 40)
+        r = 40.0 if raw is None or raw == "" else float(raw)
     except (TypeError, ValueError):
         raise ValueError("Radius must be 5 to 200 nm.")
     if not 5 <= r <= 200:
