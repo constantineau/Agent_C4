@@ -154,7 +154,13 @@ async function checkWebVersion() {
   const st = webVersionStep(WebVer.loaded, now, busy);
   WebVer.loaded = st.loaded;
   const bar = document.getElementById("verbar");
-  if (st.show && bar) bar.hidden = false;
+  // hidden again while a route or playbook runs (a click would drop it), back on the next check
+  if (bar) bar.hidden = !st.show;
+}
+// a route or playbook job starts: no reload bar while it runs; it ends: look again at once
+function jobWebVersion(running) {
+  const bar = document.getElementById("verbar");
+  if (running) { if (bar) bar.hidden = true; } else checkWebVersion();
 }
 function watchWebVersion() {
   checkWebVersion();
@@ -1765,7 +1771,7 @@ async function runOptimize() {
     resolution: Opt.resolution, use_waves: Opt.useWaves, use_current: Opt.useCurrent };
   const startEpoch = optStartEpoch();
   if (startEpoch != null) body.start_epoch = startEpoch;
-  Opt.running = true;
+  Opt.running = true; jobWebVersion(true);
   document.getElementById("optRun").disabled = true;
   document.getElementById("optRun").textContent = "Routing… (getting weather)";
   out.innerHTML = '<div class="card"><div class="loading">Getting the weather and routing the course…</div>' +
@@ -1789,10 +1795,10 @@ async function runOptimize() {
     }
     // the race this route was asked for: its override buttons use it, whatever race is picked now
     if (r && typeof r === "object") r.race_id = r.race_id || body.race_id;
-    Opt.result = r; Opt.running = false;
+    Opt.result = r; Opt.running = false; jobWebVersion(false);
     renderGameplan();
   } catch (e) {
-    Opt.running = false;
+    Opt.running = false; jobWebVersion(false);
     out.innerHTML = '<div class="card"><div class="placeholder">Routing failed: ' + esc(String(e)) + '</div></div>';
     const b = document.getElementById("optRun"); if (b) { b.disabled = false; b.textContent = "Find route →"; }
   }
@@ -2075,7 +2081,7 @@ async function synthPlaybook() {
     fan_depth: (document.getElementById("pbFan") || {}).value || "standard" };
   const startEpoch = optStartEpoch();
   if (startEpoch != null) body.start_epoch = startEpoch;
-  Pb.running = true; Pb.result = null; Pb.jobId = null;
+  Pb.running = true; Pb.result = null; Pb.jobId = null; jobWebVersion(true);
   Pb.ctx = { race: body.race_id, course: body.course_id };   // what this playbook is built on
   const b = document.getElementById("pbRun"); if (b) { b.disabled = true; b.textContent = "Building… (about 10 min)"; }
   out.innerHTML = '<div class="loading" style="margin-top:10px">Routing each forecast scenario and writing the playbook. About 10 min. You can keep working.</div>';
@@ -2093,7 +2099,7 @@ async function synthPlaybook() {
   } catch (e) {
     Pb.result = { available: false, note: String(e) };
   }
-  Pb.running = false; renderGameplan();
+  Pb.running = false; jobWebVersion(false); renderGameplan();
 }
 
 function renderPbResult(b) {
