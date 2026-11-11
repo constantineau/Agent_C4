@@ -18,9 +18,16 @@ Those read through `datasource.active()`; with `DATA_SOURCE=onboard` that resolv
   written by `pi/archiver`), mounted **read-only**;
 - **freshest live value** — an in-process Signal K WS cache (lower latency than the ~2-s archive
   flush; the engine still works if the WS is down — it falls back to the archive);
-- **polars** — the DEPLOYED boat's own polar block (#304), carried with its profile by the Lab's
-  Deploy push (`POST /reroute/assets`); the image has no boat data. Nothing deployed → "No boat
-  polar loaded." on the polar and sail tiles, never another boat's numbers;
+- **polars** — the polar of the boat BEING SAILED (#320, `app/boatlib.py`): the open LOG
+  session's boat (picked on the iPad), else the last boat used (the newer of the last session's
+  and the last Deploy push's), else this kit's `BOAT_ID`. Its block comes from the Lab's Deploy
+  push when that is the same boat and newer, else from the **boat library aboard**: every Lab
+  profile + its polar, pulled by the engine from `<LAB_URL>/api/boats/library` whenever the Pi
+  has internet (bearer: the Pi's `INGEST_TOKEN`), kept in `boat-library.json` on `engine_state`
+  (works offline), never fetched or replaced while racing. The image has no boat data. A boat
+  with no polar (an "Other boat") → "No polar for this boat." on the polar and sail tiles, never
+  another boat's numbers. `GET /boats` shows the library, the current boat and the sync state.
+  Recorded rows stay tagged by the kit (`BOAT_ID`); only the session names the boat sailed;
 - **course marks** — a small local SQLite store on the `engine_state` volume (the boat has no
   `waypoints` Postgres table); holds the generated practice course.
 

@@ -371,5 +371,27 @@ c11 = Cloud()
 run("--reset", "--all", cloud=c11)
 check("everything sent again", len(ids_sent(arc, c11)) == top_id(arc))
 
+print("#320 — the session marker names the boat sailed (rows stay the kit's):")
+check("an engine store from before #320 (no boat columns): the marker says no boat",
+      all(json.loads(m["str_value"]).get("boat_id", "x") is None
+          and "boat_name" in json.loads(m["str_value"]) for m in c5.by_path("crew.session")))
+_ec = sqlite3.connect(os.environ["ENGINE_DB"])
+_ec.execute("ALTER TABLE sessions ADD COLUMN boat_id TEXT")
+_ec.execute("ALTER TABLE sessions ADD COLUMN boat_name TEXT")
+_ec.execute("INSERT INTO sessions (name, race_id, kind, start_ts, end_ts, boat_id, boat_name) "
+            "VALUES ('bravo sail', NULL, 'practice', ?, ?, 'bravo', 'Bravo')", (NOW - 900, NOW - 600))
+_ec.execute("INSERT INTO sessions (name, race_id, kind, start_ts, end_ts, boat_id, boat_name) "
+            "VALUES ('other sail', NULL, 'practice', ?, ?, NULL, 'Mystery')", (NOW - 500, NOW - 400))
+_ec.commit()
+_ec.close()
+c12 = Cloud()
+run(cloud=c12)
+_m = [json.loads(m["str_value"]) for m in c12.by_path("crew.session")]
+check("a library boat: its id and name ride the marker",
+      any(x["name"] == "bravo sail" and x["boat_id"] == "bravo" and x["boat_name"] == "Bravo"
+          for x in _m))
+check("an Other boat: its name alone", any(x["name"] == "other sail" and x["boat_id"] is None
+                                           and x["boat_name"] == "Mystery" for x in _m))
+
 print("\n" + ("PASS" if ok else "FAIL"))
 sys.exit(0 if ok else 1)

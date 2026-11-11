@@ -200,7 +200,7 @@ check("the session start waited until the load had finished writing",
       seen.get("file_when_session_started") is True)
 import types  # noqa: E402
 _saved_src = racelog._src
-racelog._src = lambda: types.SimpleNamespace(session_start=lambda *a: {"id": 1}, session_current=lambda: None)
+racelog._src = lambda: types.SimpleNamespace(session_start=lambda *a, **k: {"id": 1}, session_current=lambda: None)
 done = {}
 racelog.SESSION_LOCK.acquire()
 th = threading.Thread(target=lambda: done.update(r=racelog.start(race_id="r1", kind="race")))

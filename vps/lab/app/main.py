@@ -9,6 +9,7 @@ surface (pi/console) — not this.
 Slice 1: shared-password auth + the race library (list / get / validate) + the web shell. Next:
 the dual-input ingestion (auto-find URL / paste-link / upload PDF → Opus extraction → review).
 """
+import contextlib
 import datetime
 import json
 import os
@@ -24,7 +25,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from shared import race_def, boat_profile
-from . import atomicio, auth, store, extract, boats, labstate, feedback, pbstore, deploy, monitor, judge, track, learning, fleetimport, report, retro, retrostore, share, racestart
+from . import atomicio, auth, store, extract, boats, labstate, feedback, pbstore, deploy, monitor, judge, track, learning, fleetimport, report, retro, retrostore, share, racestart, sessionboat
 
 INGESTED_DIR = os.environ.get("INGESTED_DIR", "/srv/ingested")
 
@@ -51,7 +52,7 @@ async def gate(request: Request, call_next):
         return await call_next(request)
     header = request.headers.get("authorization", "")
     tok = header[7:] if header.lower().startswith("bearer ") else None
-    if not auth.verify_token(tok):
+    if not (auth.verify_token(tok) or (request.method == "GET" and auth.machine_ok(p, tok))):
         return JSONResponse({"detail": "unauthorized"}, status_code=401)
     return await call_next(request)
 
@@ -574,6 +575,13 @@ def save_boat(body: dict):
     return {"boat": saved, "summary": boat_profile.summary(saved), "warnings": warns}
 
 
+@app.get("/api/boats/library")       # declared before /api/boats/{bid} so 'library' isn't an id
+def boat_library():
+    """Read-only: every boat profile with its polar block (#320). The Pi engine pulls this by
+    itself whenever it has internet (its ingest token opens this path alone; see auth.py)."""
+    return boats.library()
+
+
 @app.get("/api/boats/active")        # declared before /api/boats/{bid} so 'active' isn't read as an id
 def get_active_boat():
     b = boats.active_boat()
@@ -911,6 +919,25 @@ async def debrief_run(body: dict):
     race_id = b.get("race_id")
     if not race_id:
         return JSONResponse({"detail": "race_id required"}, status_code=400)
+    # the boat the session was SAILED on (#320): the Lab's edit, else the session's own pick,
+    # read off the boat log here (never from the request); an "Other boat" with no profile can't
+    # be scored (no polar) and is refused, plainly. An uploaded track (no session) → active boat.
+    rev = sessionboat.revision()           # before the track is fetched (see _guard)
+    ses = None
+    if b.get("session_id") is not None or b.get("start_ts") is not None:
+        ses = await run_in_threadpool(_log_session, b)
+        if ses is None:
+            return {"ok": False, "note": "Couldn't find this session on the boat log. Try again."}
+
+    def _boat_now():
+        if ses is None:
+            return None, None
+        eff = sessionboat.effective(ses)
+        return (eff["boat_id"], None) if eff["has_profile"] else (None, sessionboat.OTHER_NO_PROFILE)
+
+    boat_id, why = _boat_now()
+    if why:
+        return {"ok": False, "note": why}
 
     def _work(progress):
         rec = b.get("recording")
@@ -923,11 +950,39 @@ async def debrief_run(body: dict):
             rec = (res.get("window") or {}).get("start_ts")
             progress(f"{res.get('n')} fixes over {(res.get('window') or {}).get('hours')} h"
                      f" · {res.get('sail_changes')} sail change(s)")
-        return judge.run_judge(race_id, b.get("playbook_id"), on_progress=progress, recording=rec)
+        return judge.run_judge(race_id, b.get("playbook_id"), on_progress=progress, recording=rec,
+                               boat_id=boat_id, archive_guard=_guard)
+
+    @contextlib.contextmanager
+    def _guard():
+        # the session's boat, re-read under the lock the boat edit takes: unchanged → file it
+        # ...and no session's boat edited since this started: an edit of a session stitched
+        # into this window changes what the window holds even if this session's boat didn't
+        with sessionboat.ARCHIVE_LOCK:
+            now_id, _why = _boat_now()
+            same = now_id == boat_id and sessionboat.revision() == rev
+            yield (same, None if same else sessionboat.BOAT_CHANGED)
 
     return jobs.start("debrief", _work, result_key="report",
                       meta={"race_id": race_id, "recording": b.get("recording"),
                             "session_id": b.get("session_id")})
+
+
+def _log_session(b):
+    """The boat-log session a debrief request names (by start_ts, and id when given), or None."""
+    try:
+        sessions = (monitor.agent_json(sessionboat.sessions_path(), timeout=30) or {}).get(
+            "sessions") or []
+    except Exception:  # noqa: BLE001
+        return None
+    for x in sessions:
+        if b.get("start_ts") is not None and (x.get("start_ts") is None or
+                                              abs(float(x["start_ts"]) - float(b["start_ts"])) > 1e-3):
+            continue
+        if b.get("session_id") is not None and x.get("id") != b.get("session_id"):
+            continue
+        return x
+    return None
 
 
 @app.get("/api/debrief/run/status")
@@ -950,13 +1005,15 @@ def _recordings(race_id=None):
     from . import monitor
     bid = (boats.active_boat() or {}).get("boat_id")
     try:
-        sessions = (monitor.agent_json("/racelog/sessions", timeout=30) or {}).get("sessions") or []
+        sessions = (monitor.agent_json(sessionboat.sessions_path(), timeout=30) or {}).get("sessions") or []
         agent = {"available": True}
     except Exception as exc:
         sessions, agent = [], {"available": False, "note": f"The boat is unreachable ({exc}). "
                                "Recordings already in the Lab are still listed."}
     tracks = track.list_tracks(race_id) if race_id else []
     debriefs = learning.list_debriefs(bid, race_id) if race_id else []
+    # a session is filed under the boat it was SAILED on (#320), not the active boat or the kit
+    every = learning.list_debriefs(None, race_id) if race_id else []
 
     def near(a, b):
         # two missing keys are the same recording: a GPX/YB track has no window, and neither
@@ -965,8 +1022,12 @@ def _recordings(race_id=None):
             return a is None and b is None
         return abs(float(a) - float(b)) < 1.0
 
-    def latest_debrief(rec):
-        hit = [d for d in debriefs if near(d.get("window_start"), rec)]
+    def runs(rec, boat=None):
+        pool = debriefs if boat is None else [d for d in every if d.get("boat_id") == boat]
+        return [d for d in pool if near(d.get("window_start"), rec)]
+
+    def latest_debrief(rec, boat=None):
+        hit = runs(rec, boat)
         return max(hit, key=lambda d: d["created_at"]) if hit else None
 
     out, seen = [], set()
@@ -984,12 +1045,19 @@ def _recordings(race_id=None):
             continue
         seen.add(round(float(rec), 3) if rec is not None else None)
         trk = next((t for t in tracks if near(t.get("recording"), rec)), None)
+        eb = sessionboat.effective(ses)
+        # an "Other boat" (no profile) has no debriefs: none can be filed under a name alone
+        bkey = eb["boat_id"] if eb["boat_id"] else "\0none"
+        if eb["source"] == "active":
+            bkey = None                 # an agent from before #320: the active boat's, as before
         out.append({"recording": rec, "session_id": ses.get("id"), "name": ses.get("name"),
                     "kind": ses.get("kind"), "race_id": ses.get("race_id"),
                     "start_ts": marker, "end_ts": ses.get("end_ts"), "window": w,
                     "hours": w.get("hours"), "marker_hours": w.get("marker_hours"),
-                    "track": trk, "debrief": latest_debrief(rec),
-                    "n_debriefs": len([d for d in debriefs if near(d.get("window_start"), rec)])})
+                    "kit": ses.get("kit"), "boat_id": eb["boat_id"], "boat_name": eb["name"],
+                    "boat_source": eb["source"], "boat_has_profile": eb["has_profile"],
+                    "track": trk, "debrief": latest_debrief(rec, bkey),
+                    "n_debriefs": len(runs(rec, bkey))})
     # tracks the Lab holds that no session explains (a GPX/YB upload, or a session the boat has
     # since dropped) — they are debriefable too, and hiding them would hide a debrief that exists
     for t in tracks:
@@ -1006,6 +1074,63 @@ def _recordings(race_id=None):
     out.sort(key=lambda r: r["start_ts"] or 0, reverse=True)
     return {"race_id": race_id, "boat_id": bid, "agent": agent, "recordings": out,
             "debriefs": debriefs}
+
+
+@app.post("/api/debrief/session-boat")
+async def debrief_session_boat(body: dict):
+    """Edit the boat a recorded session was sailed on (#320): {kit, start_ts, boat_id | boat_name}.
+    The session's recording and race are read from the boat log here, before the edit. A wrong pick on the iPad, or an "Other boat" that has a profile now.
+    Debriefs of that recording filed under another boat leave that boat's learning (kept, marked
+    withdrawn); debrief it again to count it for this boat."""
+    b = body or {}
+
+    def _old_recording():
+        """The session's recording key and race as they are NOW (before the edit), from the boat
+        log: the debriefs to withdraw are filed under these. Never left to the client."""
+        try:
+            ses = (monitor.agent_json(sessionboat.sessions_path(), timeout=30) or {}).get(
+                "sessions") or []
+        except Exception:  # noqa: BLE001
+            return None
+        try:
+            want = sessionboat.key_of(b.get("kit"), b.get("start_ts"))
+        except (TypeError, ValueError):
+            return None
+        for x in ses:
+            if x.get("start_ts") is not None and \
+                    sessionboat.key_of(x.get("kit"), x["start_ts"]) == want:
+                # both keys a debrief of it may be filed under: the derived window's start, and
+                # its own marker's (a debrief run with use_marker)
+                w = x.get("window") or {}
+                keys = {float(x["start_ts"])}
+                if w.get("start_ts") is not None:
+                    keys.add(float(w["start_ts"]))
+                return sorted(keys), x.get("race_id")
+        return None
+
+    rev0 = sessionboat.revision()      # windows move with edits: re-checked under the lock
+    old = await run_in_threadpool(_old_recording)
+    if old is None:
+        return JSONResponse({"detail": "Couldn't find this session on the boat log. Try again."},
+                            status_code=409)
+
+    def _change():
+        # one step under the archive lock: a debrief finishing now either filed before this (and
+        # is withdrawn below) or sees the new boat and files nothing
+        with sessionboat.ARCHIVE_LOCK:
+            if sessionboat.revision() != rev0:
+                return False, "Another boat edit landed meanwhile. Try again.", 0
+            ok, res = sessionboat.set_boat(b.get("kit"), b.get("start_ts"), b.get("boat_id"),
+                                           b.get("boat_name"))
+            if not ok:
+                return ok, res, 0
+            n = sum(learning.withdraw_recording(old[1], k, res.get("boat_id")) for k in old[0])
+            return ok, res, n
+
+    ok, res, n = await run_in_threadpool(_change)
+    if not ok:
+        return JSONResponse({"detail": res}, status_code=400)
+    return {"ok": True, "boat": res, "withdrawn": n}
 
 
 @app.post("/api/debrief/apply")
@@ -1131,7 +1256,7 @@ def racelog_sessions():
     boat-log source list."""
     from . import monitor
     try:
-        return monitor.agent_json("/racelog/sessions")
+        return monitor.agent_json(sessionboat.sessions_path())
     except Exception as exc:
         return {"sessions": [], "note": f"agent unreachable: {exc}"}
 
@@ -1217,7 +1342,7 @@ def fetch_log_track(body, sessions=None):
     from . import monitor
     if sessions is None:
         try:
-            sessions = (monitor.agent_json("/racelog/sessions", timeout=30) or {}).get("sessions") or []
+            sessions = (monitor.agent_json(sessionboat.sessions_path(), timeout=30) or {}).get("sessions") or []
         except Exception as exc:
             return {"detail": f"agent unreachable: {exc}"}, 502
     win = resolve_log_window(body, sessions)
@@ -1261,7 +1386,7 @@ def rescore_fetch(race_id, window_start):
     """A recording the Lab no longer stores, straight from the boat log, in memory (#245)."""
     from . import monitor, rescore
     try:
-        sessions = (monitor.agent_json("/racelog/sessions", timeout=30) or {}).get("sessions") or []
+        sessions = (monitor.agent_json(sessionboat.sessions_path(), timeout=30) or {}).get("sessions") or []
     except Exception as exc:
         return None, f"boat log unreachable: {type(exc).__name__}"
     body = rescore.log_body_for(window_start, sessions)

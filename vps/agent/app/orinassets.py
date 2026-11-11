@@ -44,9 +44,11 @@ _GEN = [0]          # bumped on every stored push: polar caches elsewhere re-rea
 
 
 def generation():
-    """A counter that changes whenever a push replaces what's held (matcher/routing key their
-    polar caches on it, so the next boat's polar is used at once, never the last one's)."""
-    return _GEN[0]
+    """A counter that changes whenever a push replaces what's held, the boat being sailed changes
+    or the boat library is replaced (#320): matcher/routing key their polar caches on it, so the
+    next boat's polar is used at once, never the last one's."""
+    from . import boatlib
+    return (_GEN[0], boatlib.generation())
 
 
 def _path():
@@ -217,67 +219,59 @@ def summary(a, received_at=None):
 
 
 def get():
-    """What's held for the Orin (no geometry): race, course, chart yes/no, boat id + version."""
+    """What's held for the Orin (no geometry): race, course, chart yes/no, boat id + version, and
+    `sailing`: the boat a re-route is for now and the polar it gets (#320)."""
+    from . import boatlib
+    try:
+        cur = boatlib.current_boat()
+        sailing = {"boat_id": cur.get("boat_id"), "name": cur.get("name"),
+                   "from": cur.get("from"), "polar": BP.summary(cur.get("polar")),
+                   "polar_from": cur.get("polar_from")}
+    except Exception as exc:  # noqa: BLE001 — a status read never fails
+        sailing = {"note": f"unreadable ({type(exc).__name__})"}
     rec = _read()
     try:
         if rec:
-            return dict(summary(rec["assets"], rec.get("received_at")), available=True)
+            return dict(summary(rec["assets"], rec.get("received_at")), available=True,
+                        sailing=sailing)
     except (ValueError, TypeError, AttributeError):
         pass                       # a file from an older build that summary can't read
-    return {"available": False, "note": "No chart or boat profile aboard."}
+    return {"available": False, "note": "No chart or boat profile aboard.", "sailing": sailing}
 
 
 def for_run(definition, course_id):
-    """What goes into a re-route request: {chart, boat, boat_version, received_at}, or None when
-    nothing was ever pushed (the Orin then falls back to its own files, as before this build).
+    """What goes into a re-route request: {chart, boat, boat_version, polar, session_boat, ...}.
+
     The chart only for the course aboard (same race and course id); the Orin also checks its
-    fingerprint against the definition it gets."""
+    fingerprint against the definition it gets. The boat, its version and its polar are the
+    CURRENT boat's (#320: the session's, from the Deploy push or the boat library; boatlib.py),
+    with `session_boat` naming it: the Orin then routes on exactly these and never falls back to
+    files of its own. A boat with no profile or polar aboard (an "Other boat") goes as nulls, and
+    the Orin refuses: "No polar for this boat."
+    """
+    from . import boatlib
     rec = _read()
-    if not rec:
-        return None
-    a = rec["assets"]
+    a = rec["assets"] if rec else {}
     same = bool(definition) and a.get("race_id") == (definition or {}).get("race_id") \
         and a.get("course_id") == course_id
-    return {"chart": a.get("chart") if same else None, "boat": a.get("boat"),
-            "boat_version": a.get("boat_version") if a.get("boat") else None,
-            # only when the push carried the key: an older push has none, so the Orin may fall
-            # back to the profile's own; an explicit null means "no polar" (Codex on #319)
-            **({"polar": a.get("polar") if a.get("boat") else None} if "polar" in a else {}),
+    cur = boatlib.current_boat()
+    prof = cur.get("profile")
+    return {"chart": a.get("chart") if same else None, "boat": prof,
+            "boat_version": cur.get("boat_version") if prof else None,
+            "polar": cur.get("polar") if prof else None,
+            "session_boat": {"boat_id": cur.get("boat_id"), "name": cur.get("name"),
+                             "from": cur.get("boat_from") if prof else None, "at": cur.get("at")},
             "race_id": a.get("race_id"), "course_id": a.get("course_id"),
-            "received_at": rec.get("received_at")}
-
-
-_POLAR_MEMO = {"memo": None}      # (file key, polar block), replaced as one tuple
+            "received_at": rec.get("received_at") if rec else None}
 
 
 def boat_polar():
-    """The deployed boat's polar block for the engine, or None (#304).
+    """The polar block the engine uses (% of polar, targets, the sail dial), or None (#304, #320).
 
-    The block the Lab's Deploy push carried with the profile, when it is whole and that boat's;
-    else the profile's inline ORC cert (a fleet boat). Never a file in the image: with nothing
-    deployed the engine's polar, targets and sail dial say "No boat polar loaded." Re-read only
-    when the stored file changes."""
-    try:
-        st = os.stat(_path())
-        key = (st.st_ino, st.st_mtime_ns, st.st_size)
-    except OSError:
-        return None
-    memo = _POLAR_MEMO["memo"]
-    if memo is not None and memo[0] == key:
-        return memo[1]
-    pol = None
-    rec = _read()
-    if rec:
-        a = rec["assets"]
-        boat = a.get("boat") if isinstance(a.get("boat"), dict) else None
-        if boat is not None:
-            carried = a.get("polar")
-            if isinstance(carried, dict) and not BP.check(carried, boat.get("boat_id")):
-                pol = carried
-            elif "polar" not in a:
-                # a push from a Lab before #304 (no polar key): the profile's inline cert only,
-                # no files aboard. An explicit null is the Lab's word: no polar (Codex on #319)
-                pol = BP.resolve(boat, dirs=())
-    _POLAR_MEMO["memo"] = (key, pol)
-    return pol
+    The CURRENT boat's (boatlib.current_polar): the open session's boat, else the last boat used;
+    from the Deploy push when it is that boat's and newer, else the boat library aboard. Never a
+    file in the image, never another boat's. None → "No polar for this boat."
+    """
+    from . import boatlib
+    return boatlib.current_polar()
 

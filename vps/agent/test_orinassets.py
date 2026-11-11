@@ -63,9 +63,14 @@ _ORIG_RS = racegate.race_session          # the real check, against a stub race 
 racegate.race_session = lambda: None
 
 print("nothing pushed yet:")
-check("GET says none, short", OA.get() == {"available": False, "note": "No chart or boat profile aboard."})
-check("no assets → none in the request (the Orin uses its own files, as before)",
-      OA.for_run({"race_id": "r1"}, "c") is None)
+_g = OA.get()
+check("GET says none, short", _g["available"] is False
+      and _g["note"] == "No chart or boat profile aboard.")
+_r = OA.for_run({"race_id": "r1"}, "c")
+check("nothing pushed, no library → the request names the boat with no profile or polar "
+      "(#320: the Orin refuses, never routes on its own files)",
+      _r["chart"] is None and _r["boat"] is None and _r["polar"] is None
+      and _r["session_boat"]["boat_id"] == os.environ["BOAT_ID"])
 
 print("a Deploy push:")
 r = OA.load(GOOD, now=1000)
@@ -238,7 +243,8 @@ check("…the old file is whole", open(PATH).read() == before)
 check("…no temp files left", not [n for n in os.listdir(os.path.dirname(PATH)) if n.endswith(".tmp")])
 with open(PATH, "w") as f:
     f.write('{"received_at": 1, "assets": ')            # torn by hand
-check("a torn file reads as nothing pushed, not a crash", OA.for_run({"race_id": "r1"}, "c") is None
+_r = OA.for_run({"race_id": "r1"}, "c")
+check("a torn file reads as nothing pushed, not a crash", _r["chart"] is None and _r["boat"] is None
       and OA.get()["available"] is False)
 
 print("the re-route request carries them:")
@@ -251,7 +257,9 @@ NAV._latest = lambda: {"lat": 44.4, "lon": -81.9}
 deviation._load_playbook = lambda: None
 os.remove(PATH)
 req, why = orinroute.build_request("iPad 1")
-check("nothing pushed → no assets key", why is None and "assets" not in req)
+check("nothing pushed → no chart or profile in the request (#320: but it names the boat)",
+      why is None and req["assets"]["chart"] is None and req["assets"]["boat"] is None
+      and "session_boat" in req["assets"])
 OA.load(GOOD, now=7000)
 DEF = {"race_id": "r1", "courses": [{"id": "c", "start": {"lat": 43.0, "lon": -82.4}, "marks": [],
                                      "finish": {"points": [{"lat": 45.84, "lon": -84.62}]}}]}

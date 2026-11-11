@@ -861,6 +861,43 @@ check("…a different boat, a different route (Bravo's speeds, not sr33's)",
 leaked = sorted(set(opened) & set(REVIEWED["polar_files"].values()))
 check(f"…and no sr33 polar file opened (opened: {leaked or 'none'})", not leaked)
 
+print("3e8) the Pi names the boat being sailed (#320): that boat's profile + polar, or nothing")
+# This Orin's REROUTE_BOAT is sr33's (job.BOAT_ID). The crew sails Bravo with no Deploy: the Pi
+# sends Bravo's library profile + polar and names it. The Orin routes on exactly that.
+SB = {"chart": None, "boat": BRAVO, "boat_version": boat_profile.version(BRAVO), "polar": PB,
+      "received_at": None, "session_boat": {"boat_id": "bravo", "name": "Bravo", "from": "library",
+                                            "at": NOW - 60}}
+opened.clear()
+builtins.open = io.open = spy
+try:
+    out14 = job.run(dict(REQ, assets=SB), now=NOW, is_online=lambda: False)
+finally:
+    builtins.open, io.open = _open, _io
+check("sailing Bravo on an sr33 Orin: routes on Bravo's library polar, named",
+      out14["available"] and out14["boat"]["boat_id"] == "bravo"
+      and out14["boat"]["source"] == "library" and out14["polar"]["boat_id"] == "bravo"
+      and out14["polar"]["from"] == "library" and job.OTHER_BOAT not in out14["warnings"]
+      and job.NOT_DEPLOYED_POLAR not in out14["warnings"])
+leaked = sorted(set(opened) & set(REVIEWED["polar_files"].values()))
+check(f"…no sr33 polar file opened (opened: {leaked or 'none'})", not leaked)
+for name, carry in (
+        ("an Other boat (no profile, no polar)",
+         dict(SB, boat=None, boat_version=None, polar=None,
+              session_boat={"boat_id": None, "name": "Mystery", "from": None, "at": None})),
+        ("a named boat with no polar", dict(SB, polar=None)),
+        ("a profile that isn't the named boat's", dict(SB, session_boat=dict(SB["session_boat"],
+                                                                              boat_id="sr33"))),
+        ("another boat's polar under the named profile", dict(SB, polar=P33))):
+    try:
+        job.run(dict(REQ, assets=carry), now=NOW, is_online=lambda: False)
+        check(f"{name} → refused", False)
+    except job.RunError as e:
+        check(f"{name} → refused: 'No polar for this boat.', never the Orin's own files",
+              str(e) == job.NO_POLAR)
+check("the same boat from the Deploy push is named as such",
+      job.pick_boat(dict(SB, session_boat=dict(SB["session_boat"], **{"from": "deploy"})))[1]["source"]
+      == "deploy")
+
 print("3f) an incomplete route makes no finish claim")
 _orig = job.routerun.run_course
 

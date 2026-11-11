@@ -120,7 +120,8 @@ def _oracle_windfield(bbox, start, t_end, models, race_id, log):
 _ACTIVE = object()     # "read the active boat now" (callers that did not capture it at start)
 
 
-def run_judge(race_id, playbook_id=None, models=None, on_progress=None, recording=None):
+def run_judge(race_id, playbook_id=None, models=None, on_progress=None, recording=None,
+              boat_id=None, archive_guard=None):
     """Debrief one RECORDING of a race.
 
     Two halves, and they have different prerequisites — which is the whole point:
@@ -135,7 +136,10 @@ def run_judge(race_id, playbook_id=None, models=None, on_progress=None, recordin
     log = on_progress or (lambda *_: None)
     # The boat this debrief is FOR, read once at the start: a job runs minutes, and switching the
     # active boat meanwhile must not file the result (or score it) under the other one (#49).
-    boat = boats.active_boat() or {}
+    # `boat_id`: the boat the recorded session was SAILED on (#320), when the caller knows it.
+    boat = (boats.get_boat(boat_id) if boat_id else boats.active_boat()) or {}
+    if boat_id and not boat:
+        return {"available": False, "note": "No profile for this session's boat."}
     wave_coeffs = boats.wave_coeffs(boat)        # None = the optimizer's env priors
     d = store.get_race(race_id)
     if not d:
@@ -182,11 +186,19 @@ def run_judge(race_id, playbook_id=None, models=None, on_progress=None, recordin
     }
     log("writing the critique…")
     report["critique"] = _critique(report) or _deterministic_critique(report)
-    try:                                   # archive to the ongoing learning DB (best-effort)
-        bid = boat.get("boat_id")
-        report["archived_id"] = learning.archive_debrief(report, bid)
-    except Exception:
-        pass
+    # `archive_guard()`: a context manager yielding (ok, note), held across the archive write, so
+    # the caller can refuse to file a debrief whose session changed boats meanwhile (#320)
+    import contextlib
+    guard = archive_guard or (lambda: contextlib.nullcontext((True, None)))
+    with guard() as (file_ok, why):
+        if not file_ok:
+            report["archive_note"] = why
+            return report
+        try:                               # archive to the ongoing learning DB (best-effort)
+            bid = boat.get("boat_id")
+            report["archived_id"] = learning.archive_debrief(report, bid)
+        except Exception:
+            pass
     return report
 
 

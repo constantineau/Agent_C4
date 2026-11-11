@@ -525,6 +525,15 @@ body {
 .rec-pick[hidden] { display:none; }
 .ctl.rp { min-height:48px; min-width:110px; padding:10px 18px; font-size:17px; font-weight:700; }
 .ctl.rp.pre { background:var(--act); border-color:var(--act); color:#fff; }
+/* the boat being sailed (#320): big on the LOG button and the picker, so a wrong boat is obvious */
+.rec-boat { font-size:19px; font-weight:800; letter-spacing:.3px; }
+.rec-boat:empty { display:none; }
+.ctl.rp.boat { font-size:19px; font-weight:800; min-width:130px; }
+.rec-note { align-self:center; font-size:14px; font-weight:700; color:var(--warn, #d97706); }
+.rec-note[hidden] { display:none; }
+.rec-boats { display:inline-flex; flex-wrap:wrap; gap:8px; align-items:center; }
+.rec-boats[hidden] { display:none; }
+.rec-boats input { min-height:48px; font-size:17px; padding:6px 10px; width:12em; }
 /* RACE OVER (#241): only while racing; amber when the boat asks "Race over?"; solid when armed */
 .ctl.raceover { min-height:48px; min-width:130px; padding:10px 18px; font-size:17px; font-weight:700; }
 .ctl.raceover[hidden] { display:none; }

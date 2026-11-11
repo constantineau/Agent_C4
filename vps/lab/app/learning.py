@@ -187,6 +187,58 @@ def list_debriefs(boat_id=None, race_id=None, limit=200):
         c.close()
 
 
+def _evidence_locked(fn):
+    """Run under the lock a session-boat change takes (#320, Codex on #321): a suggestion is built,
+    or applied, either wholly before a withdrawal (which then marks it stale) or wholly after it
+    (on the evidence that is left), never from evidence withdrawn half way through."""
+    import functools
+
+    @functools.wraps(fn)
+    def run(*a, **k):
+        from . import sessionboat
+        with sessionboat.ARCHIVE_LOCK:
+            return fn(*a, **k)
+    return run
+
+
+WITHDRAWN = "withdrawn:"
+STALE_NOTE = "A session's boat changed. Its evidence left this boat. Build it again."
+
+
+def withdraw_recording(race_id, window_start, keep_boat=None):  # noqa: ARG001 (any race)
+    """A session's boat was changed in the Lab (#320): its debriefs filed under any OTHER boat are
+    taken out of that boat's learning. Their bins were scored against the wrong boat's polar.
+    Nothing is deleted: `boat_id` becomes "withdrawn:<old id>" on the debrief and its bins, so
+    every per-boat read (proposals, re-score, trend, the recordings list) skips them and the
+    record still says whose they were. Debrief the session again to count it for its boat.
+    Returns how many debriefs were withdrawn."""
+    if window_start is None:
+        return 0
+    c = _conn()
+    try:
+        rows = c.execute(
+            # any race id: a session can be debriefed under a race other than its marker's
+            "SELECT id, boat_id FROM debriefs WHERE window_start IS NOT NULL "
+            "AND ABS(window_start - ?) < 1.0 AND boat_id IS NOT NULL AND boat_id NOT LIKE ?",
+            (float(window_start), WITHDRAWN + "%")).fetchall()
+        ids = [(r["id"], r["boat_id"]) for r in rows if r["boat_id"] != keep_boat]
+        now = time.time()
+        for did, bid in ids:
+            c.execute("UPDATE debriefs SET boat_id=? WHERE id=?", (WITHDRAWN + bid, did))
+            c.execute("UPDATE perf_bins SET boat_id=? WHERE debrief_id=?", (WITHDRAWN + bid, did))
+        for bid in {b for _d, b in ids}:
+            # a suggestion or re-score built on that evidence can no longer be applied: it would
+            # change this boat's model with another boat's sailing. Build it again.
+            c.execute("UPDATE proposals SET status='stale',decided_at=?,decided_note=? "
+                      "WHERE boat_id IS ? AND status='proposed'", (now, STALE_NOTE, bid))
+            c.execute("UPDATE rescore_runs SET status='stale',decided_at=?,decided_note=? "
+                      "WHERE boat_id IS ? AND status='ready'", (now, STALE_NOTE, bid))
+        c.commit()
+        return len(ids)
+    finally:
+        c.close()
+
+
 def get_debrief(debrief_id):
     c = _conn()
     try:
@@ -336,6 +388,7 @@ def bin_sources(boat_id=None):
         c.close()
 
 
+@_evidence_locked
 def propose(boat_id, recordings=None):
     """Aggregate the archive → a PROPOSED boat-model refinement (helm_factor + per-cell polar overlay),
     written as a `proposed` row for human review. Never touches the boat profile.
@@ -510,6 +563,7 @@ def list_proposals(boat_id=None, limit=50):
         c.close()
 
 
+@_evidence_locked
 def apply_proposal(pid, helm_factor=None, adjustments=None, note="", wave_coeffs=None):
     """HUMAN-APPROVED apply: write the (possibly human-edited) refinement onto the boat profile and mark
     the proposal applied. Falls back to the proposed values when the caller doesn't override. This is
@@ -662,6 +716,7 @@ def _current_wave_coeffs(boat_id):
     return env
 
 
+@_evidence_locked
 def calibrate_waves(boat_id):
     """Fit the sea-state degradation slope k (per point of sail) from the archive → a PROPOSED
     `wave_coeffs` refinement for human review. Never mutates the boat.
@@ -883,7 +938,21 @@ def compare(against, result, wave=None):
     return out
 
 
-def save_rescore(boat_id, evidence_version, recordings, bins, against=None):
+def debrief_boats(ids):
+    """{debrief id: the boat it is filed under now} (a withdrawn one reads "withdrawn:<old>")."""
+    ids = [int(i) for i in ids if i is not None]
+    if not ids:
+        return {}
+    c = _conn()
+    try:
+        rows = c.execute(f"SELECT id, boat_id FROM debriefs WHERE id IN "
+                         f"({','.join('?' * len(ids))})", ids).fetchall()
+        return {r["id"]: r["boat_id"] for r in rows}
+    finally:
+        c.close()
+
+
+def save_rescore(boat_id, evidence_version, recordings, bins, against=None, status="ready"):
     """File one re-score run: the re-scored bins, the proposal math over them, the wave fit, and the
     comparison with what the boat sails on now. Writes ONLY its own row."""
     against = against if against is not None else applied_model(boat_id)
@@ -902,7 +971,7 @@ def save_rescore(boat_id, evidence_version, recordings, bins, against=None):
             """INSERT INTO rescore_runs (created_at,boat_id,evidence_version,status,against_json,
                recordings_json,bins_json,result_json,wave_json,comparison_json)
                VALUES (?,?,?,?,?,?,?,?,?,?)""",
-            (time.time(), boat_id, evidence_version, "ready", json.dumps(against),
+            (time.time(), boat_id, evidence_version, status, json.dumps(against),
              json.dumps(recordings), json.dumps(bins), json.dumps(result), json.dumps(wave),
              json.dumps(comparison)))
         c.commit()
@@ -943,6 +1012,7 @@ def latest_rescore(boat_id):
         c.close()
 
 
+@_evidence_locked
 def rescore_propose(run_id, note=""):
     """A person approved a re-score run → file it as an ordinary `proposed` boat-model refinement.
     Nothing reaches the boat here: the proposal is applied, or not, through `apply_proposal` like

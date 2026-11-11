@@ -3561,6 +3561,10 @@ async function debRunRecording(i) {
   if (x.session_id != null || x.start_ts != null) {
     body.session_id = x.session_id; body.start_ts = x.start_ts; body.name = x.name;
   }
+  // the boat the session was sailed on (#320): the Lab files the debrief under it
+  if (x.kit !== undefined) {
+    body.kit = x.kit; body.boat_id = x.boat_id || null; body.boat_name = x.boat_name || null;
+  }
   try {
     const r = await (await apiPost("/api/debrief/run", body)).json();
     if (!r.ok) { Deb.msg = r.note || r.detail || "could not start the debrief"; return paintDebrief(); }
@@ -3568,6 +3572,32 @@ async function debRunRecording(i) {
     if (Deb.poll) clearInterval(Deb.poll);
     Deb.poll = setInterval(debPoll, 4000);
   } catch (e) { Deb.msg = "could not start the debrief: " + (e.message || e); }
+  paintDebrief();
+}
+
+// Which boat a session was sailed on (#320): fix a wrong pick, or give an "Other boat" its
+// profile (e.g. after importing its ORC cert). Debriefs under the old boat stop counting.
+async function debEditBoat(i) {
+  const x = (Deb.recordings || [])[i];
+  if (!x || x.start_ts == null) return;
+  let list = [];
+  try { list = (await (await apiGet("/api/boats")).json()).boats || []; } catch (e) { list = []; }
+  const opts = list.map((b) => `<option value="${esc(b.boat_id)}"${b.boat_id === x.boat_id ? " selected" : ""}>${esc(b.name || b.boat_id)}</option>`).join("")
+    + `<option value=""${x.boat_id && x.boat_has_profile ? "" : " selected"}>Other boat</option>`;
+  const ask = askModal("Which boat was sailed?",
+    `<select id="sbPick">${opts}</select> <input id="sbName" placeholder="Other boat name" value="${x.boat_has_profile ? "" : esc(x.boat_name || "")}">`
+      + (x.debrief ? `<br><span class="muted">Its debrief stops counting for ${esc(x.boat_name || "the old boat")}. Debrief it again after.</span>` : ""),
+    [{ c: "no", label: "Cancel", cls: "ghost" }, { c: "yes", label: "Save", cls: "primary" }], "yes", "no");
+  const sel = document.getElementById("sbPick"), nm = document.getElementById("sbName");
+  if (await ask !== "yes") return;
+  const body = { kit: x.kit, start_ts: x.start_ts, race_id: x.race_id, recording: x.recording };
+  if (sel && sel.value) body.boat_id = sel.value; else body.boat_name = nm ? nm.value : "";
+  try {
+    const r = await apiPost("/api/debrief/session-boat", body);
+    const j = await r.json();
+    Deb.msg = r.ok ? "Boat changed to " + j.boat.name + "." : (j.detail || "Couldn't change the boat.");
+  } catch (e) { Deb.msg = "Couldn't change the boat."; }
+  await debLoadRecordings();
   paintDebrief();
 }
 
@@ -3627,7 +3657,8 @@ function debRecordingsCard() {
         + (d ? (onScreen ? ' <span class="pill ok" style="margin-left:8px">showing</span>'
                          : ` <button class="mini" style="margin-left:8px" onclick="debOpenDebrief(${d.id})">Open</button>`) : "");
     return `<tr${isThis || onScreen ? ' class="winrow"' : ""}>
-      <td><b>${esc(x.name || "recording")}</b><div class="muted" style="font-size:11px">${when}${x.kind ? " · " + esc(x.kind) : ""}</div></td>
+      <td><b>${esc(x.name || "recording")}</b><div class="muted" style="font-size:11px">${when}${x.kind ? " · " + esc(x.kind) : ""}</div>${x.kit !== undefined && x.start_ts != null
+        ? `<div style="font-size:11px">Boat: <b>${esc(x.boat_name || "?")}</b>${x.boat_has_profile ? "" : ' <span class="pill warn">no profile</span>'} <a href="javascript:void 0" onclick="debEditBoat(${i})">Change</a></div>` : ""}</td>
       <td>${x.hours != null ? x.hours + " h" : "—"}${grew}</td>
       <td>${state}</td>
       <td style="white-space:nowrap">${btns}</td></tr>`;
@@ -4716,7 +4747,8 @@ function polRescoreCard() {
   }
   const decided = run.status === "proposed"
     ? `<span class="pill ok">suggestion #${run.proposal_id} made</span> <a href="#learnings">review it in Learnings</a>`
-    : run.status === "rejected" ? `<span class="pill">rejected</span>` : "";
+    : run.status === "rejected" ? `<span class="pill">rejected</span>`
+    : run.status === "stale" ? `<span class="pill warn">out of date</span> <span class="muted">A session's boat changed. Re-score again.</span>` : "";
   const act = run.status === "ready" && cmp.available
     ? `<button class="mini" onclick="polRescoreDecide(${run.id},'propose')">Approve as suggestion</button>
        <button class="mini" style="margin-left:8px" onclick="polRescoreDecide(${run.id},'reject')">Reject</button>
