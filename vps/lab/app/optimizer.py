@@ -837,17 +837,19 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, deadline=None,
 
     def hold(node, tws, twd, dt_h, cand):
         """#326 BECALMED: the boat can't sail anywhere from `node`, so it waits out this step where
-        it is, drifting with the current (unless that would put it across an obstacle), instead of
-        the node being dropped. A calm over the whole front used to kill the leg ("no clear
-        heading") even when the forecast filled in a new breeze a few hours later. The wait is real
-        clock time, so the ETA carries it. No tack, no sail change, no maneuver cost."""
+        it is, drifting with the current, instead of the node being dropped. A calm over the whole
+        front used to kill the leg ("no clear heading") even when the forecast filled in a new
+        breeze a few hours later. The wait is real clock time, so the ETA carries it. No tack, no
+        sail change, no maneuver cost. A drift that would carry the boat across an obstacle drops
+        the node, as before: the router doesn't invent an anchor."""
         nlat, nlon = node["lat"], node["lon"]
         if cur is not None:
             cset, cdrift = cur.current_at(nlat, nlon, node["t"])
             if cdrift > 0.01:
                 dlat_, dlon_ = _advance(nlat, nlon, cset, cdrift * dt_h)
-                if not (obstacles and obstacles.crosses(nlat, nlon, dlat_, dlon_)):
-                    nlat, nlon = dlat_, dlon_
+                if obstacles and obstacles.crosses(nlat, nlon, dlat_, dlon_):
+                    return
+                nlat, nlon = dlat_, dlon_
         dmark_new = _hav_nm(nlat, nlon, dlat, dlon)
         place(cand, node, nlat, nlon, node["t"] + dt_h * 3600, node["hdg"], node.get("pen", 0.0),
               node.get("tk", 0), node.get("sail"), node.get("pl", 0),
