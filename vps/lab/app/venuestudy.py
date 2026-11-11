@@ -253,8 +253,8 @@ def _run(key, name, lat, lon, radius_nm, spec, stations, include_deep, log, toda
     log(f"Scoring {len(models)} models at {len(stations)} station(s), {len(windows)} years…")
     scores, years, notes = modelskill.score_stations(stations, windows, models, yesterday.year,
                                                      include_deep=include_deep, log=log, on_obs=keep)
-    if not any(scores.values()):
-        # nothing came back (an archive down, or no wind in the window): keep the last good study
+    if not any(s for m, s in scores.items() if m not in modelskill.REFERENCE_ONLY):
+        # nothing usable came back (only the reference-only GEFS line counts for nothing here) (an archive down, or no wind in the window): keep the last good study
         # and its weights rather than overwrite them with nothing
         raise ValueError("No forecasts could be checked against measured wind. "
                          "The data services may be down. Try again later.")
@@ -347,8 +347,13 @@ def list_all():
 
 def delete(key):
     """Remove a study and its routing weights. Refused (ValueError) while a run there is going."""
-    if busy(key):
-        raise ValueError("A study is running here. Delete it when it's done.")
+    with _busy_lock:          # held through the delete so a run can't claim the place midway
+        if key in _busy:
+            raise ValueError("A study is running here. Delete it when it's done.")
+        return _delete(key)
+
+
+def _delete(key):
     c = _conn(create=False)
     if c is None:
         return False

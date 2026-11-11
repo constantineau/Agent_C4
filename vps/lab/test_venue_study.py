@@ -357,6 +357,17 @@ except ValueError as exc:
 modelskill.fetch_forecast = _fc
 check("...and keeps the last good study and its weights",
       venuestudy.load(st["key"]) == before and len(modelskill.load_scores(st["key"])) == 5)
+_fc = modelskill.fetch_forecast
+modelskill.fetch_forecast = lambda *a, **k: {}
+modelskill.fetch_reforecast = lambda lat, lon, sd, ed, m, y: fake_forecast(lat, lon, sd, ed, "gfs") if m == "gefs" else {}
+try:
+    venuestudy.run("Fort Lauderdale", 26.10, -80.05, 40, sp, FL_ST, include_deep=True, today=TODAY)
+    check("older years with only the reference GEFS line back: fails, keeps the study", False)
+except ValueError:
+    check("older years with only the reference GEFS line back: fails, keeps the study",
+          venuestudy.load(st["key"]) == before and len(modelskill.load_scores(st["key"])) == 5)
+modelskill.fetch_forecast = _fc
+modelskill.fetch_reforecast = lambda *a, **k: {}
 _orig_save = venuestudy.save
 venuestudy.save = lambda *a, **k: (_ for _ in ()).throw(OSError("disk full"))
 try:
