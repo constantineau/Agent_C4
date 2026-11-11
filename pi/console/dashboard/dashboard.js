@@ -1568,6 +1568,8 @@
   }
   let recConfirmUntil = 0;   // two-step end: first tap arms this window, second tap ends
   let recPickUntil = 0;      // start: the Race / Practice choice is open until this time
+  let recBoat = null;        // the boat picked for the next LOG (#320); null = the last one used
+  let recBoatsOpen = false;  // the boat list is showing
   function renderRec() {
     const b = document.getElementById("recBtn"), l = document.getElementById("recLbl");
     if (!b || !l) return;
@@ -1592,13 +1594,26 @@
       : loud ? arch.text + ". Tap twice to end \"" + a.name + "\"."
       : a ? "Logging \"" + a.name + "\". Tap twice to end."
       : "Tap to start logging. Unlogged data is deleted after 7 days.";
+    const boat = recBoat || RL.defaultBoat(App.session);
+    const bn = document.getElementById("recBoat");
+    if (bn) bn.textContent = confirming ? "" : RL.boatName(a, boat);
     const pick = document.getElementById("recPick");
     if (pick) {
       pick.hidden = !picking;
       const pre = RL.preselect(App.session);
       document.getElementById("recRace").classList.toggle("pre", pre === "race");
       document.getElementById("recPractice").classList.toggle("pre", pre === "practice");
+      const bb = document.getElementById("recBoatBtn");
+      if (bb) bb.textContent = (RL.boatName(null, boat) || "Boat") + " ▾";
+      const note = document.getElementById("recNote");
+      if (note) {
+        const t = RL.playbookNote(boat, App.session) || RL.polarNote(boat, App.session);
+        note.hidden = !t || !picking;
+        note.textContent = t || "";
+      }
     }
+    const list = document.getElementById("recBoats");
+    if (list && (!picking || !recBoatsOpen)) { list.hidden = true; recBoatsOpen = false; }
     // quiet: not recording with no session, and housekeeping notes ("Archive check overdue")
     if (down && !a) b.title += " " + arch.text + ".";
     if (arch && arch.note && !down) b.title += " " + arch.note + ".";
@@ -1648,16 +1663,60 @@
     fetchSession();
   }
   async function startRec(kind) {
+    const boat = recBoat || window.C4RecLog.defaultBoat(App.session);
     recPickUntil = 0;
+    recBoat = null;
     renderRec();
     const l = document.getElementById("recLbl");
     if (l) l.textContent = "STARTING…";   // instant feedback — the poll confirms
     try {
       await fetch(API + "/session/start", { method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(window.C4RecLog.startBody(kind)) });
+        body: JSON.stringify(window.C4RecLog.startBody(kind, boat)) });
     } catch (e) { /* engine unreachable — re-sync restores the true state */ }
     fetchSession();
+  }
+  /* the boat list (#320): one button per library boat, then "Other boat" (type a name). Built
+     only when opened, so the 8 s session poll never wipes a name being typed. */
+  function keepPickOpen(ms) {
+    recPickUntil = Math.max(recPickUntil, Date.now() + ms);
+    setTimeout(renderRec, ms + 200);
+  }
+  function toggleBoats() {
+    const list = document.getElementById("recBoats");
+    if (!list) return;
+    recBoatsOpen = !recBoatsOpen;
+    if (recBoatsOpen) {
+      const RL = window.C4RecLog;
+      list.innerHTML = RL.boatChoices(App.session).map((b, i) =>
+        `<button class="ctl rp" data-i="${i}">${escapeHtml(String(b.name || ""))}</button>`).join("")
+        + '<button class="ctl rp" data-other="1">Other boat</button>';
+      list.querySelectorAll("button[data-i]").forEach((el) => el.addEventListener("click", () => {
+        recBoat = RL.boatChoices(App.session)[+el.dataset.i] || null;
+        recBoatsOpen = false;
+        keepPickOpen(RL.PICK_MS);
+        renderRec();
+      }));
+      list.querySelector("button[data-other]").addEventListener("click", () => {
+        list.innerHTML = '<input id="recOther" maxlength="40" placeholder="Boat name" autocomplete="off">'
+          + '<button class="ctl rp" id="recOtherOk">OK</button>';
+        const inp = document.getElementById("recOther");
+        keepPickOpen(RL.OTHER_MS);
+        const done = () => {
+          const name = (inp.value || "").trim();
+          if (name) recBoat = { boat_id: null, name: name.slice(0, 40) };
+          recBoatsOpen = false;
+          keepPickOpen(RL.PICK_MS);
+          renderRec();
+        };
+        document.getElementById("recOtherOk").addEventListener("click", done);
+        inp.addEventListener("keydown", (e) => { if (e.key === "Enter") done(); });
+        inp.focus();
+      });
+      keepPickOpen(window.C4RecLog.PICK_MS);
+    }
+    list.hidden = !recBoatsOpen;
+    renderRec();
   }
   async function toggleRec() {
     const a = (App.session || {}).active;
@@ -3084,6 +3143,7 @@
     document.getElementById("recBtn").addEventListener("click", toggleRec);
     document.getElementById("recRace").addEventListener("click", () => startRec("race"));
     document.getElementById("recPractice").addEventListener("click", () => startRec("practice"));
+    document.getElementById("recBoatBtn").addEventListener("click", toggleBoats);
     document.getElementById("raceOverBtn").addEventListener("click", tapRaceOver);
     document.getElementById("alertBtn").addEventListener("click", toggleSound);
     // reflect a persisted armed state, and re-unlock iOS audio on the first interaction after a reload

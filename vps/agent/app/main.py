@@ -311,8 +311,50 @@ def _motion_series(t0, t1, bucket_s=300):
     return out, best, resolved
 
 
+def _sailed(ses):
+    """Which boat a session was sailed on, as the marker says (#320): its boat id, else its typed
+    name, else the kit that recorded it (a marker from before #320)."""
+    if ses.get("sailed_override"):          # the Lab's edit: "id:<boat id>" | "name:<name>"
+        return (ses.get("kit"), ses["sailed_override"])
+    # a profile id and a typed name live apart: an Other boat typed "sr33" is not the sr33 profile
+    if ses.get("boat_id"):
+        return (ses.get("kit"), "id:" + str(ses["boat_id"]))
+    if ses.get("boat_name"):
+        return (ses.get("kit"), "name:" + str(ses["boat_name"]))
+    return (ses.get("kit"), "id:" + str(ses.get("kit")))
+
+
+def _window_for(s, sessions, motion):
+    """The derived window of session `s`, one boat's only (#320; see racelog_sessions)."""
+    mine = [x for x in sessions if _sailed(x) == _sailed(s)]
+    w = race_window.derive(mine, motion, race_id=s.get("race_id"), anchor_ts=float(s["start_ts"]))
+    if w:
+        _clip_to_boat(w, s, sessions)
+    return w
+
+
+def _clip_to_boat(w, ses, sessions):
+    """Stop a derived window at the nearest marker of a session this kit sailed on ANOTHER boat
+    (#320): the kit moved boats in between."""
+    a = float(ses["start_ts"])
+    for o in sessions:
+        # only the same KIT's other boats: another kit's sessions are another boat's record
+        if o.get("kit") != ses.get("kit") or _sailed(o) == _sailed(ses) \
+                or o.get("start_ts") is None:
+            continue
+        o_a = float(o["start_ts"])
+        o_b = float(o.get("end_ts") or o_a)
+        if a < o_a < w["end_ts"]:
+            w["end_ts"] = o_a
+            w.setdefault("provenance", []).append("stopped where another boat's session starts")
+        if w["start_ts"] < o_b < a:
+            w["start_ts"] = o_b
+            w.setdefault("provenance", []).append("started where another boat's session ends")
+    w["hours"] = round((w["end_ts"] - w["start_ts"]) / 3600.0, 2)
+
+
 @app.get("/racelog/sessions")
-def racelog_sessions(derive: bool = True):
+def racelog_sessions(derive: bool = True, boats: str | None = None):
     """RACE-SESSION markers backfilled from the boat (`crew.session` readings) — the windows the
     owner recorded. Shore-side recall of own data (the Lab debrief's from-log source).
 
@@ -325,9 +367,11 @@ def racelog_sessions(derive: bool = True):
     `start_ts`/`end_ts` — a derived window that quietly disagrees with what the crew remembers
     pressing would be worse than none, so both are always served."""
     with pool.connection() as conn:
+        # this agent's kit only: the motion, track and trust reads below are BOAT_ID's record, so
+        # another kit's session would be scored on this kit's sailing (Codex on #321)
         rows = conn.execute(
-            "SELECT str_value FROM telemetry_raw WHERE path = 'crew.session' "
-            "ORDER BY time DESC LIMIT 100").fetchall()
+            "SELECT str_value, boat_id FROM telemetry_raw WHERE path = 'crew.session' "
+            "AND boat_id = %s ORDER BY time DESC LIMIT 100", (tools.BOAT_ID,)).fetchall()
     import json as _json
     out, seen = [], set()
     for r in rows:                      # dict rows (psycopg row factory)
@@ -339,7 +383,24 @@ def racelog_sessions(derive: bool = True):
         if key in seen:
             continue
         seen.add(key)
+        # the KIT that recorded it (its rows are tagged with this id); the session's own
+        # boat_id/boat_name (#320) say which boat was SAILED, and are null on older markers
+        d["kit"] = r.get("boat_id")
         out.append(d)
+    # `boats`: the Lab's own edits of which boat a session was sailed on (#320), as JSON
+    # {"<kit>@<start_ts %.3f>": "id:<boat id>" | "name:<name>"}: windows derived per boat
+    try:
+        edits = _json.loads(boats) if boats else {}
+    except ValueError:
+        edits = {}
+    if isinstance(edits, dict):
+        for d in out:
+            try:
+                k = "%s@%.3f" % (d.get("kit") or "", float(d["start_ts"]))
+            except (KeyError, TypeError, ValueError):
+                continue
+            if isinstance(edits.get(k), str):
+                d["sailed_override"] = edits[k][:160]
     if derive:
         for s in out:
             try:
@@ -348,7 +409,9 @@ def racelog_sessions(derive: bool = True):
                 # Look a long way past the marker — the whole point is that the marker may have
                 # stopped early — but bound it so one session cannot scan a season.
                 motion, msrc, resolved = _motion_series(a - 6 * 3600, b + 24 * 3600)
-                w = race_window.derive(out, motion, race_id=s.get("race_id"), anchor_ts=a)
+                # #320: one window is one boat. Only this boat's markers stitch, and the window
+                # never runs into another boat's session (the kit moved boats in between).
+                w = _window_for(s, out, motion)
                 if w:
                     w["motion_source"] = msrc
                     w["motion_device"] = (n2k_sources.resolve(msrc, n2k_sources.devices_for(

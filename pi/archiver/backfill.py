@@ -112,8 +112,16 @@ def push_session_markers(conn):
         ec = _engine()
         row = conn.execute("SELECT v FROM sync_state WHERE k='backfill_session_id'").fetchone()
         since = int(row[0]) if row else 0
-        rows = ec.execute("SELECT id, name, race_id, kind, start_ts, end_ts FROM sessions "
-                          "WHERE id > ? AND end_ts IS NOT NULL ORDER BY id", (since,)).fetchall()
+        try:
+            # the boat SAILED (#320), named by the session; rows stay tagged by this kit's BOAT_ID
+            rows = ec.execute("SELECT id, name, race_id, kind, start_ts, end_ts, boat_id, "
+                              "boat_name FROM sessions WHERE id > ? AND end_ts IS NOT NULL "
+                              "ORDER BY id", (since,)).fetchall()
+        except sqlite3.OperationalError:
+            # an engine store from before #320 (no boat columns yet): the kit's boat
+            rows = [tuple(r) + (None, None) for r in ec.execute(
+                "SELECT id, name, race_id, kind, start_ts, end_ts FROM sessions "
+                "WHERE id > ? AND end_ts IS NOT NULL ORDER BY id", (since,)).fetchall()]
         ec.close()
     except Exception as exc:
         print(f"[backfill] session markers skipped ({exc})", flush=True)
@@ -124,8 +132,9 @@ def push_session_markers(conn):
     readings = [{"time": datetime.fromtimestamp(a, tz=timezone.utc).isoformat(),
                  "source": "crew", "path": "crew.session",
                  "str_value": json.dumps({"id": i, "name": n, "race_id": rid, "kind": k,
-                                          "start_ts": a, "end_ts": b})}
-                for i, n, rid, k, a, b in rows]
+                                          "start_ts": a, "end_ts": b,
+                                          "boat_id": bid, "boat_name": bname})}
+                for i, n, rid, k, a, b, bid, bname in rows]
     _post(readings)
     conn.execute("INSERT INTO sync_state (k, v) VALUES ('backfill_session_id', ?) "
                  "ON CONFLICT(k) DO UPDATE SET v=excluded.v", (str(rows[-1][0]),))

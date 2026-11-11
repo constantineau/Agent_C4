@@ -91,6 +91,32 @@ def active_polar():
     return polar_for(active_boat())
 
 
+LIBRARY_SCHEMA = "c4.boat-library/v1"
+
+
+def library(now=None):
+    """Every boat the Lab holds, with its polar block (#320): what the Pi keeps aboard so a crew
+    can sail any boat with no Lab prep. Each entry is {boat_id, name, profile, boat_version, polar}
+    (polar = the same block a Deploy push carries, or null when the boat has none). A profile with
+    errors is left out and named under `skipped`, never sent half-checked."""
+    import time
+    from shared import boat_polar
+    out, skipped = [], []
+    for s in list_boats():
+        bid = s.get("boat_id")
+        b = get_boat(bid)
+        if not b:
+            continue
+        errs, _w = boat_profile.validate(b)
+        if errs:
+            skipped.append({"boat_id": bid, "why": errs[0]})
+            continue
+        out.append({"boat_id": bid, "name": b.get("name") or bid, "profile": b,
+                    "boat_version": boat_profile.version(b), "polar": boat_polar.resolve(b)})
+    return {"schema": LIBRARY_SCHEMA, "built_at": int(time.time() if now is None else now),
+            "boats": out, "skipped": skipped}
+
+
 def save_boat(d: dict) -> dict:
     """Persist a (reviewed/edited) profile to the writable volume. Returns the stored dict."""
     bid = d.get("boat_id")

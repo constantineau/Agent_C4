@@ -248,7 +248,12 @@ def _advice(tws: float = None, twa: float = None, hoisted: str = None, boat_mode
     crew-reported sail (J1/A3/S1) so we can flag flying the wrong one."""
     sections = _guide()[0]
     if not sections:
-        return {"available": False, "note": BP.NO_POLAR_ABOARD}
+        note = BP.NO_POLAR_ABOARD
+        if os.environ.get("DATA_SOURCE", "").strip().lower() == "onboard":
+            from . import orinassets
+            if orinassets.boat_polar() is None:
+                note = BP.NO_POLAR      # the boat being sailed has none (#320: e.g. an Other boat)
+        return {"available": False, "note": note}
     if tws is None or twa is None:
         return {"available": False, "note": "Need live wind speed and angle.",
                 "have": {"tws": tws, "twa": twa}}

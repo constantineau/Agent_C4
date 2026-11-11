@@ -325,13 +325,37 @@ def _get_boat():
     return b
 
 
+def _session_boat(carried):
+    """The Pi named the boat being sailed (#320, `session_boat`): route on exactly the profile it
+    sent (from the Deploy push or the boat library aboard), or not at all. Never the Orin's own
+    files: they are some other boat's when the crew sails another one."""
+    sb = carried.get("session_boat") if isinstance(carried.get("session_boat"), dict) else {}
+    b = carried.get("boat")
+    if not isinstance(b, dict):
+        return None, None, NO_BOAT
+    try:
+        errs = boat_profile.shape_errors(b) or boat_profile.validate(b)[0]
+    except (ValueError, TypeError, OverflowError):
+        errs = ["bad values"]
+    if b.get("boat_id") != sb.get("boat_id"):
+        return None, None, OTHER_BOAT
+    if errs or carried.get("boat_version") != boat_profile.version(b):
+        return None, None, BAD_BOAT
+    src = "deploy" if sb.get("from") == "deploy" else "library"
+    return b, _boat_info(b, src, carried.get("received_at") if src == "deploy" else sb.get("at")), None
+
+
 def pick_boat(carried):
     """The boat profile to route on → (profile or None, info for the result, warning or None).
+
+    A Pi that names the boat being sailed (`session_boat`, #320) decides it: see _session_boat.
 
     `carried` is the request's `assets` (from the Lab's Deploy push, through the Pi), or None. The
     Deploy's reviewed profile is used when it is this boat's (REROUTE_BOAT), valid, and matches
     the version it was sent with. Otherwise the Orin's own copy (the repo's raw sr33.json unless
     one was copied aboard), and the result says so."""
+    if isinstance(carried, dict) and "session_boat" in carried:
+        return _session_boat(carried)
     warn = NOT_DEPLOYED_BOAT
     b = (carried or {}).get("boat")
     if isinstance(b, dict):
@@ -365,6 +389,12 @@ def pick_polar(carried, boat, boat_info):
     own: its inline ORC cert, or the files it names in this checkout — unless the push said
     "no polar" (an explicit null). Never another boat's."""
     if boat is None:
+        return None, None
+    if isinstance(carried, dict) and "session_boat" in carried:
+        # the Pi sent the boat being sailed and its polar (#320): that polar or none at all
+        pol = carried.get("polar")
+        if isinstance(pol, dict) and not boat_polar.check(pol, boat.get("boat_id")):
+            return pol, (boat_info or {}).get("source") or "library"
         return None, None
     if (boat_info or {}).get("source") == "deploy":
         pol = (carried or {}).get("polar")
@@ -487,7 +517,7 @@ def run(req, now=None, on_progress=None, on_phase=None, is_online=None):
             warnings.insert(0, boat_note)
         elif boat_note:                 # a profile, just not the Lab's reviewed one: after the rest
             warnings.append(boat_note)
-        if polar_from != "deploy" and boat_note != NO_BOAT:
+        if polar_from not in ("deploy", "library") and boat_note != NO_BOAT:
             warnings.append(NOT_DEPLOYED_POLAR)
         until = weather.get("forecast_until")
         if until and res.get("finish_epoch") and res["finish_epoch"] > until:

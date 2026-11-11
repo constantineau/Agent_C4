@@ -165,6 +165,12 @@ services:
       # (OWN_MMSI=...). Blank → the boat profile's `mmsi`, then the race's own.mmsi
       # (pi/engine/README.md "Own MMSI").
       OWN_MMSI: ${OWN_MMSI:-}
+      # The boat library (#320): every boat profile + polar from the Lab, pulled by the engine
+      # whenever the Pi has internet and kept on engine_state (works offline). LAB_URL is the Lab's
+      # address as the Pi reaches it; blank → no sync (GET /boats says so). The bearer is the
+      # Pi's ingest token, the credential the uplink and backfill already use.
+      LAB_URL: ${LAB_URL:-}
+      INGEST_TOKEN: ${INGEST_TOKEN:-dev-ingest-token}
     volumes:
       - sk_archive:/var/lib/sr33/archive:ro
       - engine_state:/var/lib/sr33/engine

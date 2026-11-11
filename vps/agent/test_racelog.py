@@ -27,12 +27,13 @@ class StubDS:
     def __init__(self):
         self.rows = []
 
-    def session_start(self, name, race_id, kind, start_ts):
+    def session_start(self, name, race_id, kind, start_ts, boat_id=None, boat_name=None):
         cur = self.session_current()
         if cur:
             self.session_end(start_ts, session_id=cur["id"])
         self.rows.append({"id": len(self.rows) + 1, "name": name, "race_id": race_id,
-                          "kind": kind, "start_ts": start_ts, "end_ts": None})
+                          "kind": kind, "start_ts": start_ts, "end_ts": None,
+                          "boat_id": boat_id, "boat_name": boat_name})
         return self.session_current()
 
     def session_end(self, end_ts, session_id):

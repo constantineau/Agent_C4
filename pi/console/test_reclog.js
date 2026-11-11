@@ -87,5 +87,53 @@ test("dashboard.js: Race over takes two taps and posts /race/over with the shown
   assert.match(js, /race\/over[\s\S]{0,200}C4RecLog\.raceOverBody\(race\)/);
 });
 
+// #320: the boat picker at LOG — starts on the last boat used, one tap changes it, Other boat
+const SES = { homework_aboard: true, boats: {
+  current: { boat_id: "sr33", name: "SR33", has_polar: true },
+  boats: [{ boat_id: "bravo", name: "Bravo", has_polar: true },
+          { boat_id: "sr33", name: "SR33", has_polar: true },
+          { boat_id: "nopol", name: "No Polar", has_polar: false }],
+  playbook_boat: "sr33", playbook_boat_name: "SR33" } };
+test("picker starts on the last boat used (the engine's current boat)", () => {
+  assert.deepEqual(RL.defaultBoat(SES), { boat_id: "sr33", name: "SR33" });
+  assert.equal(RL.defaultBoat({}), null);
+});
+test("the list is the library aboard", () =>
+  assert.deepEqual(RL.boatChoices(SES).map((b) => b.boat_id), ["bravo", "sr33", "nopol"]));
+test("start sends the picked boat: a library id, or a typed name for an Other boat", () => {
+  assert.deepEqual(RL.startBody("practice", { boat_id: "bravo", name: "Bravo" }),
+    { kind: "practice", boat_id: "bravo" });
+  assert.deepEqual(RL.startBody("practice", { boat_id: null, name: "  Mystery  " }),
+    { kind: "practice", boat_name: "Mystery" });
+  assert.deepEqual(RL.startBody("race", null), { kind: "race" });
+});
+test("the LOG button names the boat: the session's while running, else the pick", () => {
+  assert.equal(RL.boatName({ boat_id: "bravo", boat_name: "Bravo" }, { name: "SR33" }), "Bravo");
+  assert.equal(RL.boatName({ boat_id: null, boat_name: "Mystery" }, null), "Mystery");
+  assert.equal(RL.boatName(null, { boat_id: "sr33", name: "SR33" }), "SR33");
+});
+test("another boat than the playbook's: one plain line", () => {
+  assert.equal(RL.playbookNote({ boat_id: "sr33" }, SES), null);
+  assert.equal(RL.playbookNote({ boat_id: "bravo" }, SES), "Playbook is for SR33.");
+  assert.equal(RL.playbookNote({ boat_id: null, name: "X" }, SES), "Playbook is for SR33.");
+  assert.equal(RL.playbookNote({ boat_id: "bravo" }, Object.assign({}, SES, { homework_aboard: false })), null);
+});
+test("a boat with no polar says so", () => {
+  assert.equal(RL.polarNote({ boat_id: null, name: "X" }, SES), "No polar for this boat.");
+  assert.equal(RL.polarNote({ boat_id: "nopol" }, SES), "No polar for this boat.");
+  assert.equal(RL.polarNote({ boat_id: "bravo" }, SES), null);
+});
+test("index.html: boat button in the pick row, the boat name on LOG; dashboard sends the pick", () => {
+  assert.match(html, /id="recPick"[^>]*>[\s\S]{0,120}id="recBoatBtn"/);
+  assert.match(html, /id="recBtn"[\s\S]{0,200}id="recBoat"/);
+  assert.match(js, /startBody\(kind, boat\)/);
+  assert.match(js, /getElementById\("recBoatBtn"\)\.addEventListener\("click", toggleBoats\)/);
+  assert.match(js, /data-other="1">Other boat</);
+});
+test("console cache-bust tags bumped for this change", () => {
+  assert.match(html, /reclog\.js\?v=bp1110a/);
+  assert.match(html, /dashboard\.js\?v=bp1110a/);
+});
+
 console.log(failed ? "FAILED" : "ALL OK");
 process.exit(failed ? 1 : 0);

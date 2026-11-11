@@ -6,7 +6,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>SR33 Crew Dashboard</title>
-  <link rel="stylesheet" href="dashboard.css?v=st1109b">
+  <link rel="stylesheet" href="dashboard.css?v=bp1110a">
 </head>
 <body>
   <!-- ===== top bar ===== -->
@@ -17,8 +17,10 @@
 
     <!-- RACE LOG: the owner's record switch — one tap starts a session (kept + backfilled +
          debriefed); data outside sessions is pruned and never leaves the boat. No Lab prep needed. -->
-    <button class="ctl rec" id="recBtn" title="Tap to start or end logging. Unlogged data is deleted after 7 days.">⏺ <b id="recLbl">LOG</b></button>
-    <span class="rec-pick" id="recPick" hidden><button class="ctl rp" id="recRace">Race</button><button class="ctl rp" id="recPractice">Practice</button></span>
+    <button class="ctl rec" id="recBtn" title="Tap to start or end logging. Unlogged data is deleted after 7 days.">⏺ <span class="rec-boat" id="recBoat"></span> <b id="recLbl">LOG</b></button>
+    <!-- LOG start (#320): which boat (starts on the last one used; tap to change), then Race or Practice -->
+    <span class="rec-pick" id="recPick" hidden><button class="ctl rp boat" id="recBoatBtn" title="Tap to change the boat">Boat</button><button class="ctl rp" id="recRace">Race</button><button class="ctl rp" id="recPractice">Practice</button><span class="rec-note" id="recNote" hidden></span></span>
+    <span class="rec-boats" id="recBoats" hidden></span>
     <!-- RACE OVER: racing (no shore loading, RRS 41) ends only on this button (two taps). Shown
          only while racing. LOG (recording) is a separate switch. -->
     <button class="ctl raceover" id="raceOverBtn" hidden title="Tap twice to end the race.">🏁 <b id="raceOverLbl">Race over</b></button>
@@ -131,7 +133,7 @@
   <script src="plume.js?v=cw1102z"></script>
   <script src="shed.js?v=sh1110a"></script>
   <script src="reroute.js?v=sh1110a"></script>
-  <script src="reclog.js?v=ro1109a"></script>
-  <script src="dashboard.js?v=st1110b"></script>
+  <script src="reclog.js?v=bp1110a"></script>
+  <script src="dashboard.js?v=bp1110a"></script>
 </body>
 </html>
