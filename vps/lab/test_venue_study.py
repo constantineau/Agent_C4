@@ -437,6 +437,20 @@ except ValueError as exc:
     check("only one model back: doesn't replace a weighted study",
           "kept" in str(exc) and venuestudy.load(st["key"]) == before and len(modelskill.load_scores(st["key"])) == 5)
 modelskill.fetch_forecast = _fc
+modelskill.save_scores("vweighted", "X", "metar", ["2021", "2025"],
+                       {"gfs": {"n": 500, "vector_rmse_kn": 3.0, "speed_bias_kn": 0, "dir_bias_deg": 0},
+                        "icon": {"n": 500, "vector_rmse_kn": 2.0, "speed_bias_kn": 0, "dir_bias_deg": 0}})
+_k0 = venuestudy.venue_key
+venuestudy.venue_key = lambda la, lo: "vweighted"
+modelskill.fetch_forecast = lambda lat, lon, sd, ed, m, timeout=45: _fc(lat, lon, sd, ed, m) if m == "hrrr" else {}
+try:
+    venuestudy.run("New place", 26.10, -80.05, 40, sp, FL_ST, today=TODAY)
+    check("a first study with one model back doesn't wipe a race's weights there", False)
+except ValueError:
+    check("a first study with one model back doesn't wipe a race's weights there",
+          set(modelskill.load_scores("vweighted")) == {"gfs", "icon"} and venuestudy.load("vweighted") is None)
+modelskill.fetch_forecast = _fc
+venuestudy.venue_key = _k0
 _orig_save = venuestudy.save
 venuestudy.save = lambda *a, **k: (_ for _ in ()).throw(OSError("disk full"))
 try:

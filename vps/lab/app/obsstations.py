@@ -247,7 +247,9 @@ def discover(lat, lon, radius_nm, window=None, sources=None, probe_fn=None, max_
     if window:
         # a stalled archive must not hold the request past the gateway cap: whatever hasn't
         # answered by the deadline is left "not checked" (obs None) and the rest come back
-        futs = {ex.submit(probe_fn, s, window): s for s in picks}
+        def _check(s):          # a check that only gets its turn after the deadline is skipped
+            return probe_fn(s, window) if time.monotonic() < end else None
+        futs = {ex.submit(_check, s): s for s in picks}
         done, late = wait(futs, timeout=max(0.0, end - time.monotonic()))
         for f in done:
             futs[f]["obs"] = f.result()
