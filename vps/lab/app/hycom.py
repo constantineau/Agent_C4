@@ -121,20 +121,23 @@ def lon_ranges(lons, w, e):
 
 
 def _pick_times(epochs, t_start, t_end):
-    """(k0, stride, k1) over the time axis for the window, or None unless the series covers ALL
-    of it (Codex on #331): a series that ends before the race finishes would hold its last frame
-    as if it were the forecast, and one that starts after the gun has nothing for the start."""
-    margin = STEP_H * 3600.0
-    if not epochs or epochs[0] > t_start or epochs[-1] < t_end - margin:
+    """(k0, stride, k1) over the time axis, or None unless the series covers ALL of the window
+    (Codex on #331): the frames picked start at or before the gun and reach the window's end, so
+    no frame is held past the forecast as if it were one. k1 - k0 is a whole number of strides,
+    so the last frame read is the one at or after the end."""
+    if not epochs or epochs[0] > t_start or epochs[-1] < t_end:
         return None
-    ks = [k for k, e in enumerate(epochs) if t_start - margin <= e <= t_end + margin]
-    if not ks:
-        return None
-    k0, k1 = ks[0], ks[-1]
+    k_lo = max(k for k, e in enumerate(epochs) if e <= t_start)
+    k1 = min(k for k, e in enumerate(epochs) if e >= t_end)
     dt = (epochs[1] - epochs[0]) if len(epochs) > 1 else 3600.0
     stride = max(1, int(round(STEP_H * 3600.0 / dt)) if dt > 0 else 1)
-    while (k1 - k0) // stride + 1 > MAX_SLICES:
+    while -(-(k1 - k_lo) // stride) + 1 > MAX_SLICES:
         stride += 1
+    k0 = k1 - (-(-(k1 - k_lo) // stride)) * stride      # at or before k_lo, on the stride
+    if k0 < 0:                                          # the gun is at the series' very start
+        k0, stride = 0, 1
+        if k1 + 1 > MAX_SLICES:
+            return None
     return k0, stride, k1
 
 

@@ -453,7 +453,8 @@ def _build_gfswave(bbox, t_start, t_end, log, grid, label, now=None):
                     blob += f_in.read()
             joined = os.path.join(work, "joined.grib2")
             atomicio.write_bytes(joined, blob)
-            parsed = _parse_isolated(joined, t_start, t_end, log)
+            pad = GFSWAVE_STEP_H * 3600.0        # keep the frame either side of the window
+            parsed = _parse_isolated(joined, t_start - pad, t_end + pad, log)
         except Exception as ex:           # not posted yet / no egress → step back a cycle
             log(f"waves: GFS-Wave cycle {cyc:%Y-%m-%d %HZ} not available ({type(ex).__name__})"
                 " — stepping back")
@@ -466,6 +467,11 @@ def _build_gfswave(bbox, t_start, t_end, log, grid, label, now=None):
         lat2d, lon2d, epochs, hs = parsed
         if len(epochs) == 0 or lat2d.size == 0 or not np.isfinite(hs).any():
             log(f"waves: GFS-Wave cycle {cyc:%Y-%m-%d %HZ} has no sea in the window")
+            return None
+        if epochs[0] > t_start or epochs[-1] < t_end:
+            # the forecast (or the file cap) stops inside the window: its last frame would be
+            # held as if it were the forecast (Codex on #331) — no data, said plainly
+            log(f"waves: GFS-Wave cycle {cyc:%Y-%m-%d %HZ} doesn't cover the whole race")
             return None
         slices = [(int(epochs[i]), hs[i]) for i in range(len(epochs))]
         meta = {"cycle": f"{cyc:%Y-%m-%d %HZ}", "product": grid, "domain": "global"}

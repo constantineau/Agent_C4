@@ -286,8 +286,15 @@ check("a stubbed HYCOM fetch loads", field is not None and field.loaded, field a
 sd = field.current_at(26.2, -80.0, t0 + 3600)
 check("…north-north-east at 2.2 kn (0.5 east, 1.0 north m/s)",
       abs(sd[1] - 1.118 * 1.94384) < 0.02 and abs(sd[0] - 26.57) < 0.5, sd)
-check("…time slices every 3 h over the window (with a step each side)",
-      [round((e - t0) / 3600) for e in field.epochs] == [-3, 0, 3, 6, 9, 12, 15], field.epochs)
+check("…time slices every 3 h, from the gun to the window's end",
+      [round((e - t0) / 3600) for e in field.epochs] == [0, 3, 6, 9, 12], field.epochs)
+H.STEP_H = 3
+hours = [ref + h * 3600 for h in range(101)]               # a series ending at hour 100
+check("a window ending past the series → None (Codex on #331)",
+      H._pick_times(hours, ref + 99 * 3600, ref + 102 * 3600) is None)
+k0, ks, k1 = H._pick_times(hours, ref + 90.5 * 3600, ref + 99.5 * 3600)
+check("the frames read bracket the window: last at or after its end, first at or before the gun",
+      k1 == 100 and (k1 - k0) % ks == 0 and hours[k0] <= ref + 90.5 * 3600, (k0, ks, k1))
 check("…named for the data block", S.describe(field) == "HYCOM ESPC (global)")
 far = H.fetch((26.4, 26.0, -80.2, -79.8), NOW + 30 * 86400, NOW + 31 * 86400, lambda *_: None,
               now=NOW)
@@ -314,10 +321,14 @@ parsed_at = []
 grib.http_download = lambda url, path, timeout=60: open(path, "wb").write(b"GRIB" + b"0" * 200)
 
 
+short = []
+
+
 def fake_parse(path, t_lo, t_hi, log):
     parsed_at.append(os.path.dirname(path))
     lat, lon = np.meshgrid([26.0, 26.2], [-80.0, -79.8], indexing="ij")
-    return lat, lon, np.array([int(t_lo), int(t_hi)]), np.full((2, 2, 2), 0.8, dtype="float32")
+    hi = t_hi - 12 * 3600 if short else t_hi                 # `short`: the forecast stops early
+    return lat, lon, np.array([int(t_lo), int(hi)]), np.full((2, 2, 2), 0.8, dtype="float32")
 
 
 WAV._parse_isolated = fake_parse
@@ -328,6 +339,12 @@ for k in range(2):
 check("a stubbed GFS-Wave build loads", fw is not None and abs(fw.wave_at(26.1, -79.9, T0) - 0.8) < 1e-6)
 check("each build works in its own folder (Codex on #331)", len(set(parsed_at)) == 2, parsed_at)
 check("…and leaves nothing behind", os.listdir(os.path.join(os.environ["GRIB_CACHE"], "gfswave")) == [])
+short.append(1)
+WAV._cache.clear()
+fw = WAV._build_gfswave((26.3, 26.0, -80.1, -79.8), T0, T0 + 6 * 3600, lambda *_: None,
+                        "global.0p16", "NOAA GFS-Wave (global 1/6°)", now=T0)
+check("waves that stop before the race ends → no data, not the last frame held (Codex on #331)",
+      fw is None)
 
 print("ALL OK" if ok else "SOME CHECKS FAILED")
 raise SystemExit(0 if ok else 1)
