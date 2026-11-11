@@ -8,7 +8,7 @@ island left on its side). Legs through water no chart covers are listed as notes
 (`geo.depthsrc`, #292), which grid it was.
 A playbook bundle gets one verdict over every route it carries (the main route, the options and the
 plays with a route) and the chart overrides it was routed with. This module reads that verdict and
-records the overrides: a reviewed, per-mark exception for a chart artefact (a mark the chart puts
+records the overrides: a per-mark exception for a chart artefact (a mark the chart puts
 on land or in shallow water). An override only opens the chart at that mark (`geo.obstacles`); it
 never waives a problem.
 """
@@ -17,7 +17,11 @@ from __future__ import annotations
 import time
 
 OLD_BUNDLE = "Built before route checks. Build the playbook again."
-REFUSED = "Route not proven safe: {why}"
+REFUSED = "Route not proven safe: {why} {fix}"
+# what to click (#325), after the problems: a frozen playbook is fixed in Gameplan, then rebuilt
+FIX_OVERRIDE = "Chart wrong at {marks}? Click Override there in Gameplan, then build the playbook again."
+FIX_MOVE = "Move {marks} in Course & Marks, then build the playbook again."
+FIX_REBUILD = "Build the playbook again in Gameplan."
 
 
 def _route_entries(bundle):
@@ -66,17 +70,26 @@ def refusal(bundle):
     again = bundle_verdict(bundle)
     if s.get("ok") and not s.get("problems") and again["ok"]:
         return None
-    texts = []
+    texts, ov, move = [], [], []
     for p in (s.get("problems") or []) + again["problems"]:
         t = p.get("text") or p.get("code") or "?"
         if t not in texts:
             texts.append(t)
-    return REFUSED.format(why=" ".join(texts) or "not checked.")
+        m = p.get("mark")
+        if p.get("code") == "blocked" and m:
+            # a verdict from before #325 has no `override`: the chart was all a block could be
+            got = ov if p.get("override", True) else move
+            if m not in got:
+                got.append(m)
+    fix = " ".join(([FIX_OVERRIDE.format(marks=", ".join(ov))] if ov else []) +
+                   ([FIX_MOVE.format(marks=", ".join(move))] if move else [])) or FIX_REBUILD
+    return REFUSED.format(why=" ".join(texts) or "not checked.", fix=fix)
 
 
-def set_override(definition, course_id, mark, by, why, now=None):
-    """Record (or with an empty `why`, remove) a reviewed chart override on nav mark `mark` of the
-    course. Returns (definition, error). The mark must be one of the course's nav marks."""
+def set_override(definition, course_id, mark, by=None, why=None, now=None, remove=False):
+    """Record (or with `remove`, remove) a chart override on nav mark `mark` of the course.
+    Returns (definition, error). The mark must be one of the course's nav marks. One click in the
+    Lab (#325): `by` defaults to "Lab" (one team login, no names) and `why` is optional."""
     from shared import race_def
     courses = (definition or {}).get("courses") or []
     course = next((c for c in courses if c.get("id") == course_id), None)
@@ -91,15 +104,12 @@ def set_override(definition, course_id, mark, by, why, now=None):
         return definition, "No such mark."
     ov = course.get("chart_overrides")
     ov = dict(ov) if isinstance(ov, dict) else {}
-    why = (why or "").strip()
-    if not why:
+    if remove:
         ov.pop(mark, None)
     else:
-        by = (by or "").strip()
-        if not by:
-            return definition, "Say who reviewed it."
-        ov[mark] = {"by": by[:60], "at": int(now if now is not None else time.time()),
-                    "why": why[:300]}
+        ov[mark] = {"by": (str(by or "").strip() or "Lab")[:60],
+                    "at": int(now if now is not None else time.time()),
+                    "why": str(why or "").strip()[:300]}
     if ov:
         course["chart_overrides"] = ov
     else:

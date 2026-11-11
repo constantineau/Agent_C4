@@ -130,8 +130,44 @@ async function jsonOrFriendly(res) {
     throw new Error(`server error ${res.status}${res.statusText ? " " + res.statusText : ""}`);
   }
 }
-function boot() { if (Lab.token) { document.getElementById("gate").style.display = "none"; start(); } }
+function boot() {
+  watchWebVersion();
+  if (Lab.token) { document.getElementById("gate").style.display = "none"; start(); }
+}
 window.addEventListener("DOMContentLoaded", boot);
+
+/* ---------- new version after a deploy (#325) ----------
+   The Lab's /api/health says which web build it serves. A tab notes it when it loads (the shell is
+   no-cache, so what loaded is what the server had), checks again every 5 min and when the tab comes
+   back, and shows "New version. Reload" once it changes. Not while a route or playbook is running:
+   the bar waits until it's done. */
+const WebVer = { loaded: null };
+function webVersionStep(loaded, now, busy) {
+  if (!now) return { loaded, show: false };
+  if (!loaded) return { loaded: now, show: false };
+  return { loaded, show: now !== loaded && !busy };
+}
+async function checkWebVersion() {
+  let now = null;
+  try { now = (await (await fetch("/api/health", { cache: "no-store" })).json()).web || null; } catch (e) { return; }
+  const busy = !!(Opt.running || Pb.running);
+  const st = webVersionStep(WebVer.loaded, now, busy);
+  WebVer.loaded = st.loaded;
+  const bar = document.getElementById("verbar");
+  // hidden again while a route or playbook runs (a click would drop it), back on the next check
+  if (bar) bar.hidden = !st.show;
+}
+// a route or playbook job starts: no reload bar while it runs; it ends: look again at once
+function jobWebVersion(running) {
+  const bar = document.getElementById("verbar");
+  if (running) { if (bar) bar.hidden = true; } else checkWebVersion();
+}
+function watchWebVersion() {
+  checkWebVersion();
+  setInterval(checkWebVersion, 5 * 60 * 1000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) checkWebVersion(); });
+  window.addEventListener("focus", checkWebVersion);
+}
 
 /* ---------- router ---------- */
 function start() { window.addEventListener("hashchange", route); route(); }
@@ -1330,8 +1366,18 @@ async function renderGameplan() {
   if (Opt.showBoatModel) renderBoatModel();
   updateEnsembleControl();
   updateResHint();
-  if (Opt.result) renderOptResult(Opt.result);
-  if (Pb.result) renderPbResult(Pb.result);
+  if (Opt.result) showResult(renderOptResult, Opt.result, "optOut");
+  if (Pb.result) showResult(renderPbResult, Pb.result, "pbOut");
+}
+
+// A result that fails to draw says so in its own box (#325): before, an exception here left the
+// Gameplan blank with no word why (renderGameplan isn't awaited, so nothing caught it).
+function showResult(render, r, outId) {
+  try { render(r); } catch (e) {
+    console.error(e);
+    const out = document.getElementById(outId);
+    if (out) out.innerHTML = `<div class="card"><div class="placeholder">Couldn't show this route: ${esc(String((e && e.message) || e))}</div></div>`;
+  }
 }
 
 function optCourseOpts() {
@@ -1725,7 +1771,7 @@ async function runOptimize() {
     resolution: Opt.resolution, use_waves: Opt.useWaves, use_current: Opt.useCurrent };
   const startEpoch = optStartEpoch();
   if (startEpoch != null) body.start_epoch = startEpoch;
-  Opt.running = true;
+  Opt.running = true; jobWebVersion(true);
   document.getElementById("optRun").disabled = true;
   document.getElementById("optRun").textContent = "Routing… (getting weather)";
   out.innerHTML = '<div class="card"><div class="loading">Getting the weather and routing the course…</div>' +
@@ -1749,10 +1795,10 @@ async function runOptimize() {
     }
     // the race this route was asked for: its override buttons use it, whatever race is picked now
     if (r && typeof r === "object") r.race_id = r.race_id || body.race_id;
-    Opt.result = r; Opt.running = false;
+    Opt.result = r; Opt.running = false; jobWebVersion(false);
     renderGameplan();
   } catch (e) {
-    Opt.running = false;
+    Opt.running = false; jobWebVersion(false);
     out.innerHTML = '<div class="card"><div class="placeholder">Routing failed: ' + esc(String(e)) + '</div></div>';
     const b = document.getElementById("optRun"); if (b) { b.disabled = false; b.textContent = "Find route →"; }
   }
@@ -2035,7 +2081,7 @@ async function synthPlaybook() {
     fan_depth: (document.getElementById("pbFan") || {}).value || "standard" };
   const startEpoch = optStartEpoch();
   if (startEpoch != null) body.start_epoch = startEpoch;
-  Pb.running = true; Pb.result = null; Pb.jobId = null;
+  Pb.running = true; Pb.result = null; Pb.jobId = null; jobWebVersion(true);
   Pb.ctx = { race: body.race_id, course: body.course_id };   // what this playbook is built on
   const b = document.getElementById("pbRun"); if (b) { b.disabled = true; b.textContent = "Building… (about 10 min)"; }
   out.innerHTML = '<div class="loading" style="margin-top:10px">Routing each forecast scenario and writing the playbook. About 10 min. You can keep working.</div>';
@@ -2053,7 +2099,7 @@ async function synthPlaybook() {
   } catch (e) {
     Pb.result = { available: false, note: String(e) };
   }
-  Pb.running = false; renderGameplan();
+  Pb.running = false; jobWebVersion(false); renderGameplan();
 }
 
 function renderPbResult(b) {
@@ -2086,7 +2132,7 @@ function renderPbResult(b) {
     <div class="pb-freeze">
       ${sig ? pbSigBox(b) :
         `<button id="pbFreeze" onclick="freezePlaybook()" ${Pb.freezing || !safe ? "disabled" : ""}>${Pb.freezing ? "Freezing…" : "🔒 Freeze for the boat"}</button>
-         <span class="muted" style="font-size:12px">${safe ? "Saves a locked copy to send to the boat. No changes after the start." : "Can't freeze until the route checks pass."}</span>`}
+         <span class="muted" style="font-size:12px">${safe ? "Saves a locked copy to send to the boat. No changes after the start." : "Can't freeze until the route checks pass. Fix them above, then build again."}</span>`}
     </div></div>`;
 }
 
@@ -2133,53 +2179,70 @@ function pbPlayCard(p) {
 }
 
 // #242: the route checks. A route that fails one can't be frozen, deployed or sent as GPX. A mark the
-// chart puts on land or shallow water can get a reviewed chart override (who + why), which opens the
-// chart at that mark only; then build again.
+// chart puts on land or shallow water can get a chart override, which opens the chart at that mark
+// only. One click (#325): Override saves it and runs the route again.
 // The race + course a playbook result was built on: its own, else what the build asked for.
 function pbCtx(b) {
   return { race: (b && b.race_id) || (Pb.ctx && Pb.ctx.race), course: (b && b.course_id) || (Pb.ctx && Pb.ctx.course) };
 }
 // `ctx` = {race, course}: the race and course THIS result was routed on. The override buttons carry
 // them, so a click never lands on whichever course is selected now (Codex on #287).
+// Override is offered only where it helps (#325): a "blocked" mark the server says an override would
+// open (`override`; a verdict from before #325 has none, and a chart block was all it could be).
+// Not for a mark the router just didn't reach, nor one in a race zone, by an island or off the chart.
 function safetyPanel(s, what, ctx) {
   if (!s) return "";
-  const at = `data-race="${esc((ctx && ctx.race) || "")}" data-course="${esc((ctx && ctx.course) || "")}"`;
-  const ov = (s.overrides || []).map((o) => `<li>${esc(o.mark)}: chart override by ${esc(o.by)}${o.at ? ", " + esc(new Date(o.at * 1000).toISOString().slice(0, 16).replace("T", " ") + "Z") : ""}. ${esc(o.why)}
-      <button class="mini" data-mark="${esc(o.mark)}" ${at} onclick="chartOverride(this.dataset.mark, true, this.dataset.race, this.dataset.course)">Remove</button></li>`).join("");
+  const at = `data-race="${esc((ctx && ctx.race) || "")}" data-course="${esc((ctx && ctx.course) || "")}" data-what="${esc(what)}"`;
+  const click = (remove) => `onclick="chartOverride(this.dataset.mark, ${remove}, this.dataset.race, this.dataset.course, this.dataset.what, this)"`;
+  const done = new Set((s.overrides || []).map((o) => o.mark));
+  const ov = (s.overrides || []).map((o) => `<li>${esc(o.mark)}: chart overridden${o.by && o.by !== "Lab" ? " by " + esc(o.by) : ""}${o.at ? ", " + esc(new Date(o.at * 1000).toISOString().slice(0, 16).replace("T", " ") + "Z") : ""}.${o.why ? " " + esc(o.why) : ""}
+      <button class="mini" data-mark="${esc(o.mark)}" ${at} ${click(true)}>Remove</button></li>`).join("");
   // Cole on #242: no ENC depths (Canada) never fails a route; those legs are named here
   const notes = (s.notes || []).map((n) => `<div class="pill warn" style="display:block;margin-top:6px;text-align:left">
     ${esc(n.text || "No depth data: check the paper chart.")}${(n.legs || []).length ? `<br><span style="font-weight:400">${(n.legs || []).map(esc).join(", ")}</span>` : ""}</div>`).join("");
   if (s.ok) return (ov ? `<div class="muted" style="font-size:12px;margin-top:6px">Route checks passed.<ul style="margin:2px 0 0 16px;padding:0">${ov}</ul></div>` : "") + notes;
-  const items = (s.problems || []).map((p) => `<li>${p.route ? esc(p.route) + ": " : ""}${esc(p.text || p.code)}
-      ${p.mark && (p.code === "blocked" || p.code === "unreached") ? `<button class="mini" data-mark="${esc(p.mark)}" ${at} onclick="chartOverride(this.dataset.mark, false, this.dataset.race, this.dataset.course)">Chart wrong here?</button>` : ""}</li>`).join("");
+  const canOverride = (p) => p.mark && p.code === "blocked" && p.override !== false && !done.has(p.mark);
+  const items = (s.problems || []).map((p) => `<li>${p.route ? esc(p.route) + ": " : ""}${esc(p.text || p.code)}${p.fix ? " " + esc(p.fix) : ""}
+      ${canOverride(p) ? `<button class="mini" data-mark="${esc(p.mark)}" ${at} ${click(false)}>Override</button>` : ""}</li>`).join("");
   return `<div class="pill bad" style="display:block;margin-top:8px;text-align:left">
     <b>⛔ Route checks failed. No freeze, Deploy or GPX${what === "route" ? " from this route" : ""}.</b>
     <ul style="margin:4px 0 0 16px;padding:0">${items}</ul>
     ${ov ? `<div style="font-weight:400;margin-top:4px">Chart overrides:<ul style="margin:2px 0 0 16px;padding:0">${ov}</ul></div>` : ""}</div>${notes}`;
 }
 
-async function chartOverride(mark, remove, race, course) {
+// One click (#325): save (or remove) the override, then route again. `what` = which result the button
+// is on: "route" (the Gameplan route: run it again, as Find route does) or "playbook" (say so inline:
+// a build is ~10 min, so it's not started for you). No prompts, no confirm, no alert.
+async function chartOverride(mark, remove, race, course, what, btn) {
   const rid = race, cid = course || null;   // the result's own race + course, never the picked one
-  if (!rid) { alert("Not saved: run the route again."); return; }
-  let by = "", why = "";
-  if (!remove) {
-    by = (prompt(`Chart override at ${mark}: opens the chart there. Only for a chart error.\nYour name:`) || "").trim();
-    if (!by) return;
-    why = (prompt("Why is the chart wrong here?") || "").trim();
-    if (!why) return;
-  } else if (!confirm(`Remove the chart override at ${mark}?`)) return;
+  const say = (t) => {
+    if (!btn) return;
+    const sp = document.createElement("span");
+    sp.className = "muted"; sp.style.marginLeft = "6px"; sp.textContent = t;
+    btn.replaceWith(sp);
+  };
+  if (!rid) { say("Run the route again first."); return; }
+  if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
+  let r;
   try {
     // through the race-definition save queue, so it can't interleave with a tab's own save
-    const r = await queueDef(async () => {
+    r = await queueDef(async () => {
       const res = await apiPost("/api/races/" + encodeURIComponent(rid) + "/chart-override",
-        { course_id: cid, mark, by, why });
+        { course_id: cid, mark, remove: !!remove });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(j.detail || "error " + res.status);
       return j;
     });
-    syncOverrides(rid, r.course_id, r.chart_overrides);
-    alert("Saved. Run the route again.");
-  } catch (e) { alert("Not saved: " + e.message); }
+  } catch (e) { say("Not saved: " + e.message); return; }
+  syncOverrides(rid, r.course_id, r.chart_overrides);
+  const verb = remove ? "Removed." : "Overridden.";
+  // re-run only the route this button is on: same race + course as picked now, nothing running
+  if (what === "route" && !Opt.running && rid === Opt.raceId && (!cid || cid === Opt.courseId)
+      && document.getElementById("optRun")) {
+    runOptimize();
+    return;
+  }
+  say(verb + (what === "route" ? " Find route again." : " Build again."));
 }
 
 // The saved overrides into every copy of the race the Lab holds: the editor's (and its clean
@@ -2200,7 +2263,7 @@ function syncOverrides(rid, courseId, ov) {
     }
     syncDirty();
   }
-  if (window.Opt && Opt.def !== Lab.editDef) apply(Opt.def);
+  if (Opt.def && Opt.def !== Lab.editDef) apply(Opt.def);   // Opt is a const: never on window
 }
 
 // the routes' own warnings (forecast ended, shoreline, …), plain, before anything is deployed (#51)

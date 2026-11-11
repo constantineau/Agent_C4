@@ -64,9 +64,31 @@ async def authenticate(body: dict):
     return {"token": auth.issue_token()}
 
 
+def web_version(web_dir=None):
+    """A short hash of every file in the Lab's web shell (#325). An open Lab tab compares it with
+    the one it loaded with and offers a reload after a deploy."""
+    import hashlib
+    root = web_dir or os.environ.get("WEB_DIR", "/srv/web")
+    h = hashlib.sha256()
+    for base, dirs, files in os.walk(root):
+        dirs.sort()
+        for name in sorted(files):
+            fp = os.path.join(base, name)
+            try:
+                with open(fp, "rb") as fh:
+                    data = fh.read()
+            except OSError:
+                continue
+            h.update(os.path.relpath(fp, root).encode() + b"\0" + data + b"\0")
+    return h.hexdigest()[:12]
+
+
+WEB_VERSION = web_version()        # once, at startup: the files don't change under a running Lab
+
+
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "service": "c4-performance-lab"}
+    return {"status": "ok", "service": "c4-performance-lab", "web": WEB_VERSION}
 
 
 @app.get("/api/feedback")
@@ -493,7 +515,7 @@ async def share_page(token: str):
     if not share.load(token):
         return JSONResponse({"detail": "unknown share link"}, status_code=404)
     return FileResponse(os.path.join(os.environ.get("WEB_DIR", "/srv/web"), "player.html"),
-                        media_type="text/html")
+                        media_type="text/html", headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/share/{token}/data")
@@ -822,17 +844,22 @@ async def playbook_freeze(body: dict):
 
 @app.post("/api/races/{rid}/chart-override")
 async def chart_override(rid: str, body: dict):
-    """#242: record a reviewed chart override on one nav mark of a course (a chart artefact: the
-    chart puts the mark on land or in shallow water). Body: {course_id, mark, by, why}; an empty
-    `why` removes it. The mark then gets a pocket of open water in the chart; the route still has
-    to pass every check. Build the playbook again after."""
+    """#242: record a chart override on one nav mark of a course (a chart artefact: the chart
+    puts the mark on land or in shallow water). Body: {course_id, mark, remove?, by?, why?}. One
+    click in the Lab (#325): `by` defaults to "Lab", `why` is optional, `remove: true` removes it.
+    The mark then gets a pocket of open water in the chart; the route still has to pass every
+    check. Route or build the playbook again after."""
     d = store.get_race(rid)
     if not d:
         return JSONResponse({"detail": "unknown race"}, status_code=404)
     from . import routesafety
     body = body or {}
+    remove = bool(body.get("remove"))
+    if "remove" not in body and "why" in body and not str(body.get("why") or "").strip() \
+            and not str(body.get("by") or "").strip():
+        remove = True          # a Lab page from before #325 removes with an empty who + why
     d, err = routesafety.set_override(d, body.get("course_id"), str(body.get("mark") or ""),
-                                      body.get("by"), body.get("why"))
+                                      body.get("by"), body.get("why"), remove=remove)
     if err:
         return JSONResponse({"detail": err}, status_code=400)
     _write_race(d, overrides=True)
@@ -1835,6 +1862,17 @@ async def favicon():
                     headers={"Cache-Control": "public, max-age=86400"})
 
 
+class ShellFiles(StaticFiles):
+    """The static shell with `Cache-Control: no-cache` (#325): without it Chrome guessed a cache
+    life from Last-Modified and kept running an old app.js for hours after a deploy. no-cache
+    still caches; the browser asks each time and gets a 304 (ETag) when nothing changed."""
+
+    async def get_response(self, path, scope):
+        resp = await super().get_response(path, scope)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+
 # The Lab web shell (static). Declared last so the /api routes match first; html=True serves
 # index.html at "/". Client-side hash routing handles the section tabs.
-app.mount("/", StaticFiles(directory=os.environ.get("WEB_DIR", "/srv/web"), html=True), name="web")
+app.mount("/", ShellFiles(directory=os.environ.get("WEB_DIR", "/srv/web"), html=True), name="web")
