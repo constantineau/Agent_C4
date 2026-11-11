@@ -26,7 +26,7 @@ import re
 import struct
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 
 from . import modelskill, venue
 
@@ -36,6 +36,7 @@ _NDBC_TABLE = "https://www.ndbc.noaa.gov/data/stations/station_table.txt"
 
 CACHE_S = 24 * 3600
 MAX_PER_KIND = 8          # probe at most this many of each kind (nearest first)
+PROBE_DEADLINE_S = 120    # Find stations answers by then (gateway cap ~300 s); late checks = not checked
 _cache: dict = {}
 
 
@@ -213,7 +214,7 @@ def _archive_misses(s, window):
 
 
 def discover(lat, lon, radius_nm, window=None, sources=None, probe_fn=None, max_per_kind=MAX_PER_KIND,
-             workers=6):
+             workers=6, deadline_s=None):
     """Stations within `radius_nm` of (lat, lon), nearest first, each with `obs` (count in `window`,
     None when no window). Curated stations win a duplicate id. A source that fails is noted, not
     fatal. Returns {stations: [...], notes: [...]}. `ticked` marks the default choice: curated
@@ -243,10 +244,18 @@ def discover(lat, lon, radius_nm, window=None, sources=None, probe_fn=None, max_
             same = [s for s in same if s.get("curated") or not _archive_misses(s, window)]
         picks += same[:max_per_kind]
     if window:
-        with ThreadPoolExecutor(max_workers=workers) as ex:
-            counts = list(ex.map(lambda s: probe_fn(s, window), picks))
-        for s, n in zip(picks, counts):
-            s["obs"] = n
+        # a stalled archive must not hold the request past the gateway cap: whatever hasn't
+        # answered by the deadline is left "not checked" (obs None) and the rest come back
+        ex = ThreadPoolExecutor(max_workers=workers)
+        futs = {ex.submit(probe_fn, s, window): s for s in picks}
+        done, late = wait(futs, timeout=PROBE_DEADLINE_S if deadline_s is None else deadline_s)
+        for f in done:
+            futs[f]["obs"] = f.result()
+        for f in late:
+            futs[f]["obs"] = None
+        ex.shutdown(wait=False, cancel_futures=True)
+        if late:
+            notes.append(f"{len(late)} station(s) not checked in time. You can still tick them.")
     out = sorted(picks, key=lambda s: s["dist_nm"])
     for kind in ("metar", "ndbc"):
         with_data = [s for s in out if s["kind"] == kind and (not window or s.get("obs"))]

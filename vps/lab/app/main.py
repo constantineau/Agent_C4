@@ -614,7 +614,12 @@ def venue_study_get(key: str):
 
 @app.delete("/api/venue-study/{key}")
 def venue_study_delete(key: str):
-    from . import venuestudy
+    from . import jobs, venuestudy
+    st = jobs.status("venue_study")
+    if st.get("state") == "running" and st.get("key") == key:
+        # the run would write the study and its weights back when it finishes
+        return JSONResponse({"detail": "A study is running here. Delete it when it's done."},
+                            status_code=409)
     return {"deleted": venuestudy.delete(key)}
 
 

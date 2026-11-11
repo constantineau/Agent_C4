@@ -166,6 +166,23 @@ class _Down:
 dd_ = obsstations.discover(26.10, -80.05, 40, window=win, sources=[_Down(), obsstations.NdbcSource()])
 check("a catalogue that is down is a note, not a failure",
       any("Broken list" in n for n in dd_["notes"]) and any(s["id"] == "41122" for s in dd_["stations"]))
+import threading  # noqa: E402
+_hold = threading.Event()
+
+
+def _slow_probe(st_, w_):
+    if st_["id"] == "FXE":
+        _hold.wait(5)              # a stalled archive
+    return 10
+
+
+t0 = time.time()
+sl = obsstations.discover(26.10, -80.05, 40, window=win, probe_fn=_slow_probe, deadline_s=0.5)
+_hold.set()
+check("a stalled station doesn't hold Find stations: answered by the deadline, marked not checked",
+      time.time() - t0 < 3 and next(s_ for s_ in sl["stations"] if s_["id"] == "FXE")["obs"] is None
+      and next(s_ for s_ in sl["stations"] if s_["id"] == "FLL")["obs"] == 10
+      and any("not checked" in n for n in sl["notes"]))
 empty = obsstations.discover(-50.0, -140.0, 20, window=win)
 check("nothing in range: a plain note", not empty["stations"] and "bigger radius" in empty["notes"][0])
 
@@ -352,6 +369,16 @@ for _ in range(200):
 check("'Add older years' on a studied venue deepens the study itself", DEEP == [True] and djs["state"] == "done",
       (DEEP, djs.get("error")))
 venuestudy.run, modelskill.backfill_deep, store.get_race = _run, _bd, _gr
+from app import jobs as _jobs  # noqa: E402
+_gate = threading.Event()
+_jobs.start("venue_study", lambda progress: _gate.wait(5), meta={"key": ps["key"]})
+busy = client.delete(f"/api/venue-study/{ps['key']}", headers=H)
+_gate.set()
+for _ in range(100):
+    if _jobs.status("venue_study")["state"] != "running":
+        break
+    time.sleep(0.05)
+check("no delete while a study runs at that place", busy.status_code == 409 and venuestudy.load(ps["key"]))
 check("delete", client.delete(f"/api/venue-study/{ps['key']}", headers=H).json()["deleted"]
       and not modelskill.load_scores(ps["key"]))
 check("the Lab shell has the page", 'href="#venue"' in open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "web", "index.html")).read())

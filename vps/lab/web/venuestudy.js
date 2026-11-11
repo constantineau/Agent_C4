@@ -102,7 +102,7 @@ function vsStationsHtml() {
         aria-label="Use ${attr(s.id)}"></td>
       <td>${esc(s.id)}${s.curated ? ' <span class="pill ok" title="On our own list">ours</span>' : ""}</td>
       <td>${esc(s.name || "")}</td><td>${kind(s)}</td><td>${s.dist_nm} nm</td>
-      <td>${s.obs == null ? "—" : s.obs ? s.obs.toLocaleString() : '<span class="muted">none</span>'}</td></tr>`).join("");
+      <td>${s.obs == null ? '<span class="muted">not checked</span>' : s.obs ? s.obs.toLocaleString() : '<span class="muted">none</span>'}</td></tr>`).join("");
   const notes = (r.notes || []).map((n) => `<div class="muted" style="font-size:12px">${esc(n)}</div>`).join("");
   return `<h4 style="margin-top:14px">Stations</h4>
     ${rows ? `<div class="vs-scroll"><table class="legs"><thead><tr><th></th><th>ID</th><th>Name</th><th>Type</th><th>Away</th>
@@ -210,7 +210,10 @@ async function vsOpen(key) {
 
 async function vsDelete(key) {
   if (!confirm("Delete this study? Races there go back to default model weights.")) return;
-  try { await api("/api/venue-study/" + encodeURIComponent(key), { method: "DELETE" }); } catch (e) {}
+  try {
+    const r = await api("/api/venue-study/" + encodeURIComponent(key), { method: "DELETE" });
+    if (!r.ok) { alert((await r.json()).detail || "Couldn't delete."); return; }
+  } catch (e) { return; }
   Vs.open = null; Vs.list = null; renderVenueStudy();
 }
 
