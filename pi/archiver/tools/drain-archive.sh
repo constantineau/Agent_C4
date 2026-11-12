@@ -18,7 +18,13 @@
 # sync_state, and telemetry_raw has no PK, so never re-send — only ever advance.
 LOG=/tmp/drain-archive.log
 LOST=/tmp/drain-lost-rowids.log
-VPS=http://100.88.252.115:8101      # the container's baked-in VPS_URL is stale/unreachable
+# the VPS ingestion URL as the boat reaches it (http://<vps-tailnet-ip>:8101). Passed in, not
+# taken from the container: its baked-in VPS_URL was once stale/unreachable. No default (#314).
+VPS=${DRAIN_VPS_URL:-}
+if [ -z "$VPS" ]; then
+  echo "DRAIN_VPS_URL is not set. Run with DRAIN_VPS_URL=http://<vps>:8101. Not starting." >&2
+  exit 2
+fi
 STRIDE=3000
 
 cursor() {

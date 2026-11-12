@@ -13,9 +13,15 @@
 #   3. REPORT. Append a status line so the next session can see progress without re-deriving.
 #
 # Run detached (setsid) so it outlives the shell that started it.
-LOG=/home/constantineau/backups/drain-guardian.log
+LOG=${GUARDIAN_LOG:-$HOME/backups/drain-guardian.log}
 PSQL="docker exec sr33-dev-timescaledb-1 psql -U sr33 -d sr33_dev -tAc"
-PI=sr33-pi@100.79.180.102
+# the boat's Pi as an ssh target (user@host). No default in code (#314).
+PI=${PI_HOST:-}
+if [ -z "$PI" ]; then
+  echo "PI_HOST is not set. Run with PI_HOST=<user>@<pi-host>. Not starting." >&2
+  exit 2
+fi
+mkdir -p "$(dirname "$LOG")"
 MIN_FREE_KB=5000000        # 5 G — below this, stop the drain
 
 echo "=== $(date -u +%FT%TZ) guardian started ===" >> $LOG

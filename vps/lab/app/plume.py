@@ -462,9 +462,13 @@ def record(spec, now=None, models=None, on_progress=None, fetch=None):
 
 # ---- push to the boat ------------------------------------------------------------------------
 def push_url():
-    return os.environ.get("PLUME_PUSH_URL") or (
-        os.environ.get("DEPLOY_PI_ENGINE_URL", "http://100.79.180.102:8200").rstrip("/")
-        + "/plume/load")
+    """Where a plume goes: PLUME_PUSH_URL, else the Deploy push's engine (DEPLOY_PI_ENGINE_URL) +
+    /plume/load. None with neither set (#314: no address default in code)."""
+    from . import deploy
+    if os.environ.get("PLUME_PUSH_URL"):
+        return os.environ["PLUME_PUSH_URL"]
+    eng = deploy.engine_url()
+    return eng + "/plume/load" if eng else None
 
 
 def push(plume, post=None, now=None):
@@ -480,8 +484,15 @@ def push(plume, post=None, now=None):
     if started(plume["race_start"], now):
         return {"at": int(now), "ok": False, "key": plume.get("key"), "paused": True,
                 "built_at": plume.get("built_at"), "error": "race started — not sent"}
+    url = push_url()
+    if not url:
+        rec = {"at": int(now), "ok": False, "key": plume.get("key"),
+               "built_at": plume.get("built_at"), "race_start": plume.get("race_start"),
+               "error": "DEPLOY_PI_ENGINE_URL is not set in the Lab's .env. Not sent."}
+        labstate.set(_KEY_PUSH, rec)
+        return rec
     post = post or deploy._post_json
-    ok, resp = post(push_url(), plume)
+    ok, resp = post(url, plume)
     ok = bool(ok and (resp or {}).get("loaded"))
     rec = {"at": int(now), "ok": ok, "key": plume.get("key"),
            "built_at": plume.get("built_at"), "race_start": plume.get("race_start"),

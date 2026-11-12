@@ -70,8 +70,8 @@ check("a race_start it carries is dropped, so the console can't read it as froze
 print("onboard refusals:")
 for name, ip, hdrs, body in (
         ("from loopback (the console proxy / a shell on the Pi)", "127.0.0.1", {}, ONBOARD),
-        ("from a Tailscale address (how shore reaches the Pi)", "100.79.180.102", {}, ONBOARD),
-        ("from the Orin's Tailscale address", "100.70.110.72", {}, ONBOARD),
+        ("from a Tailscale address (how shore reaches the Pi)", "100.64.0.11", {}, ONBOARD),
+        ("from the Orin's Tailscale address", "100.64.0.12", {}, ONBOARD),
         ("from boat Wi-Fi", "192.168.1.50", {}, ONBOARD),
         ("no peer address", None, {}, ONBOARD),
         ("through a proxy claiming the Orin (X-Forwarded-For)", ORIN, {"X-Forwarded-For": ORIN}, ONBOARD),
@@ -192,7 +192,7 @@ if have_app:
             await engine_app.app(scope, receive, send)
         return TestClient(asgi)
 
-    orin, shore, local = peer(ORIN), peer("100.79.180.102"), peer("127.0.0.1")
+    orin, shore, local = peer(ORIN), peer("100.64.0.11"), peer("127.0.0.1")
     r = orin.post("/plume/onboard", json=ONBOARD).json()
     check("Orin → POST /plume/onboard taken while racing", r["loaded"])
     check("shore (Tailscale) → refused", shore.post("/plume/onboard", json=ONBOARD).json()["loaded"] is False)
