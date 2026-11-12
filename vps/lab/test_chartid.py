@@ -39,7 +39,8 @@ print("depth:")
 for b in BOATS:
     check(f"Lab boats.safety_depth_m == shared for {b}",
           boats.safety_depth_m(b) == chartid.safety_depth_m(b))
-check("the shared default is the Lab's (2.63)", chartid.safety_depth_m(None) == 2.63)
+check("no boat: no depth of its own, never another boat's (#305)",
+      chartid.safety_depth_m(None) is None and boats.safety_depth_m(None) is None)
 
 print("fingerprint:")
 for b in BOATS:

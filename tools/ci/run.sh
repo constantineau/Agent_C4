@@ -122,7 +122,8 @@ area lab /srv /srv vps/lab/**/test_*.py
 # test in the Lab image (eccodes/cfgrib).
 area lab /srv /srv pi/orin/plume/**/test_*.py pi/orin/reroute/**/test_*.py
 # The console's pure JS modules, the Lab's pure web helpers and the replay rig: plain node, pinned major.
-node_area pi/console/**/test_*.js vps/lab/test_*.js tools/replay/**/test_*.js tools/**/*.test.mjs
+# The iPad web app's sail dial (vps/web/public/sail.js) is a browser IIFE tested in a node vm.
+node_area pi/console/**/test_*.js vps/lab/test_*.js vps/web/test_*.js tools/replay/**/test_*.js tools/**/*.test.mjs
 
 # Every tracked test file must have run (or be excluded with a reason): nothing is missed silently.
 unwired=()

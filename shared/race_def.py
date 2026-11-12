@@ -25,6 +25,7 @@ NORs publish degrees-decimal-minutes; `dm_to_dd` documents the conversion used.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field, asdict
 from typing import Optional
 
@@ -41,6 +42,9 @@ REQ_CATEGORIES = {"safety", "structural", "crew_safety", "navigation", "communic
 REQ_PHASES = {"pre_entry", "pre_start", "start", "in_race", "at_gate", "at_finish", "post_race"}
 # What surfaces a race-time requirement on the onboard console.
 TRIGGER_TYPES = {"none", "time", "event", "location"}
+# Handicap systems a race can score on (rules_profile.scoring.rating_system). Only ORC has a
+# rating feed today; the others are named so a race can say so instead of being read as ORC.
+RATING_SYSTEMS = {"ORC", "PHRF", "IRC", "ONE_DESIGN"}
 
 
 def dm_to_dd(deg: float, minutes: float, hemi: str) -> float:
@@ -100,6 +104,13 @@ class Scoring:
     options: list = field(default_factory=list)
     decided: str = ""              # when/how the option is fixed (e.g. race-morning briefing)
     ref: str = ""
+    # Which handicap number the race scores on (#311). Read by the Lab fleet import and the in-race
+    # fleet model; nothing guesses it from the race's name. See `rating_spec` / `rating_countries`.
+    rating_system: str = ""        # RATING_SYSTEMS, "" = not stated yet
+    rating_column: str = ""        # ORC: certificate column for the ToT number (e.g. "TMF_Inshore")
+    rating_column_tod: str = ""    # ORC: matching ToD column, "" if none
+    course_columns: list = field(default_factory=list)   # [{course, column, column_tod}] per course
+    rating_countries: list = field(default_factory=list)  # ORC national authorities to search
 
 
 @dataclass
@@ -150,6 +161,10 @@ class FleetEntry:
     sail: str = ""                                    # sail number — entry-list ID + ORC-cert match key
     orc_gph: Optional[float] = None
     rating: Optional[float] = None
+    tod_allowance: Optional[float] = None             # ORC ToD allowance (s/nm) off the race's ToD
+                                                      # column; None = use GPH
+    rating_col: Optional[str] = None                  # column an imported rating was read off
+    tod_col: Optional[str] = None                     # column an imported tod_allowance came from
     mmsi: Optional[str] = None
     source: str = ""                                  # how this entry/handicap was sourced (yb/orc/manual)
 
@@ -204,6 +219,8 @@ class RaceDefinition:
     tracker: dict = field(default_factory=dict)        # public race tracker source config (see TrackerConfig)
     provenance: dict = field(default_factory=dict)     # Provenance
     schema_version: str = SCHEMA_VERSION
+    venue_country: str = ""        # start venue's country, World Sailing 3-letter code (e.g. "GBR");
+                                   # seeds the ORC country list when the scoring block names none
 
 
 # --- (de)serialize + validate -------------------------------------------------
@@ -293,6 +310,7 @@ def validate(d: dict) -> tuple[list, list]:
             warnings.append(f"requirement {r.get('id')!r} is delivered to the iPad but has no "
                             f"trigger — when should it surface?")
     rp = d.get("rules_profile", {})
+    warnings += rating_warnings(d)
     if rp.get("tracker_permitted") is None:
         warnings.append("rules_profile.tracker_permitted unset — confirm per-race (SI)")
     tr = d.get("tracker", {})
@@ -422,6 +440,190 @@ def marks_with_side(definition: dict, course_id: str = None):
     return out
 
 
+# --- which handicap number the race scores on (#311) ----------------------------
+_SAIL_PREFIX = re.compile(r"^\s*([A-Za-z]{3})[\s\-]*\d")
+
+
+def rating_system(scoring: dict) -> str:
+    """The race's rating system ('ORC' | 'PHRF' | 'IRC' | 'ONE_DESIGN') or '' when not stated.
+    The explicit `rating_system` field wins; else a system/method text that names exactly one."""
+    sc = scoring or {}
+    s = re.sub(r"[\s\-]+", "_", str(sc.get("rating_system") or "").strip().upper())
+    if s:
+        return s
+    txt = f"{sc.get('system') or ''} {sc.get('method') or ''}".upper()
+    found = [n for n in ("ORC", "PHRF", "IRC") if re.search(rf"\b{n}\b", txt)]
+    if re.search(r"\bONE[\s\-]?DESIGN\b", txt):
+        found.append("ONE_DESIGN")
+    return found[0] if len(found) == 1 else ""
+
+
+def _course_for(definition: dict, course_id: str = None):
+    """The course a rating is read for: the one asked, else our division's course."""
+    if course_id:
+        return course_id
+    return course_of_division(definition, ((definition or {}).get("own") or {}).get("division"))
+
+
+def rating_spec(definition: dict, course_id: str = None, own_course: bool = True) -> dict:
+    """Which certificate number the race scores on: {system, column, column_tod, course}.
+    `column` is None when the race does not say: callers must then ask, never guess one.
+    A per-course column (scoring.course_columns) wins over the race-wide `rating_column`; with no
+    course given, our division's course is used, or the only per-course column there is."""
+    sc = (((definition or {}).get("rules_profile") or {}).get("scoring")) or {}
+    rows = [r for r in (sc.get("course_columns") or [])
+            if isinstance(r, dict) and (r.get("column") or r.get("column_tod"))]   # a ToD-only row counts
+    cid = _course_for(definition, course_id) if own_course else course_id
+    row = next((r for r in rows if cid and str(r.get("course")) == str(cid)), None)
+    # no course known: the per-course column stands in only when EVERY course of the race uses it
+    # (a race listing courses that have no row of their own doesn't count)
+    course_ids = {str(c.get("id")) for c in (definition or {}).get("courses") or []
+                  if isinstance(c, dict) and c.get("id")}
+    covers = course_ids <= {str(r.get("course")) for r in rows}
+    if (row is None and not cid and covers
+            and len({(r.get("column") or "", r.get("column_tod") or "") for r in rows}) == 1):
+        row = rows[0]
+    col = (row or {}).get("column") or sc.get("rating_column") or None
+    tod = ((row or {}).get("column_tod") if row else sc.get("rating_column_tod")) or None
+    return {"system": rating_system(sc), "column": col, "column_tod": tod,
+            "course": (row or {}).get("course") or cid}
+
+
+def course_of_division(definition: dict, division) -> Optional[str]:
+    """The course a division sails (divisions[].course_ref), or None when not listed."""
+    div = str(division or "").strip()
+    for dv in (definition or {}).get("divisions") or []:
+        if div and str(dv.get("id") or "").strip() == div:
+            return dv.get("course_ref")
+    return None
+
+
+def rating_spec_for(definition: dict, entry: dict, course_id: str = None) -> dict:
+    """`rating_spec` for one boat: the course asked, else the boat's division's course. A boat whose
+    division the race doesn't list never inherits OUR course: it gets the race-wide column (or the
+    only per-course column, when every course uses the same one), else unknown. The Lab import, the
+    save check and the boat blob all use this, so they agree on every boat's column."""
+    course = course_id or course_of_division(definition, (entry or {}).get("division"))
+    return rating_spec(definition, course, own_course=False)
+
+
+# Column tags (#311). An imported number carries the certificate column it was read off
+# (`rating_col` / `tod_col`); a number typed in the Lab carries MANUAL_TAG and is never cleared.
+# A number with NO tag on an entry whose `source` says it came from ORC is a LEGACY import (before
+# tags existed): its column is unknown, so it is cleared unless a migration tags it first
+# (`tag_legacy`). An untagged number on any other entry was typed before tags existed: kept.
+MANUAL_TAG = "manual"
+_LEGACY = object()
+
+
+def _imported(e) -> bool:
+    return "orc" in str((e or {}).get("source") or "").lower()
+
+
+def stale_numbers(e: dict, want_tot, want_tod) -> bool:
+    """Clear `rating` / `tod_allowance` on one entry when they were imported off a column other
+    than the one wanted now (see the tag rules above). Returns True when a number was cleared."""
+    hit = False
+    for num, tag, want in (("rating", "rating_col", want_tot), ("tod_allowance", "tod_col", want_tod)):
+        if tag in e:
+            have = e.get(tag)
+        elif num == "rating" and _imported(e) and e.get(num) is not None:
+            have = _LEGACY
+        else:
+            continue
+        if have == MANUAL_TAG or (have is not _LEGACY and (have or None) == (want or None)):
+            continue
+        hit = hit or e.get(num) is not None
+        e[num] = None
+        e.pop(tag, None)
+    return hit
+
+
+def tag_legacy(definition: dict, column: str) -> int:
+    """Migration: tag every legacy ORC import's rating (no tag, ORC source) with the column it is
+    known to have been read off. Returns how many were tagged."""
+    n = 0
+    for e in (definition or {}).get("fleet") or []:
+        if (isinstance(e, dict) and "rating_col" not in e and _imported(e)
+                and e.get("rating") is not None):
+            e["rating_col"] = column
+            n += 1
+    return n
+
+
+def clear_stale_ratings(definition: dict) -> dict:
+    """On save and in the migration (#311): clear any imported rating / ToD allowance that is not
+    off the column its boat's course scores on now (tag rules above). Mutates `definition`;
+    returns {"boats": [names], "own": bool}."""
+    def _fix(e):
+        spec = rating_spec_for(definition, e)
+        return stale_numbers(e, spec["column"], spec["column_tod"])
+    boats = [str(e.get("boat") or "?") for e in (definition.get("fleet") or [])
+             if isinstance(e, dict) and _fix(e)]
+    own = definition.get("own")
+    return {"boats": boats, "own": bool(isinstance(own, dict) and _fix(own))}
+
+
+def sail_prefix(sail) -> str:
+    """'GBR 1234' / 'usa-60' → 'GBR' / 'USA'; '' when the sail number has no country prefix."""
+    m = _SAIL_PREFIX.match(str(sail or ""))
+    return m.group(1).upper() if m else ""
+
+
+def rating_countries(definition: dict, entries: list = None, limit: int = 6) -> list:
+    """National authorities to search for certificates. The scoring block's list wins; else the
+    start venue's country, then entrants' sail-number prefixes, most common first."""
+    d = definition or {}
+    sc = ((d.get("rules_profile") or {}).get("scoring")) or {}
+    given = sc.get("rating_countries") or []
+    if isinstance(given, str):
+        given = given.split(",")
+    out = [str(c).strip().upper() for c in given if str(c).strip()]
+    if out:
+        return out
+    venue = str(d.get("venue_country") or "").strip().upper()
+    if venue:
+        out.append(venue)
+    counts = {}
+    for e in entries if entries is not None else (d.get("fleet") or []):
+        p = sail_prefix((e or {}).get("sail"))
+        if p:
+            counts[p] = counts.get(p, 0) + 1
+    for p, _n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
+        if p not in out:
+            out.append(p)
+    return out[:limit]
+
+
+def rating_warnings(d: dict) -> list:
+    """Race-review flags for the rating fields: a fleet with no system, or ORC with no column."""
+    sc = ((d.get("rules_profile") or {}).get("scoring")) or {}
+    system = rating_system(sc)
+    out = []
+    if system and system not in RATING_SYSTEMS:
+        out.append(f"scoring.rating_system {system!r} unknown (ORC, PHRF, IRC, ONE_DESIGN)")
+    elif system == "ORC":
+        cols = [r for r in (sc.get("course_columns") or [])
+                if isinstance(r, dict) and (r.get("column") or r.get("column_tod"))]
+        if not sc.get("rating_column") and not cols:
+            out.append("Rating column unknown: pick one (scoring)")
+    elif not system and d.get("fleet"):
+        out.append("Rating system unknown: set it in scoring")
+    # boats whose division the race doesn't list can't be put on a course: with per-course
+    # columns they fall back to the race-wide one (or none), so say how many
+    per = {(r.get("column") or "", r.get("column_tod") or "")
+           for r in (sc.get("course_columns") or [])
+           if isinstance(r, dict) and (r.get("column") or r.get("column_tod"))}
+    if len(per) > 1:
+        n = sum(1 for e in d.get("fleet") or []
+                if isinstance(e, dict) and not course_of_division(d, e.get("division")))
+        if n:
+            out.append(f"{n} boat{'s' if n != 1 else ''} in a division the race doesn't list: "
+                       + ("race-wide rating column used" if sc.get("rating_column")
+                          else "rating column unknown"))
+    return out
+
+
 _PROSE_KEYS = frozenset({"note", "notes", "ref", "coords_source", "source"})
 
 
@@ -528,12 +730,22 @@ def fleet_blob(definition: dict, own: dict = None) -> dict:
     neutral coefficient. Also carries the public-tracker config (over-the-horizon fleet source); its
     `permitted` flag is driven STRICTLY by `rules_profile.tracker_permitted` (default conservative —
     None/False → off), never by the tracker block itself. Returns {fleet, scoring, own, tracker}."""
+    # last line of defence (#311): a rating imported off another column than its boat's course
+    # scores on now (or a legacy import of unknown column) never reaches the boat, whatever path
+    # wrote the file. Works on a copy; `stale_ratings` names the boats so the Lab can say so.
+    definition = json.loads(json.dumps(definition or {}))
+    if own:                       # an explicit own entry is checked like the saved one (#311)
+        definition["own"] = json.loads(json.dumps(own))
+    stale = clear_stale_ratings(definition)
     roster = []
     for e in definition.get("fleet", []) or []:
+        spec = rating_spec_for(definition, e)      # per boat: its course may or may not name columns
         roster.append({"boat": e.get("boat"), "division": e.get("division", ""),
+                       "rating_col": spec["column"], "tod_col": spec["column_tod"],
                        "cls": e.get("cls", ""), "owner": e.get("owner", ""),
                        "sail": e.get("sail", ""),
                        "orc_gph": e.get("orc_gph"), "rating": e.get("rating"),
+                       "tod_allowance": e.get("tod_allowance"),
                        "mmsi": e.get("mmsi")})
     rp = definition.get("rules_profile") or {}
     scoring = rp.get("scoring") or {}
@@ -548,8 +760,15 @@ def fleet_blob(definition: dict, own: dict = None) -> dict:
         e = _gun_epoch(v, tz_name)
         if e is not None:
             division_starts[str(k)] = e
-    return {"fleet": roster, "scoring": scoring, "own": own or definition.get("own") or {},
-            "tracker": tracker, "division_starts": division_starts}
+    own_out = dict(definition.get("own") or {})
+    if own_out:
+        ospec = rating_spec_for(definition, own_out)
+        own_out.update(rating_col=ospec["column"], tod_col=ospec["column_tod"])
+    out = {"fleet": roster, "scoring": scoring, "own": own_out,
+           "tracker": tracker, "division_starts": division_starts}
+    if stale["boats"] or stale["own"]:
+        out["stale_ratings"] = stale["boats"] + (["(our boat)"] if stale["own"] else [])
+    return out
 
 
 if __name__ == "__main__":

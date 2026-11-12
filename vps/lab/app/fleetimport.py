@@ -9,8 +9,11 @@ are public, so we automate them:
     Opus-extracted entry list when a race has no YB tracker.)
   - **Handicaps (how they're rated) — the ORC public certificate database.** `data.orc.org` publishes
     every active cert per national authority as JSON (GPH + ToT/ToD coefficients, incl. race-specific
-    columns like Bayview Mackinac's `US_BAYMAC_*`). Matched to the entry list by sail number → yacht
-    name → the roster's `orc_gph` / `rating`.
+    columns). Matched to the entry list by sail number → yacht name → the roster's `orc_gph` /
+    `rating`. WHICH column is the race's number comes from the race definition
+    (`rules_profile.scoring`, see shared/race_def.rating_spec); with none, `rating` stays empty and
+    the roster says "Rating column unknown: pick one" — never a guessed offshore number (#311).
+    ORC is one feed behind `ratings` (the rating-feed registry); other systems plug in there.
 
 Everything is a DRAFT: `import_fleet` returns a proposed roster (with per-boat match confidence + an
 unmatched list); the human reviews/edits it in the Lab Fleet tab and Saves — nothing is auto-committed,
@@ -22,21 +25,20 @@ import re
 import time
 import urllib.request
 
-from . import extract
+from shared import race_def
+
+from . import extract, ratings
 
 _TIMEOUT = float(os.environ.get("FLEET_IMPORT_TIMEOUT_S", "50"))
 _ORC_TTL = float(os.environ.get("ORC_CACHE_TTL_S", "86400"))   # the country dump changes slowly
 _YB_HOSTS = {"yb", "bycmack", "ybtracking", "yellowbrick"}
 _ORC_URL = "https://data.orc.org/public/WPub.dll?action=DownRMS&CountryId={cc}&ext=json"
 
-# race-specific ORC ToT/ToD columns (the cert carries these precomputed). Generic default = the
-# single-number offshore handicap; a known race maps to its dedicated column for exactness.
-_RACE_ORC_COLS = {
-    "bayview_mackinac": {"cove": ("US_BAYMAC_CV_TOT", "US_BAYMAC_CV_TOD"),
-                         "shore": ("US_BAYMAC_SH_TOT", "US_BAYMAC_SH_TOD")},
-    "chicago_mackinac": {"": ("US_CHIMAC_AP_TOT", None)},
-}
-_DEFAULT_TOT = ("TMF_Offshore", "APHT")     # try these in order for the generic ToT coefficient
+COLUMN_UNKNOWN = "Rating column unknown: pick one"
+COUNTRY_UNKNOWN = "No ORC country known. Enter one."
+# cert keys that are identity or bookkeeping, not a rating a race can score on (the column picker)
+_NOT_RATINGS = {"GPH", "CDL", "LOA", "IMSL", "MB", "Dspl", "DSPL", "Age", "Year", "SailNo",
+                "YachtName", "Class", "Builder", "Designer", "CertNo", "RefNo", "VPPYear"}
 
 
 def _norm(s):
@@ -115,29 +117,63 @@ def _orc_dump(country):
     return idx
 
 
-def _tot_cols_for_race(definition, course_id=None):
-    """Pick the ORC ToT/ToD column pair for this race/course (race-specific if known, else generic)."""
-    rid = _norm(definition.get("race_id") or definition.get("name") or "")
-    for key, courses in _RACE_ORC_COLS.items():
-        if _norm(key) in rid:
-            cid = _norm(course_id or "")
-            for ck, cols in courses.items():
-                if not ck or ck in cid:
-                    return cols
-            return next(iter(courses.values()))
-    return (None, None)
+def _tot_col(definition, course_id=None):
+    """The ORC certificate column this race scores on, from its definition, or None (unknown)."""
+    return race_def.rating_spec(definition or {}, course_id)["column"]
+
+
+def _tod_col(definition, course_id=None):
+    """The ORC time-on-distance allowance column (s/nm) the race names, or None (then GPH)."""
+    return race_def.rating_spec(definition or {}, course_id)["column_tod"]
+
+
+def _cols(definition, entry, course_id=None):
+    """(ToT column, ToD column) for one boat: the course asked, else its division's course, else
+    the race default. Same rule as the save check (race_def.rating_spec_for)."""
+    spec = race_def.rating_spec_for(definition or {}, entry or {}, course_id)
+    return spec["column"], spec["column_tod"]
+
+
+def drop_stale(e, tot_col, tod_col):
+    """Clear numbers imported off a different column than the one asked for now (#311). The tag
+    rules (imported / typed / legacy) live in race_def so the import and every save agree."""
+    return race_def.stale_numbers(e, tot_col, tod_col)
+
+
+def _set_numbers(e, rec, tot_col, tod_col):
+    """Put a cert's numbers on an entry, each tagged with the column it came from. Returns the
+    rating (None when the race names no column or the cert lacks it)."""
+    gph, rating = _orc_handicap(rec, tot_col)
+    if gph is not None:
+        e["orc_gph"] = gph
+    # the race's column only: a rating read off another column (an earlier pick, a hand entry
+    # before the match) must not survive under this one
+    e["rating"] = rating
+    if rating is not None:
+        e["rating_col"] = tot_col
+    else:
+        e.pop("rating_col", None)
+    alw = _as_num(rec.get(tod_col)) if tod_col else None
+    e["tod_allowance"] = alw
+    if alw is not None:
+        e["tod_col"] = tod_col
+    else:
+        e.pop("tod_col", None)
+    return rating
+
+
+def _as_num(v):
+    try:
+        return float(v) if v is not None and not isinstance(v, bool) else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _orc_handicap(rec, tot_col):
+    """(GPH, rating) off one cert. `rating` is the race's column only: None when the race names no
+    column or this cert lacks it. No fallback to another number."""
     gph = rec.get("GPH")
-    rating = None
-    if tot_col and rec.get(tot_col) is not None:
-        rating = rec.get(tot_col)
-    else:
-        for c in _DEFAULT_TOT:
-            if rec.get(c) is not None:
-                rating = rec.get(c)
-                break
+    rating = rec.get(tot_col) if tot_col else None
     try:
         gph = float(gph) if gph is not None else None
     except (TypeError, ValueError):
@@ -149,18 +185,43 @@ def _orc_handicap(rec, tot_col):
     return gph, rating
 
 
-def _countries(country):
-    """'USA,CAN' → ['USA', 'CAN'] (a Great Lakes fleet spans both; each is a separate ORC dump)."""
-    return [c.strip().upper() for c in str(country or "USA").split(",") if c.strip()]
+def _countries(country, definition=None, entries=None):
+    """'USA,CAN' → ['USA', 'CAN'] (each is a separate ORC dump). Nothing typed → the race
+    definition's list (its scoring block, else the venue country + entrants' sail prefixes)."""
+    if isinstance(country, (list, tuple)):
+        typed = [str(c).strip().upper() for c in country if str(c).strip()]
+    else:
+        typed = [c.strip().upper() for c in str(country or "").split(",") if c.strip()]
+    return typed or race_def.rating_countries(definition or {}, entries)
 
 
-def enrich_from_orc(entries, country="USA,CAN", definition=None, course_id=None):
+def _rating_keys(rec):
+    """Numeric cert columns a race could score on (offered when the race names none)."""
+    out = set()
+    for k, v in rec.items():
+        if k in _NOT_RATINGS or isinstance(v, bool):
+            continue
+        if isinstance(v, (int, float)):
+            out.add(k)
+    return out
+
+
+def enrich_from_orc(entries, country=None, definition=None, course_id=None):
     """Fill orc_gph + rating (and tidy class) on each entry by matching to the ORC cert DB. Match by
-    sail number, then yacht name, trying EACH listed country's dump in order (comma-separated —
-    a Great Lakes fleet spans USA + CAN certs). Returns the enriched entries + match stats;
-    unmatched keep their identity (the human can fill the handicap by hand)."""
+    sail number, then yacht name, trying EACH listed country's dump in order. `rating` is the race
+    definition's column only (see `_tot_col`); with none named, ratings stay empty and the result
+    carries `note` = COLUMN_UNKNOWN plus `orc_columns` to pick from. Returns the enriched entries +
+    match stats; unmatched keep their identity (the human can fill the handicap by hand)."""
+    tot_col = _tot_col(definition, course_id)          # the race default, for the summary
+    cols = [_cols(definition, e, course_id) for e in entries]   # each boat's own course
+    # first, whatever the lookup brings: numbers imported off another column go, matched or not
+    dropped = [e for e, (tc, dc) in zip(entries, cols) if drop_stale(e, tc, dc)]
+    stale = len(dropped)
+    countries = _countries(country, definition, entries)
+    if not countries:
+        return {"ok": False, "note": COUNTRY_UNKNOWN, "entries": entries, "stale_cleared": stale}
     idxs, certs, fetched = [], 0, []
-    for cc in _countries(country):
+    for cc in countries:
         try:
             idx = _orc_dump(cc)
             idxs.append((cc, idx))
@@ -169,11 +230,10 @@ def enrich_from_orc(entries, country="USA,CAN", definition=None, course_id=None)
         except Exception as e:
             print(f"[fleet] ORC dump {cc} failed ({type(e).__name__}) — skipping", flush=True)
     if not idxs:
-        return {"ok": False, "note": f"ORC database fetch failed ({country})",
-                "entries": entries}
-    tot_col, _tod = _tot_cols_for_race(definition or {}, course_id) if definition else (None, None)
-    matched = 0
-    for e in entries:
+        return {"ok": False, "note": f"ORC database fetch failed ({','.join(countries)})",
+                "entries": entries, "stale_cleared": stale}
+    matched, lacking, seen_cols, lacking_cols = 0, 0, set(), set()
+    for e, (e_tot, e_tod) in zip(entries, cols):
         rec, by, cc_hit = None, None, None
         for cc, idx in idxs:
             rec = idx["by_sail"].get(_norm_sail(e.get("sail")))
@@ -187,31 +247,42 @@ def enrich_from_orc(entries, country="USA,CAN", definition=None, course_id=None)
         if not rec:
             e["orc_match"] = None
             continue
-        gph, rating = _orc_handicap(rec, tot_col)
-        if gph is not None:
-            e["orc_gph"] = gph
-        if rating is not None:
-            e["rating"] = rating
+        rating = _set_numbers(e, rec, e_tot, e_tod)
+        seen_cols |= _rating_keys(rec)
+        if rating is None and e_tot:
+            lacking += 1
+            lacking_cols.add(e_tot)
         if not e.get("cls") and rec.get("Class"):
             e["cls"] = rec.get("Class")
         e["source"] = (e.get("source") or "") + "+orc" if e.get("source") else "orc"
         e["orc_match"] = {"by": by, "country": cc_hit,
                           "yacht": rec.get("YachtName"), "sail": rec.get("SailNo"),
-                          "class": rec.get("Class"), "col": tot_col or "GPH/offshore"}
+                          "class": rec.get("Class"), "col": e_tot}
         matched += 1
-    return {"ok": True, "entries": entries, "matched": matched, "total": len(entries),
-            "orc_country": ",".join(fetched), "orc_certs": certs, "tot_col": tot_col}
+    out = {"ok": True, "entries": entries, "matched": matched, "total": len(entries),
+           "orc_country": ",".join(fetched), "orc_certs": certs, "tot_col": tot_col,
+           "tod_col": _tod_col(definition, course_id),
+           # cleared and not read again off the new column (a re-read one isn't a loss)
+           "stale_cleared": sum(1 for e in dropped if e.get("rating") is None)}
+    if not any(tc for tc, _dc in cols) and not (tot_col and not entries):
+        out["note"] = COLUMN_UNKNOWN
+        out["orc_columns"] = sorted(seen_cols)
+    elif lacking:
+        out["note"] = (f"{lacking} boat{'s lack' if lacking != 1 else ' lacks'} "
+                       f"{', '.join(sorted(lacking_cols))} on the cert.")
+    return out
 
 
-def orc_candidates(boat, sail=None, country="USA,CAN", definition=None, course_id=None, limit=6):
+def orc_candidates(boat, sail=None, country=None, definition=None, course_id=None, limit=6):
     """Fuzzy ORC-cert candidates for ONE unrated boat — the human picks; nothing auto-applies.
     Scores name similarity (difflib) + an exact-sail boost across every listed country's dump."""
     import difflib
-    tot_col, _tod = _tot_cols_for_race(definition or {}, course_id) if definition else (None, None)
+    tot_col, tod_col = _cols(definition, {}, course_id)
     target = _norm(boat or "")
     target_sail = _norm_sail(sail)
     out = []
-    for cc in _countries(country):
+    countries = _countries(country, definition, [{"sail": sail}] if sail else None)
+    for cc in countries:
         try:
             idx = _orc_dump(cc)
         except Exception:
@@ -225,9 +296,32 @@ def orc_candidates(boat, sail=None, country="USA,CAN", definition=None, course_i
             gph, rating = _orc_handicap(rec, tot_col)
             out.append({"score": round(score, 2), "country": cc,
                         "yacht": rec.get("YachtName"), "sail": rec.get("SailNo"),
-                        "cls": rec.get("Class"), "orc_gph": gph, "rating": rating})
+                        "cls": rec.get("Class"), "orc_gph": gph, "rating": rating,
+                        "tod_allowance": _as_num(rec.get(tod_col)) if tod_col else None})
     out.sort(key=lambda c: -c["score"])
-    return {"boat": boat, "candidates": out[:limit], "tot_col": tot_col}
+    res = {"boat": boat, "candidates": out[:limit], "tot_col": tot_col, "tod_col": tod_col,
+           "orc_country": ",".join(countries)}
+    if not countries:
+        res["note"] = COUNTRY_UNKNOWN
+    elif not tot_col:
+        res["note"] = COLUMN_UNKNOWN
+    return res
+
+
+class OrcFeed(ratings.RatingFeed):
+    """ORC public certificates as a rating feed (the registry's only one today)."""
+    system = "ORC"
+
+    def enrich(self, entries, definition, course_id, countries):
+        return enrich_from_orc(entries, country=countries, definition=definition,
+                               course_id=course_id)
+
+    def candidates(self, boat, sail, definition, course_id, countries, limit=6):
+        return orc_candidates(boat, sail=sail, country=countries, definition=definition,
+                              course_id=course_id, limit=limit)
+
+
+ratings.register(OrcFeed())
 
 
 # ---- entry list from the REGATTA WEBSITE (URL / pasted text / uploaded PDF, via Opus) -------------
@@ -443,23 +537,90 @@ def _preserve_seeded_mmsi(entries, definition):
     return carried
 
 
+def _feed(definition):
+    """(system, feed) for the race. An unstated system is tried as ORC (the column check still
+    applies); a stated system with no feed returns feed None."""
+    system = race_def.rating_system(((definition or {}).get("rules_profile") or {})
+                                    .get("scoring") or {}) or "ORC"
+    return system, ratings.feed_for(system)
+
+
+def candidates(boat, sail=None, country=None, definition=None, course_id=None, limit=6,
+               division=None):
+    """Rating candidates for one boat from the race's feed (the Fleet tab's 'find' button). The
+    boat's division picks its course's column, as in the import and the save check."""
+    if not course_id and division:
+        course_id = race_def.course_of_division(definition or {}, division)
+    system, feed = _feed(definition)
+    if feed is None:
+        return {"boat": boat, "candidates": [], "note": ratings.no_feed_note(system)}
+    return feed.candidates(boat, sail, definition, course_id, country, limit)
+
+
 def pack_with_orc(entries, src, country, definition, course_id):
-    """Wrap an entry list with ORC enrichment + match stats — the shared tail for every entry source."""
+    """Wrap an entry list with rating enrichment + match stats — the shared tail for every entry
+    source. The race's rating system picks the feed (ORC today)."""
     seeded = _preserve_seeded_mmsi(entries, definition)   # keep hand-seeded MMSIs across a re-import
     out = {"ok": True, "source": src, "entries": entries, "count": len(entries)}
     if seeded:
         out["seeded_mmsi"] = seeded
-    en = enrich_from_orc(entries, country=country, definition=definition, course_id=course_id)
+    system, feed = _feed(definition)
+    if feed is None:
+        out["rating_note"] = ratings.no_feed_note(system)
+        return out
+    # one country list for the fleet and our boat: typed, else the race's (venue + sail prefixes)
+    country = _countries(country, definition, entries) or None
+    en = feed.enrich(entries, definition, course_id, country)
     if not en.get("ok"):
         out["orc_error"] = en.get("note")                 # entry list still returned; handicap failed
     else:
         out.update(matched=en["matched"], total=en["total"], orc_certs=en["orc_certs"],
-                   tot_col=en.get("tot_col"),
+                   tot_col=en.get("tot_col"), orc_country=en.get("orc_country"),
                    unmatched=[e["boat"] for e in entries if not e.get("orc_match")])
+        if en.get("note"):
+            out["rating_note"] = en["note"]
+        if en.get("orc_columns") is not None:
+            out["orc_columns"] = en["orc_columns"]
+    if en.get("stale_cleared"):
+        out["stale_cleared"] = en["stale_cleared"]
+    own = _refresh_own(feed, definition, course_id, country)
+    if own is not None:
+        out["own"], note = own
+        if note:
+            out["own_note"] = note
     return out
 
 
-def import_fleet(definition, source="both", country="USA", course_id=None, url=None, text=None):
+OWN_REENTER = "Re-enter our rating for this column"
+
+
+def _refresh_own(feed, definition, course_id, country):
+    """Our boat's numbers for the column asked now (#311): read off its certificate when the feed
+    finds it (by sail, then name); else anything imported or typed for another column is cleared
+    and the note asks for it again. Returns (own, note) or None when no own boat is set."""
+    own = dict((definition or {}).get("own") or {})
+    if not (own.get("boat") or own.get("sail")):
+        return None
+    tot_col, tod_col = _cols(definition, own, course_id)
+    probe = {"boat": own.get("boat") or "", "sail": own.get("sail") or "",
+             "division": own.get("division") or ""}
+    try:
+        en = feed.enrich([probe], definition, course_id, country)
+    except Exception:
+        en = {"ok": False}
+    if en.get("ok") and probe.get("orc_match"):
+        for k in ("orc_gph", "rating", "rating_col", "tod_allowance", "tod_col"):
+            if k in probe:
+                own[k] = probe[k]
+            else:
+                own.pop(k, None)
+        missing = tot_col and own.get("rating") is None
+        return own, (OWN_REENTER if missing else None)
+    cleared = drop_stale(own, tot_col, tod_col)
+    return own, (OWN_REENTER if cleared else None)
+
+
+def import_fleet(definition, source="both", country=None, course_id=None, url=None, text=None):
     """Orchestrate a DRAFT roster from public data — NOT saved. `source`:
     'yb' (YB entry list only) · 'both' (YB entry list → ORC) · 'website' (regatta-site URL/text → ORC) ·
     'orc' (enrich the existing roster). The entry list comes from YB OR the regatta website; ORC fills

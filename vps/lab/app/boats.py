@@ -15,6 +15,8 @@ from . import atomicio, labstate
 BUNDLED_DIR = os.environ.get("BOATS_DIR", "/srv/boats")
 EDITED_DIR = os.path.join(os.environ.get("INGESTED_DIR", "/srv/ingested"), "boats")
 ACTIVE_KEY = "active_boat"
+# profile fields added after edited copies existed (#305): a copy without one takes its seed's
+SEED_CONSTANTS = ("loa_m", "tack_cost_s", "sail_families")
 
 
 def _files():
@@ -67,6 +69,14 @@ def get_boat(bid):
     for f in _files():
         d = _load(f)
         if d and (d.get("boat_id") or os.path.splitext(os.path.basename(f))[0]) == bid:
+            if os.path.dirname(f) != BUNDLED_DIR:
+                # boat constants added to the profile after this copy was saved (#305): its
+                # bundled seed's values, until the owner sets their own
+                missing = [k for k in SEED_CONSTANTS if k not in d]
+                seed = _bundled(bid) if missing else None
+                for k in missing:
+                    if seed and k in seed:
+                        d[k] = seed[k]
             if "polar_files" not in d and not d.get("cert_polar") \
                     and os.path.dirname(f) != BUNDLED_DIR:
                 # an edited copy saved before the profile named its own polar files (#303): the
@@ -157,7 +167,7 @@ def active_boat():
     return get_boat(bid) if bid else None
 
 
-def safety_depth_m(b, default=2.63):
+def safety_depth_m(b, default=None):
     """No-go depth (draft + margin) for boat profile `b`; `default` if no boat/draft is set.
     ONE implementation (shared/chartid.py) for the Lab, the Pi's GPS export and the Orin."""
     from shared import chartid
@@ -176,6 +186,15 @@ def helm_factor(b, default=1.0):
     except (TypeError, ValueError):
         pass
     return default
+
+
+def tack_cost_s(b):
+    """Boat `b`'s tack/gybe cost in seconds (#305), or None → the optimizer's ROUTE_TACK_COST_S."""
+    try:
+        v = float((b or {}).get("tack_cost_s"))
+        return v if 0 <= v <= 600 else None
+    except (TypeError, ValueError):
+        return None
 
 
 def polar_adjustments(b):
@@ -206,10 +225,19 @@ def sail_config(b):
         cfg["code0"] = c0
     if isinstance(mr, dict) and mr:
         cfg["main_reefs"] = mr
+    # the boat's own sail words (#305): its family map, and its Code 0's name when it isn't "C0",
+    # so the sail plan calls the sail the boat carries
+    from shared import sail_vocab
+    fams = b.get("sail_families")
+    if isinstance(fams, dict) and fams:
+        cfg["sail_families"] = fams
+    c0_names = sail_vocab.of_family("code0", b)
+    if c0_names and c0_names[0] != "C0":
+        cfg["code0_sail"] = c0_names[0]
     return cfg or None
 
 
-def active_safety_depth_m(default=2.63):
+def active_safety_depth_m(default=None):
     """No-go depth (draft + margin) for the active boat; `default` if no boat/draft is set."""
     return safety_depth_m(active_boat(), default)
 

@@ -22,7 +22,6 @@ WINDOW_MIN = 12
 # aggregates fill every bucket.
 MIN_COVERAGE = 0.5
 _BUCKET_S = 30.0
-SR33_LEN_FT = 33.0      # ~10 m → boatlengths of leverage
 
 
 def _twd_series(minutes):
@@ -134,8 +133,12 @@ def get_tactics(route: str = None):
             start = marks[i - 1] if i > 0 else None
             if start:
                 xte = _cross_track_nm(start, nxt, s["lat"], s["lon"])
+                # boatlengths on the boat's own length (#305); no length → none
+                from . import boatinfo
+                loa = boatinfo.loa_m()
                 leverage = {"nm": round(abs(xte), 2), "side": "right" if xte > 0 else "left",
-                            "boatlengths": round(abs(xte) * 6076 / SR33_LEN_FT)}
+                            "boatlengths": (round(abs(xte) * 6076 / (loa / 0.3048))
+                                            if loa else None)}
 
     # recommendation — the shared, racer-native shift phrasing (boat-frame first, baseline→now, then
     # the point-of-sail-aware favoured side), plus leverage.
@@ -147,7 +150,9 @@ def get_tactics(route: str = None):
         bits = [wp.describe_shift(mean, cur, tack=tack if tack in ("port", "starboard") else None,
                                   pos=pos, persistent=persistent, oscillation_deg=osc)]
     if leverage and leverage["nm"] >= 0.02:
-        bits.append(f"{leverage['boatlengths']} BL {leverage['side']} leverage.")
+        bits.append(f"{leverage['boatlengths']} BL {leverage['side']} leverage."
+                    if leverage["boatlengths"] is not None
+                    else f"{leverage['nm']:g} nm {leverage['side']} leverage.")
 
     return {
         "available": True, "route": nav.get("route"),

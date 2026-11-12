@@ -320,7 +320,9 @@ SCHEMA_BRIEF = """Produce ONE RaceDefinition JSON object. Field meanings:
 - race_id (kebab-case from name+year), name, year, organizing_authority, start_date (ISO date),
   start_area, region, timezone (the IANA tz name of the start venue, e.g. "America/Detroit" — INFER
   it from the venue / start area location; this is the one field you may derive from geography rather
-  than the documents. Use "" only if the venue location is genuinely unknown).
+  than the documents. Use "" only if the venue location is genuinely unknown), venue_country (the
+  start venue's country as its World Sailing 3-letter code, the sail-number prefix, e.g. "USA",
+  "FRA", "ITA"; infer it like timezone; "" if unknown).
 - divisions: [{id, name, course_ref, boat_type}]; course_ref is the id of the course it sails.
 - courses: [{id, name, applies_to_divisions:[div ids], distance_nm (or null), note,
   start:{type, ref, lat, lon, coords_source},
@@ -348,7 +350,18 @@ SCHEMA_BRIEF = """Produce ONE RaceDefinition JSON object. Field meanings:
 - rules_profile: {rrs_edition, info_available_to_all_permitted (bool),
   customized_advice_while_underway_prohibited (bool), appendix_wp (bool), tracker_permitted
   (true/false only when the documents say; else null), modifications:[{ref,rule,summary}],
-  scoring:{system,method,options:[],decided,ref}}.
+  scoring:{system,method,options:[],decided,ref,rating_system,rating_column,rating_column_tod,
+  course_columns:[{course,column,column_tod}],rating_countries:[]}}.
+  rating_system: the handicap the race scores on, one of ORC, PHRF, IRC, ONE_DESIGN ("" if the
+  documents don't say; if divisions use different systems, the one most divisions use, and list the
+  rest in review_status). rating_column: for ORC, the certificate column the race scores on, ONLY
+  when the documents name it or name the score type exactly: the ORC data column name (e.g.
+  "TMF_Offshore" for single-number offshore time-on-time, "TMF_Inshore" for inshore
+  time-on-time, or a race-specific column the NOR names). rating_column_tod: the matching
+  time-on-distance column if the documents name one. course_columns: only when different courses
+  score on different columns (course = the course id). Never guess a column: leave "" and list it
+  in review_status. rating_countries: national authorities whose certificates the fleet holds, only
+  when the documents name them (3-letter codes); else [].
 - fleet: [{boat, division, cls, owner, sail, orc_gph, rating, source}] — leave empty unless an
   entry list is present (orc_gph / rating null when not given).
 - provenance: {sources: [] (leave empty), si_status (are the SIs out yet?), review_status,
@@ -382,7 +395,7 @@ _COORDS_SOURCE = {"type": "string", "enum": ["nor", "si", "chart", "orc", "appro
 # extraction asks for it in two PARTS, each of which compiles.
 RACE_SCHEMA = _obj({
     "race_id": _S, "name": _S, "year": {"type": "integer"}, "organizing_authority": _S,
-    "start_date": _S, "start_area": _S, "region": _S, "timezone": _S,
+    "start_date": _S, "start_area": _S, "region": _S, "timezone": _S, "venue_country": _S,
     "divisions": {"type": "array", "items": _obj({
         "id": _S, "name": _S, "course_ref": _S, "boat_type": _S})},
     "courses": {"type": "array", "items": _obj({
@@ -425,7 +438,13 @@ RACE_SCHEMA = _obj({
         "tracker_permitted": {"type": ["boolean", "null"]},
         "modifications": {"type": "array", "items": _obj({"ref": _S, "rule": _S, "summary": _S})},
         "scoring": _obj({"system": _S, "method": _S, "options": {"type": "array", "items": _S},
-                         "decided": _S, "ref": _S})}),
+                         "decided": _S, "ref": _S,
+                         "rating_system": {"type": "string",
+                                           "enum": ["ORC", "PHRF", "IRC", "ONE_DESIGN", ""]},
+                         "rating_column": _S, "rating_column_tod": _S,
+                         "course_columns": {"type": "array", "items": _obj({
+                             "course": _S, "column": _S, "column_tod": _S})},
+                         "rating_countries": {"type": "array", "items": _S}})}),
     "fleet": {"type": "array", "items": _obj({
         "boat": _S, "division": _S, "cls": _S, "owner": _S, "sail": _S,
         "orc_gph": _NUM_OR_NULL, "rating": _NUM_OR_NULL, "source": _S})},
@@ -438,7 +457,7 @@ RACE_SCHEMA = _obj({
 # (course+header: 9 nullable fields; checklist+rules+zones+fleet+provenance: 3).
 PARTS = {
     "course": ["race_id", "name", "year", "organizing_authority", "start_date", "start_area",
-               "region", "timezone", "divisions", "courses", "division_starts"],
+               "region", "timezone", "venue_country", "divisions", "courses", "division_starts"],
     "rules": ["requirements", "rules_profile", "zones", "fleet", "provenance"],
 }
 

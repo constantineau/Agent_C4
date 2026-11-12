@@ -1,50 +1,70 @@
 #!/usr/bin/env python3
-"""Distill the ORC certificate export (C4_boatspeed_gospel.md) into clean artifacts.
+"""Distill one boat's ORC certificate export (data.orc.org Speed Guide, as markdown) into clean
+artifacts for that boat (#306).
 
-The raw export (data.orc.org Speed Guide for SR33 "C4", CAN100) contains five sets of
-per-TWS tables: a "Best Performance" envelope plus one per sail in the RATED wardrobe
-(Headsail J1-A, Symmetric S2-A, Asymmetric A2-A/A3-A). Each table has columns
+The export contains per-TWS tables: a "Best Performance" envelope plus one per sail in the RATED
+wardrobe (e.g. Headsail J1-A, Symmetric S2-A, Asymmetric A2-A/A3-A). Each table has columns
 TWA, BTV (target boatspeed), VMG, AWS, AWA, Heel, Reef, Flat.
 
-The rated wardrobe is not the boat's: the A2 is rated but NOT aboard (EXCLUDED — the
-envelope is rebuilt from carried sails so every target is achievable), and the crew calls
-the symmetric kite S1 (SHORTS maps the cert id S2-A to it).
+The rated wardrobe need not be the boat's. An optional WARDROBE json (`--wardrobe`) says which
+rated sails are aboard and what the crew calls them:
+  {"title": "...", "boat_line": "...", "source": "...",
+   "carried": [{"id": "J1-A", "short": "J1", "label": "Headsail/jib (J1)"}, ...]}
+A rated sail not in `carried` is EXCLUDED (the envelope is rebuilt from carried sails so every
+target is achievable). No wardrobe → every rated sail, named by its cert id ("A3-A" → "A3").
 
-This script emits:
-  1. sr33_speed_guide.md  — clean reference loaded into the agent's standing context. Adds,
+This script emits, for boat <id>:
+  1. knowledge/<id>_speed_guide.md — the clean reference the coach and the sail dial read. Adds,
      per Best-Performance row, the OPTIMAL SAIL (derived by matching the per-sail polars) so
      the agent can advise sail selection and call crossovers / sail changes.
-  2. ../../db/seed/polars_sr33.sql — real polars (target_stw=BTV, target_vmg=VMG).
+  2. db/seed/polars_<id>.sql — real polars (target_stw=BTV, target_vmg=VMG).
+  3. db/seed/<id>_crossovers.json, db/seed/<id>_sail_polars.json — the sail model.
+Name them in the boat profile's `polar_files`.
 
-Re-run if the ORC certificate is updated:  python3 vps/agent/knowledge/build_speed_guide.py
+Run:  python3 vps/agent/knowledge/build_speed_guide.py <cert.md> <boat_id> [--wardrobe W.json]
+e.g.  python3 vps/agent/knowledge/build_speed_guide.py vps/agent/knowledge/C4_boatspeed_gospel.md \
+          sr33 --wardrobe vps/agent/knowledge/sr33_wardrobe.json
 """
+import argparse
 import json
 import os
 import re
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SRC = os.path.join(HERE, "C4_boatspeed_gospel.md")
-GUIDE = os.path.join(HERE, "sr33_speed_guide.md")
-SEED = os.path.abspath(os.path.join(HERE, "..", "..", "db", "seed", "polars_sr33.sql"))
-CROSSOVERS = os.path.abspath(os.path.join(HERE, "..", "..", "db", "seed", "sr33_crossovers.json"))
-SAIL_POLARS = os.path.abspath(os.path.join(HERE, "..", "..", "db", "seed", "sr33_sail_polars.json"))
+SEED_DIR = os.path.abspath(os.path.join(HERE, "..", "..", "db", "seed"))
 
 NUM = lambda s: float(s.replace("°", "").strip())
 
-# The cert wardrobe is NOT the boat's: the cert rates an A2 the boat does not carry
-# (excluded everywhere below — the envelope is rebuilt from carried sails so targets stay
-# achievable), and the crew calls the symmetric kite S1 (the cert id stays S2-A).
-EXCLUDED = {"A2-A"}
-CARRIED = ("J1-A", "A3-A", "S2-A")
+# Set per boat by configure() (from the command line): the boat, its wardrobe, the outputs.
+BOAT_ID = TITLE = BOAT_LINE = SOURCE = None
+GUIDE = SEED = CROSSOVERS = SAIL_POLARS = None
+EXCLUDED = set()          # rated sails not aboard
+CARRIED = ()              # rated sails aboard (cert ids), in the guide's order
+SAIL_NAMES = {}           # sail id -> crew-friendly label
+SHORTS = {}               # sail id -> crew shorthand (the crew's name, not the cert's)
 
-# Sail id -> crew-friendly label.
-SAIL_NAMES = {
-    "J1-A": "Headsail/jib (J1)",
-    "S2-A": "Symmetric kite (S1)",
-    "A3-A": "Asym A3",
-}
-# Sail id -> crew shorthand (the crew's name, not the cert's — S2-A is "S1" aboard).
-SHORTS = {"J1-A": "J1", "A3-A": "A3", "S2-A": "S1"}
+
+def configure(boat_id, wardrobe=None, rated=(), guide_dir=HERE, seed_dir=SEED_DIR):
+    """Point the writers at boat `boat_id` and its wardrobe (see the module doc). `rated` = the
+    cert's sail ids, used when there is no wardrobe (every rated sail aboard)."""
+    global BOAT_ID, TITLE, BOAT_LINE, SOURCE, GUIDE, SEED, CROSSOVERS, SAIL_POLARS
+    global EXCLUDED, CARRIED, SAIL_NAMES, SHORTS
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,60}", boat_id or ""):
+        raise SystemExit(f"bad boat id: {boat_id!r}")
+    w = wardrobe or {}
+    carried = w.get("carried") or [{"id": sid} for sid in rated]
+    BOAT_ID = boat_id
+    TITLE = w.get("title") or boat_id
+    BOAT_LINE = w.get("boat_line") or f"Boat: {TITLE}."
+    SOURCE = w.get("source") or "ORC certificate"
+    CARRIED = tuple(c["id"] for c in carried)
+    EXCLUDED = {sid for sid in rated if sid not in CARRIED}
+    SAIL_NAMES = {c["id"]: c["label"] for c in carried if c.get("label")}
+    SHORTS = {c["id"]: c["short"] for c in carried if c.get("short")}
+    GUIDE = os.path.join(guide_dir, f"{boat_id}_speed_guide.md")
+    SEED = os.path.join(seed_dir, f"polars_{boat_id}.sql")
+    CROSSOVERS = os.path.join(seed_dir, f"{boat_id}_crossovers.json")
+    SAIL_POLARS = os.path.join(seed_dir, f"{boat_id}_sail_polars.json")
 
 
 def parse_groups(text):
@@ -162,8 +182,8 @@ def sail_plan(sails, tws, best_rows):
 def write_guide(groups):
     best = groups["best"]["blocks"]
     sails = {sid: g["blocks"] for sid, g in groups.items() if sid != "best"}
-    out = ["# SR33 \"C4\" — ORC Speed Guide (Best Performance polar + sail selection)\n"]
-    out.append("Boat: SR33 *C4*, sail #CAN100 (ORC ref 03430004T3F). Source of truth for "
+    out = [f"# {TITLE} — ORC Speed Guide (Best Performance polar + sail selection)\n"]
+    out.append(f"{BOAT_LINE} Source of truth for "
                "target boat speed AND sail selection. **BTV** = target boatspeed through "
                "water (kn); **VMG** = velocity made good; **AWS/AWA** = expected apparent "
                "wind at target; **Heel** = target heel (°); **Reef/Flat** = depowering "
@@ -281,8 +301,8 @@ def write_crossovers(groups):
     sails = {sid: g["blocks"] for sid, g in groups.items() if sid != "best"}
     inv = [sid for sid in CARRIED if sid in groups]
     data = {
-        "boat_id": "sr33",
-        "source": "ORC certificate (data.orc.org SR33 'C4' CAN100, ref 03430004T3F)",
+        "boat_id": BOAT_ID,
+        "source": SOURCE,
         "generated_by": "vps/agent/knowledge/build_speed_guide.py",
         "sail_names": {sid: SAIL_NAMES.get(sid, sid) for sid in inv},
         "inventory": [_short(sid) for sid in inv],
@@ -313,8 +333,8 @@ def write_sail_polars(groups):
                for tws, rows in sorted(sails[sid].items()) for r in rows]
         out[_short(sid)] = pts
     data = {
-        "boat_id": "sr33",
-        "source": "ORC certificate (data.orc.org SR33 'C4' CAN100, ref 03430004T3F)",
+        "boat_id": BOAT_ID,
+        "source": SOURCE,
         "generated_by": "vps/agent/knowledge/build_speed_guide.py",
         "sail_names": {_short(sid): SAIL_NAMES.get(sid, sid)
                        for sid in CARRIED if sid in sails},
@@ -327,12 +347,12 @@ def write_sail_polars(groups):
 
 def write_seed(groups):
     best = groups["best"]["blocks"]
-    out = ["-- SR33 \"C4\" real ORC polar (Best Performance envelope). Generated by",
+    out = [f"-- {TITLE} real ORC polar (Best Performance envelope). Generated by",
            "-- vps/agent/knowledge/build_speed_guide.py from the ORC certificate.",
            "-- Replaces synthetic placeholder polars. Idempotent.",
-           "DELETE FROM polars WHERE boat_id = 'sr33';",
+           f"DELETE FROM polars WHERE boat_id = '{BOAT_ID}';",
            "INSERT INTO polars (boat_id, tws, twa, target_stw, target_vmg) VALUES"]
-    vals = [f"  ('sr33', {tws}, {r['twa']:.1f}, {r['btv']:.2f}, {r['vmg']:.2f})"
+    vals = [f"  ('{BOAT_ID}', {tws}, {r['twa']:.1f}, {r['btv']:.2f}, {r['vmg']:.2f})"
             for tws in sorted(best) for r in best[tws]]
     out.append(",\n".join(vals))
     out.append("ON CONFLICT (boat_id, tws, twa) DO UPDATE")
@@ -341,8 +361,22 @@ def write_seed(groups):
     return SEED
 
 
-if __name__ == "__main__":
-    groups = parse_groups(open(SRC).read())
+def main(argv=None):
+    ap = argparse.ArgumentParser(description="One boat's ORC speed guide + sail model.")
+    ap.add_argument("cert", help="the ORC Speed Guide export, as markdown")
+    ap.add_argument("boat_id", help="the boat's id (names the output files)")
+    ap.add_argument("--wardrobe", help="json: the sails aboard and the crew's names for them")
+    ap.add_argument("--guide-dir", default=HERE)
+    ap.add_argument("--seed-dir", default=SEED_DIR)
+    a = ap.parse_args(argv)
+    with open(a.cert, encoding="utf-8") as f:
+        groups = parse_groups(f.read())
+    wardrobe = None
+    if a.wardrobe:
+        with open(a.wardrobe, encoding="utf-8") as f:
+            wardrobe = json.load(f)
+    configure(a.boat_id, wardrobe, rated=[k for k in groups if k != "best"],
+              guide_dir=a.guide_dir, seed_dir=a.seed_dir)
     print("parsed groups:", {k: f"{len(v['blocks'])} TWS" for k, v in groups.items()})
     dropped = [k for k in groups if k in EXCLUDED]
     groups = {k: v for k, v in groups.items() if k not in EXCLUDED}
@@ -352,3 +386,7 @@ if __name__ == "__main__":
     print("wrote", write_seed(groups))
     print("wrote", write_crossovers(groups))
     print("wrote", write_sail_polars(groups))
+
+
+if __name__ == "__main__":
+    main()

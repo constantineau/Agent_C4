@@ -21,7 +21,7 @@ import urllib.request
 # A stand-in for the real engine facts the copilot will be fed. The numbers are illustrative;
 # the point is to confirm the model narrates grounded facts without inventing strategy.
 SYSTEM = (
-    "You are the SR33's onboard sailing copilot. Speak only from the facts given. "
+    "You are the boat's onboard sailing copilot. Speak only from the facts given. "
     "Be concise (2-3 sentences). Never invent numbers or tactics not present in the facts."
 )
 FACTS = (

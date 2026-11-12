@@ -12,7 +12,7 @@ definitions (canboat.json, fetched 2026-07-10):
   59392  ISO Acknowledgement       — NAK for a directed request we can't answer
   126464 PGN List                  — what we transmit / receive (asked for during enumeration)
   126993 Heartbeat                 — every 60 s, carries our CAN controller state
-  126996 Product Information       — model "SR33 C4 Navigator" (asked for during enumeration)
+  126996 Product Information       — model N2KOUT_MODEL, "Agent C4 Navigator" unset (asked for during enumeration)
   129283 Cross Track Error         — single frame; LIVE signed XTE; "terminated" on clear
   129285 Navigation Route/WP info  — fast-packet; the route: names + positions. A fast packet
                                       caps at 223 bytes, so long routes go out CHUNKED via the
@@ -148,7 +148,7 @@ def _fix32(s: str) -> bytes:
     return str(s or "")[:32].encode("ascii", "replace").ljust(32, b"\xff")
 
 
-def encode_126996(model: str = "SR33 C4 Navigator", sw: str = "1.0", hw: str = "Pi4/PICAN-M",
+def encode_126996(model: str = "Agent C4 Navigator", sw: str = "1.0", hw: str = "Pi4/PICAN-M",
                   serial: str = "C4-000100"):
     """Product Information (134-byte fast packet) — the rung ABOVE the address claim on the
     plotter's enumeration ladder: after our 60928 the Garmins immediately request this

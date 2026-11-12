@@ -447,10 +447,10 @@ def test_service_binding() -> bool:
     ok &= _check("no bench extras by default: binds/callers are exactly the boat defaults",
                  serve.binds() == ["10.10.10.2", "127.0.0.1"] and serve.callers() == ["10.10.10.1", "127.0.0.1"])
     saved = (config.COPILOT_BENCH_BIND, config.COPILOT_BENCH_ALLOW_FROM)
-    config.COPILOT_BENCH_BIND, config.COPILOT_BENCH_ALLOW_FROM = "100.70.110.72", "100.64.0.9, 127.0.0.1"
+    config.COPILOT_BENCH_BIND, config.COPILOT_BENCH_ALLOW_FROM = "100.64.0.12", "100.64.0.9, 127.0.0.1"
     try:
         ok &= _check("bench override ADDS the Tailscale addresses, keeps the boat ones",
-                     serve.binds() == ["10.10.10.2", "127.0.0.1", "100.70.110.72"]
+                     serve.binds() == ["10.10.10.2", "127.0.0.1", "100.64.0.12"]
                      and serve.callers() == ["10.10.10.1", "127.0.0.1", "100.64.0.9"])
     finally:
         config.COPILOT_BENCH_BIND, config.COPILOT_BENCH_ALLOW_FROM = saved

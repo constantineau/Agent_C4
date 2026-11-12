@@ -254,6 +254,141 @@ try:
 except Exception as e:
     ISSUE(f"crash: {type(e).__name__}: {e}")
 
+print("\n== 13. #311: the race's rating fields reach the in-race model ==")
+try:
+    row = [{"boat": "Defiance", "mmsi": "111", "rating": 1.050, "orc_gph": 580.0}]
+    own = {"rating": 1.0, "orc_gph": 600.0}
+    # a PHRF race (rating_system) is never scored with ORC math, even with a ToT method text
+    blob = {"scoring": {"method": "Time-on-Time", "rating_system": "PHRF"}, "own": own, "fleet": row}
+    setup(blob, [tgt("111", 45.10, -83.02, 6.4)])
+    f = fleet.get_fleet()
+    if f["fleet"][0].get("corrected_delta_s") is not None: ISSUE("PHRF race scored with ORC math")
+    elif "PHRF scoring not supported, no corrected gaps" not in (f.get("gaps") or []): ISSUE(f"PHRF gap: {f.get('gaps')}")
+    else: OK("PHRF race: no corrected gaps, plain note")
+    # ORC with no column: still scores, but says the numbers may not be the race's
+    blob = {"scoring": {"method": "Time-on-Time", "rating_system": "ORC"}, "own": own, "fleet": row}
+    setup(blob, [tgt("111", 45.10, -83.02, 6.4)])
+    f = fleet.get_fleet()
+    if "rating column unknown, gaps may be off" not in (f.get("gaps") or []): ISSUE(f"no column gap: {f.get('gaps')}")
+    else: OK("ORC, no column: gap note")
+    # ORC with a race-wide or per-course column: no such note
+    for sc in ({"rating_column": "TMF_Inshore"},
+               {"course_columns": [{"course": "a", "column": "X_A"}, {"course": "b", "column": "X_B"}]}):
+        blob = {"scoring": dict({"method": "Time-on-Time", "rating_system": "ORC"}, **sc), "own": own, "fleet": row}
+        setup(blob, [tgt("111", 45.10, -83.02, 6.4)])
+        f = fleet.get_fleet()
+        if any("rating column" in g for g in (f.get("gaps") or [])): ISSUE(f"column set but flagged: {sc}")
+        elif f["fleet"][0].get("corrected_delta_s") is None: ISSUE(f"column set but not scored: {sc}")
+        else: OK(f"column set ({list(sc)[0]}): scored, no note")
+except Exception as e:
+    ISSUE(f"crash: {type(e).__name__}: {e}")
+
+print("\n== 14. #311: a race's own ToD allowance column beats GPH ==")
+try:
+    if fleet._allowance_s_per_nm({"orc_gph": 600.0, "tod_allowance": 620.0}) != 620.0: ISSUE("tod_allowance ignored")
+    elif fleet._allowance_s_per_nm({"orc_gph": 600.0, "tod_allowance": None}) != 600.0: ISSUE("no GPH fallback")
+    else: OK("allowance = tod_allowance, else GPH")
+    def _delta(them, us, tod_col="XX_TOD"):
+        blob = {"scoring": {"method": "Time-on-Distance", "rating_system": "ORC", "rating_column": "XX_TOT",
+                            "rating_column_tod": tod_col},
+                "own": us, "fleet": [dict({"boat": "Fast", "mmsi": "111"}, **them)]}
+        setup(blob, [tgt("111", 45.10, -83.00, 6.0)])
+        return fleet.get_fleet()["fleet"][0].get("corrected_delta_s")
+    gph_only = _delta({"orc_gph": 580.0}, {"orc_gph": 600.0}, tod_col="")      # no ToD column: GPH
+    with_col = _delta({"orc_gph": 580.0, "tod_allowance": 560.0}, {"orc_gph": 600.0, "tod_allowance": 620.0})
+    if gph_only is None or with_col is None: ISSUE(f"ToD not scored: {gph_only} {with_col}")
+    elif gph_only == with_col: ISSUE("tod_allowance made no difference to the corrected gap")
+    else: OK(f"corrected gap uses the race's ToD column ({gph_only} s on GPH vs {with_col} s)")
+except Exception as e:
+    ISSUE(f"crash: {type(e).__name__}: {e}")
+
+print("\n== 15. #311: with a named column, a missing number is 'no rating', never a GPH stand-in ==")
+try:
+    own = {"rating": 1.0, "orc_gph": 600.0}
+    # ToT race on column B; Defiance's B rating was cleared, only GPH left
+    blob = {"scoring": {"method": "Time-on-Time", "rating_system": "ORC", "rating_column": "COL_B"},
+            "own": own, "fleet": [{"boat": "Defiance", "mmsi": "111", "orc_gph": 500.0},
+                                  {"boat": "Rated", "mmsi": "222", "rating": 1.05, "orc_gph": 580.0}]}
+    setup(blob, [tgt("111", 45.10, -83.02, 6.4), tgt("222", 45.09, -83.01, 6.2)])
+    f = fleet.get_fleet()
+    rows = {r["boat"]: r for r in f["fleet"]}
+    st = {r["boat"]: r for r in f["standings"]}
+    if rows["Defiance"].get("corrected_delta_s") is not None: ISSUE("GPH-derived ToT used on a named column")
+    elif not rows["Defiance"].get("no_rating") or not st["Defiance"].get("no_rating"): ISSUE(f"not shown as no rating: {rows['Defiance']}")
+    elif st["Defiance"].get("rank") is not None: ISSUE("a boat with no rating was ranked")
+    elif rows["Rated"].get("corrected_delta_s") is None: ISSUE("a rated boat lost its gap")
+    elif "1 boat with no rating for the race's column, no corrected time for them" not in (f.get("gaps") or []):
+        ISSUE(f"no gap note: {f.get('gaps')}")
+    else: OK("named ToT column: unrated boat shown as no rating, not ranked, gap note")
+    # our own rating cleared too → no corrected gaps at all (never 600/GPH)
+    blob["own"] = {"orc_gph": 600.0}
+    setup(blob, [tgt("222", 45.09, -83.01, 6.2)])
+    f = fleet.get_fleet()
+    if f["fleet"][0].get("corrected_delta_s") is not None: ISSUE("own ToT made up from GPH")
+    elif "own rating missing, no corrected gaps" not in (f.get("gaps") or []): ISSUE(f"own gap: {f.get('gaps')}")
+    else: OK("named column, own rating missing: no corrected gaps")
+    # ToD race with a named ToD column: a missing allowance is not replaced by GPH
+    blob = {"scoring": {"method": "Time-on-Distance", "rating_system": "ORC", "rating_column": "T",
+                        "rating_column_tod": "D"},
+            "own": {"orc_gph": 600.0, "tod_allowance": 620.0},
+            "fleet": [{"boat": "NoAlw", "mmsi": "111", "orc_gph": 580.0}]}
+    setup(blob, [tgt("111", 45.10, -83.00, 6.0)])
+    f = fleet.get_fleet()
+    if f["fleet"][0].get("corrected_delta_s") is not None: ISSUE("GPH used for a missing ToD allowance")
+    elif not f["fleet"][0].get("no_rating"): ISSUE("ToD: not shown as no rating")
+    else: OK("named ToD column: missing allowance = no rating")
+    # no column named (old races): GPH-derived numbers still work as before
+    blob = {"scoring": {"method": "Time-on-Time"}, "own": {"orc_gph": 600.0},
+            "fleet": [{"boat": "G", "mmsi": "111", "orc_gph": 580.0}]}
+    setup(blob, [tgt("111", 45.10, -83.02, 6.4)])
+    f = fleet.get_fleet()
+    if f["fleet"][0].get("corrected_delta_s") is None: ISSUE("no column named: GPH fallback lost")
+    else: OK("no column named: GPH fallback unchanged")
+except Exception as e:
+    ISSUE(f"crash: {type(e).__name__}: {e}")
+
+print("\n== 16. #311: strictness is per boat (its course's columns), not fleet-wide ==")
+try:
+    import copy
+    from shared import race_def as RD
+    d = {"rules_profile": {"scoring": {"method": "Time-on-Distance", "rating_system": "ORC",
+                                        "course_columns": [{"course": "a", "column": "TA", "column_tod": "DA"},
+                                                           {"course": "b", "column": "TB", "column_tod": ""}]}},
+         "courses": [{"id": "a"}, {"id": "b"}],
+         "divisions": [{"id": "A", "course_ref": "a"}, {"id": "B", "course_ref": "b"}],
+         "own": {"boat": "Us", "division": "B", "orc_gph": 600.0},
+         "fleet": [{"boat": "OnB", "mmsi": "111", "division": "B", "orc_gph": 580.0},
+                   {"boat": "OnA", "mmsi": "222", "division": "A", "orc_gph": 580.0}]}
+    blob = RD.fleet_blob(copy.deepcopy(d))
+    setup(blob, [tgt("111", 45.10, -83.00, 6.0), tgt("222", 45.10, -83.01, 6.0)])
+    f = fleet.get_fleet()
+    rows = {r["boat"]: r for r in f["fleet"]}
+    if rows["OnB"].get("corrected_delta_s") is None: ISSUE("course B (no ToD column) lost its GPH fallback")
+    elif rows["OnA"].get("corrected_delta_s") is not None: ISSUE("course A (ToD column) used GPH")
+    elif not rows["OnA"].get("no_rating") or rows["OnB"].get("no_rating"): ISSUE(f"no_rating flags: {rows}")
+    else: OK("ToD: course B keeps GPH, course A (named column) needs its allowance")
+    # same on removing course A from the race: B's delta is unchanged
+    d2 = copy.deepcopy(d); d2["fleet"] = d2["fleet"][:1]
+    d2["rules_profile"]["scoring"]["course_columns"] = d2["rules_profile"]["scoring"]["course_columns"][1:]
+    setup(RD.fleet_blob(d2), [tgt("111", 45.10, -83.00, 6.0)])
+    alone = fleet.get_fleet()["fleet"][0].get("corrected_delta_s")
+    if alone != rows["OnB"]["corrected_delta_s"]: ISSUE(f"B's delta depends on course A: {alone} vs {rows['OnB']['corrected_delta_s']}")
+    else: OK(f"B's delta is the same with or without course A ({alone} s)")
+    # ToT the same way: course a names TA, a boat on an unlisted course with no race-wide column doesn't
+    d3 = copy.deepcopy(d)
+    d3["rules_profile"]["scoring"]["method"] = "Time-on-Time"
+    d3["rules_profile"]["scoring"]["course_columns"] = [{"course": "a", "column": "TA"}]
+    d3["own"] = {"boat": "Us", "division": "A", "rating": 1.0}
+    d3["fleet"] = [{"boat": "OnA", "mmsi": "222", "division": "A", "orc_gph": 580.0},
+                   {"boat": "Elsewhere", "mmsi": "111", "division": "Z", "orc_gph": 580.0}]
+    setup(RD.fleet_blob(d3), [tgt("111", 45.10, -83.00, 6.0), tgt("222", 45.10, -83.01, 6.0)])
+    rows = {r["boat"]: r for r in fleet.get_fleet()["fleet"]}
+    if rows["OnA"].get("corrected_delta_s") is not None: ISSUE("ToT: named-column boat used GPH")
+    elif rows["Elsewhere"].get("corrected_delta_s") is None: ISSUE("ToT: boat with no named column lost GPH")
+    else: OK("ToT strictness per boat too")
+except Exception as e:
+    ISSUE(f"crash: {type(e).__name__}: {e}")
+
 print("\n" + ("ALL CLEAN — no issues found" if not issues else f"{len(issues)} ISSUE(S) FOUND:"))
 for i in issues: print("  -", i)
 sys.exit(1 if issues else 0)

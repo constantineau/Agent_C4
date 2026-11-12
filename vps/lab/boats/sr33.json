@@ -22,6 +22,8 @@
   "air_draft_m": null,
   "displacement_kg": null,
   "hull_type": "mono",
+  "loa_m": 10.0584,
+  "tack_cost_s": 30,
   "sail_inventory": [
     "J1",
     "J2",
