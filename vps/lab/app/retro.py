@@ -423,7 +423,8 @@ def match_polars(race_id: str, country=None, def_race_id: str = None) -> dict:
 
     Countries: the ones typed (`country`, 'USA,CAN' or a list), else the picked race definition's
     (its scoring list, else venue country + entrants' sail prefixes), else the entrants' sail
-    prefixes alone. Each country's dump is tried in order; the first match wins."""
+    prefixes alone. A sail-number match in any country's dump beats a name match; country order
+    only breaks ties within the same kind of match."""
     entries = rs.get_entries(race_id)
     if not entries:
         return {"ok": False, "note": "race not ingested yet — run ingest first"}
@@ -447,12 +448,13 @@ def match_polars(race_id: str, country=None, def_race_id: str = None) -> dict:
         rec, by, conf, country = None, None, 0.0, None
         s = fi._norm_sail(e.get("sail"))
         n = fi._norm(e.get("boat"))
-        for cc, idx in idxs:
-            if s and s in idx["by_sail"]:
-                rec, by, conf, country = idx["by_sail"][s], "sail", 0.9, cc
-            elif n and n in idx["by_name"]:
-                rec, by, conf, country = idx["by_name"][n], "name", 0.6, cc
-            if rec:
+        # a sail-number match in ANY country beats a name match; country order only breaks ties
+        for key, table, kind, c in ((s, "by_sail", "sail", 0.9), (n, "by_name", "name", 0.6)):
+            hit = next(((cc, idx[table][key]) for cc, idx in idxs if key and key in idx[table]),
+                       None)
+            if hit:
+                country, rec = hit
+                by, conf = kind, c
                 break
         if not rec:
             misses.append(e.get("boat"))

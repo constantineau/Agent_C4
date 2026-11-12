@@ -4182,14 +4182,17 @@ async function retroSetup(defRace) {
   if (box) Retro.ybId = box.value.trim();
   Retro.defRace = defRace || ""; Retro.setup = null; Retro.courseId = null;
   if (defRace) {
+    let setup = null;
     try {
       const r = await apiGet("/api/retro/setup?def_race_id=" + encodeURIComponent(defRace));
-      if (r.ok) Retro.setup = await r.json();
+      if (r.ok) setup = await r.json();
     } catch (e) { /* card still works with a typed id */ }
-    if (Retro.defRace !== defRace) return;      // picked another race meanwhile
-    if (Retro.setup) {
-      Retro.courseId = Retro.setup.course_id;
-      if (!Retro.ybId && Retro.setup.yb_id) Retro.ybId = Retro.setup.yb_id;
+    // a slower answer for a race picked earlier must not overwrite the race picked now
+    if (Retro.defRace !== defRace) return;
+    Retro.setup = setup;
+    if (setup) {
+      Retro.courseId = setup.course_id;
+      if (!Retro.ybId && setup.yb_id) Retro.ybId = setup.yb_id;
     }
   }
   if (location.hash.replace("#", "") === "debrief") paintDebrief();

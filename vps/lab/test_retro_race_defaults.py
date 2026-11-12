@@ -115,6 +115,20 @@ def test_polars_search_the_races_countries(monkeypatch):
     assert r["matched"] == 2 and r["countries"] == ["GBR", "FRA"] and saved == ["GBR", "FRA"]
 
 
+def test_polars_sail_match_beats_country_order(monkeypatch):
+    """CAN 12 "Bravo": a USA boat also named Bravo must not win over the exact Canadian sail match."""
+    entries = [{"team_id": 1, "boat": "Bravo", "sail": "CAN 12"},
+               {"team_id": 2, "boat": "Solo", "sail": "XYZ 1"}]
+    dumps = {"USA": [{"SailNo": "USA 99", "YachtName": "Bravo", "RefNo": "u1"},
+                     {"SailNo": "USA 7", "YachtName": "Solo", "RefNo": "u2"}],
+             "CAN": [{"SailNo": "CAN 12", "YachtName": "Bravo", "RefNo": "c1"},
+                     {"SailNo": "CAN 8", "YachtName": "Solo", "RefNo": "c2"}]}
+    asked, saved = _stub_polars(monkeypatch, entries, dumps)
+    r = retro.match_polars("x", country="USA,CAN")
+    assert r["matched"] == 2
+    assert saved == ["CAN", "USA"]     # Bravo by its CAN sail; Solo by name, first country wins
+
+
 def test_polars_without_a_race_use_sail_numbers(monkeypatch):
     asked, _ = _stub_polars(monkeypatch, [{"team_id": 1, "boat": "B", "sail": "AUS 9"}], {})
     r = retro.match_polars("x")
