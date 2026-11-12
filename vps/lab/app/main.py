@@ -1069,7 +1069,13 @@ async def race_stations_save(rid: str, body: dict):
     d = store.get_race(rid)
     if not d:
         return JSONResponse({"detail": "unknown race"}, status_code=404)
-    block = obsarea.clean_picks((body or {}).get("picked"))
+    rows = (body or {}).get("picked")
+    if isinstance(rows, list) and len({str((r or {}).get("id", "")).upper() for r in rows
+                                       if isinstance(r, dict)}) > obsarea.MAX_PICKS:
+        # refused, not trimmed: the card keeps the ticks unsaved and says why (Codex on #346)
+        return JSONResponse({"detail": f"Pick {obsarea.MAX_PICKS} stations at most."},
+                            status_code=422)
+    block = obsarea.clean_picks(rows)
     if block is None:
         d.pop("stations", None)
     else:

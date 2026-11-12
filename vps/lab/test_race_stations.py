@@ -232,6 +232,13 @@ check("save: cleaned picks stored", r.json()["stations"] == {"picked": [
     {"id": "KFLL", "kind": "metar", "lat": 26.079, "lon": -80.162, "name": "FLL"}]}
     and disk()["stations"] == r.json()["stations"], r.json())
 check("save keeps the rest of the race", disk()["name"] == "FLL test" and disk()["courses"] == RACE["courses"])
+before = disk().get("stations")
+many = [{"id": f"K{i:03d}", "kind": "metar", "lat": 26.0, "lon": -80.0, "name": str(i)} for i in range(21)]
+r = client.post("/api/races/fll-race/stations", headers=TEAM, json={"picked": many})
+check("21 picks refused, not trimmed; nothing saved", r.status_code == 422
+      and "20" in r.json()["detail"] and disk().get("stations") == before, r.text)
+r = client.post("/api/races/fll-race/stations", headers=TEAM, json={"picked": many[:20]})
+check("20 picks saved", r.status_code == 200 and len(r.json()["stations"]["picked"]) == 20, r.text)
 r = client.post("/api/races/fll-race/stations", headers=TEAM, json={"picked": None})
 check("picked: null → automatic", r.json()["stations"] is None and "stations" not in disk())
 check("unauthenticated refused", client.post("/api/races/fll-race/stations", json={"picked": []}).status_code == 401)
