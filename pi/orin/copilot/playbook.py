@@ -178,6 +178,8 @@ def approved_hash():
     if not held or _pin["at"] is None or now - _pin["at"] > PIN_CACHE_S:
         r = EngineClient()._get("/playbook/copilot")
         r = r if isinstance(r, dict) else {}
+        now = time.monotonic()          # stamped when the answer came back: a 12 s timeout
+        #                                 mustn't leave the window already spent (Codex on #342)
         h = r.get("hash")
         if r.get("error") and "hash" not in r:
             # the Pi couldn't be asked (timeout, HTTP error): no approval, but the boat being

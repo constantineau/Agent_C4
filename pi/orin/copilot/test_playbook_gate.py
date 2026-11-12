@@ -253,6 +253,23 @@ n0 = PIN["asks"]
 for _ in range(3):
     boatname.describe()
 check("Pi unreachable: lookups don't each wait on the cable", PIN["asks"] - n0 <= 1)
+_clock = {"t": 1000.0}
+def _slow_get(self, path, params=None):           # a timeout longer than PIN_CACHE_S
+    PIN["asks"] += 1
+    _clock["t"] += 12.0
+    return {"available": False, "error": "timed out", "path": path}
+import time as _time  # noqa: E402
+from . import engine_client as _ec  # noqa: E402
+_orig_get, _orig_mono = _ec.EngineClient._get, _time.monotonic
+_ec.EngineClient._get, _time.monotonic = _slow_get, (lambda: _clock["t"])
+try:
+    pbm._pin.update(at=None)
+    n0 = PIN["asks"]
+    for _ in range(3):
+        boatname.describe()
+    check("a 12 s timeout still holds the answer afterwards (one ask)", PIN["asks"] - n0 == 1)
+finally:
+    _ec.EngineClient._get, _time.monotonic = _orig_get, _orig_mono
 PIN["answer"] = {"hash": None, "playbook_off": True,
                  "boat": {"boat_id": None, "name": "Mystery", "profile": None}}
 pb = fresh()
