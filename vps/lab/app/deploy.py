@@ -27,12 +27,39 @@ def _lock_key(race_id) -> str:
 
 
 def targets() -> dict:
-    """Where the homework gets loaded — the onboard service addresses (env-overridable). Hostnames
-    are the Tailscale names (see the Orin/Pi deployment docs)."""
+    """Where the homework gets loaded, for the manual-load commands: the ssh target of the boat's Pi
+    and the engine address as seen from the Pi itself. Both come from the Lab's env; no host name
+    or address lives in the code (#314), so unset shows a placeholder to fill in."""
     return {
-        "pi_host": os.environ.get("DEPLOY_PI_HOST", "sr33-pi"),
+        "pi_host": os.environ.get("DEPLOY_PI_HOST", "").strip() or "<pi-host>",
         "pi_engine": os.environ.get("DEPLOY_PI_ENGINE", "http://localhost:8200"),
     }
+
+
+NO_ENGINE_URL = "DEPLOY_PI_ENGINE_URL is not set in the Lab's .env. Not sent."
+
+
+def engine_url():
+    """The boat's Pi engine as the Lab reaches it (its Tailscale address), from DEPLOY_PI_ENGINE_URL.
+    None when unset: no address default in code (#314); callers say so and send nothing."""
+    return os.environ.get("DEPLOY_PI_ENGINE_URL", "").strip().rstrip("/") or None
+
+
+def copilot_url():
+    """The Orin copilot through the Pi console's proxy: DEPLOY_COPILOT_URL, else the engine's host
+    on the console port (8091/copilot), which is how the boat is laid out. None with neither set."""
+    cop = os.environ.get("DEPLOY_COPILOT_URL", "").strip().rstrip("/")
+    if cop:
+        return cop
+    eng = engine_url()
+    if not eng:
+        return None
+    from urllib.parse import urlsplit
+    u = urlsplit(eng)
+    if not u.hostname:
+        return None
+    host = f"[{u.hostname}]" if ":" in u.hostname else u.hostname
+    return f"{u.scheme or 'http'}://{host}:8091/copilot"
 
 
 def _post_json(url, body, timeout=25):
@@ -162,7 +189,10 @@ def _push(race_id):
     if problem:                          # before any post: never a push that skips the playbook
         return {"race_id": race_id, "playbook_id": lock.get("playbook_id"), "ok": False,
                 "refused": True, "detail": problem + NOT_SENT, "steps": []}
-    eng = os.environ.get("DEPLOY_PI_ENGINE_URL", "http://100.79.180.102:8200").rstrip("/")
+    eng = engine_url()
+    if not eng:
+        return {"race_id": race_id, "ok": False, "refused": True, "detail": NO_ENGINE_URL,
+                "steps": []}
     steps = []
     stopped = []
 
@@ -288,8 +318,12 @@ def boat_status(get=None):
     Orin copilot: GET /health through the Pi console's proxy. Each side reports `reachable`;
     unreachable sides carry the error so the UI can fall back to the last push honestly."""
     get = get or _get_json
-    eng = os.environ.get("DEPLOY_PI_ENGINE_URL", "http://100.79.180.102:8200").rstrip("/")
-    cop = os.environ.get("DEPLOY_COPILOT_URL", "http://100.79.180.102:8091/copilot").rstrip("/")
+    eng, cop = engine_url(), copilot_url()
+    if not eng or not cop:
+        err = "DEPLOY_PI_ENGINE_URL is not set in the Lab's .env."
+        return {"checked_at": int(time.time()), "reachable": False,
+                "engine": {"reachable": False, "error": err, "playbook": None, "course": None},
+                "copilot": {"reachable": False, "error": err, "playbook": None}}
     from concurrent.futures import ThreadPoolExecutor
     with ThreadPoolExecutor(max_workers=4) as ex:
         f_pb = ex.submit(get, f"{eng}/playbook")
