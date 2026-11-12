@@ -1976,9 +1976,6 @@ def _rating_fixes(definition):
             "boats": hit["boats"], "own_cleared": hit["own"], "note": " ".join(bits)}
 
 
-_RATING_KEYS = ("rating_system", "rating_column", "rating_column_tod", "course_columns", "rating_countries")
-
-
 def _keep_rating_config(definition, prior):
     """A re-ingest draft that leaves the rating setup blank keeps the confirmed one (Codex on #333):
     re-reading the NOR/SI must not wipe a column the user picked, then clear every rating against
@@ -1990,7 +1987,14 @@ def _keep_rating_config(definition, prior):
     if not isinstance(rp.get("scoring"), dict):
         rp["scoring"] = {}
     sc = rp["scoring"]
-    for k in _RATING_KEYS:
+    # the columns go as one group: a new extraction naming any column replaces the whole old setup
+    # (an old per-course column must not outrank a new race-wide one)
+    cols = ("rating_column", "rating_column_tod", "course_columns")
+    if not any(sc.get(k) for k in cols):
+        for k in cols:
+            if old_sc.get(k):
+                sc[k] = old_sc[k]
+    for k in ("rating_system", "rating_countries"):
         if old_sc.get(k) and not sc.get(k):
             sc[k] = old_sc[k]
     if prior.get("venue_country") and not definition.get("venue_country"):

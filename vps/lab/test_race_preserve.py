@@ -97,6 +97,18 @@ def test_reingest_draft_keeps_confirmed_rating_setup():
     finally:
         main.store.get_race = orig
     assert d2["rules_profile"]["scoring"]["rating_column"] == "TMF_Offshore"
+    # a new race-wide column replaces an old per-course one; it doesn't sit under it
+    prior3 = dict(prior, rules_profile={"scoring": {"rating_system": "ORC",
+                  "course_columns": [{"course": "long", "column": "OLD"}]}})
+    d3 = {"race_id": "t-race", "fleet": [], "rules_profile": {"scoring": {"rating_column": "NEW",
+          "course_columns": []}}}
+    main.store.get_race = lambda rid: json.loads(json.dumps(prior3))
+    try:
+        main._write_race(d3, draft=True)
+    finally:
+        main.store.get_race = orig
+    sc3 = d3["rules_profile"]["scoring"]
+    assert sc3["rating_column"] == "NEW" and not sc3.get("course_columns"), sc3
 
 
 if __name__ == "__main__":
