@@ -38,7 +38,7 @@ from app import (navigator, tactics, routing, weather, sails, fatigue, onboard_c
                  datasource, ais, fleet, deviation, drift, selector, reoptimize, strategy,
                  matcher, buoys, racelog, watches, trend, plangap, gpsout, checklist,
                  power, sensor_health, plume, orinroute, orinassets, racegate, boatlib,
-                 hardware)
+                 boatinfo, hardware)
 
 app = FastAPI(title="Agent_C4 Onboard Engine", version="0.1.0")
 # The iPad reaches the Pi directly over boat-local Wi-Fi in race mode; allow cross-origin so a
@@ -709,16 +709,29 @@ def approve_copilot_playbook(h):
 
 @app.get("/playbook/copilot")
 def copilot_playbook_approved():
-    """{hash}: the playbook the Orin copilot may use (the last one it confirmed under the race
-    lock), or null for none. The copilot asks before it uses its file; anything else, it runs
-    without a playbook."""
+    """{hash, boat}: the playbook the Orin copilot may use (the last one it confirmed under the
+    race lock), or null for none. The copilot asks before it uses its file; anything else, it runs
+    without a playbook.
+
+    `boat` is the boat being sailed (#335): {boat_id, name, profile}, or null when nothing aboard
+    says. While it is another boat than the playbook's (a practice LOG on Bravo with sr33's
+    playbook loaded), the hash is withheld (`playbook_off`): the copilot runs without that
+    playbook and names the boat being sailed. An Orin from before #335 ignores `boat`."""
     import json as _json
     try:
         with open(_approved_path()) as f:
             h = (_json.load(f) or {}).get("hash")
     except (OSError, ValueError):
         h = None
-    return {"hash": h if isinstance(h, str) else None}
+    out = {"hash": h if isinstance(h, str) else None}
+    try:
+        out["boat"] = boatinfo.copilot_boat()
+        if boatinfo.playbook_for_other_boat(
+                (deviation._load_playbook() or {}).get("boat_model")):
+            out.update(hash=None, playbook_off=True)
+    except Exception:  # noqa: BLE001 — the approval read must answer whatever the boat state
+        out.pop("boat", None)
+    return out
 
 
 @app.get("/playbook")

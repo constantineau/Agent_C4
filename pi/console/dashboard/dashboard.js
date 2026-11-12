@@ -2117,6 +2117,10 @@
   }
   function playsHtml() {
     const pl = currentPlays();
+    // another boat is being sailed (#335): the engine turns the playbook's plays off, said plainly
+    if (pl && pl.available === false && pl.plays_off)
+      return `<div class="st-plays"><div class="st-plays-head"><span>PLAYS</span></div>` +
+        `<div class="st-play-none">${esc2(pl.note || "Plays off.")}</div></div>`;
     if (!pl || pl.available === false) return "";
     const rows = (pl.plays || []).filter((x) => x.status !== "quiet").slice(0, 4);
     // (the gear OUT✕ toggles moved to the always-visible CURRENT SAILS bar — a sail blows
@@ -3233,7 +3237,7 @@
       navAction: navAction, fetchDeviation: fetchDeviation, fetchCopilotHealth: fetchCopilotHealth,
       rerouteView: rerouteView, resolveTheme: resolveTheme, sunElevation: sunElevation,
       deviationHtml: deviationHtml, currentData: currentData, rawDead: rawDead, sailsInv: sailsInv,
-      sailButton: sailButton });
+      sailButton: sailButton, playsHtml: playsHtml });
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
   else init();
 })();

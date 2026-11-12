@@ -665,6 +665,17 @@ test("#305 any sail name the boat uses gets a button (spaces, long names), built
   ok(!/onclick="toggle(Flying|Gear)\(/.test(src), "sail buttons must not be inline-HTML onclick strings");
   ok(tapped === null, "no tap yet");
 });
+test("#335 another boat sailed: the PLAYS block says the playbook is whose, plays off", () => {
+  const T = load();
+  T.D.App.plays = { available: false, plays_off: true, note: "Playbook is for C4. Plays off." };
+  const h = T.D.playsHtml();
+  ok(h.includes("PLAYS") && h.includes("Playbook is for C4. Plays off."), "plays-off note missing: " + h);
+  ok(!h.includes("ARMED") && !h.includes("Watching"), "no plays may show: " + h);
+  T.D.App.plays = { available: false, note: "No gameplan loaded." };
+  ok(T.D.playsHtml() === "", "no playbook: the block stays hidden, as before");
+  T.D.App.plays = { available: true, n_plays: 2, plays: [], watchlist: [], sail_state: {} };
+  ok(T.D.playsHtml().includes("Watching 2 conditions"), "same boat: plays as before");
+});
 
 (async () => {
   let fails = 0;
