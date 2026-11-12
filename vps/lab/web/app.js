@@ -3712,7 +3712,9 @@ const Deb = { raceId: null, playbookId: null, playbooks: null, report: null, tra
   trackBusy: false, trackMsg: "", recordings: null, agent: null, job: null, poll: null, msg: "",
   viewing: null, practice: null, practiceMsg: "" };
 // Fleet-retro card state (docs/RETRO_STUDY.md — debrief across the WHOLE fleet of a past race)
-const Retro = { ybId: "bayviewmack2025", msg: "", busy: false, races: null, job: null, report: null, poll: null };
+// No race is built in (#310): the fleet is routed on the course of a race picked here (default: the
+// Debrief race), and the YB id comes from that race's tracker or is typed.
+const Retro = { ybId: "", defRace: null, courseId: null, setup: null, msg: "", busy: false, races: null, job: null, report: null, poll: null };
 
 async function renderDebrief() {
   const view = document.getElementById("view");
@@ -3754,6 +3756,7 @@ async function renderDebrief() {
 
 async function retroLoad() {
   await retroRefresh();
+  if (Retro.defRace == null && Deb.raceId) await retroSetup(Deb.raceId);
   try {
     Retro.job = await (await apiGet("/api/retro/run/status")).json();
     if (Retro.job.state === "running" && !Retro.poll) Retro.poll = setInterval(retroPoll, 8000);
@@ -4127,13 +4130,21 @@ function retroCard() {
     <h3>Fleet retro <span class="muted" style="font-weight:400">— how every boat sailed a past race</span></h3>
     <div style="margin:4px 0 8px">${archived}</div>
     <div class="opt-controls">
-      <label>YB race id <input type="text" id="retroYb" value="${attr(Retro.ybId)}" style="width:170px"></label>
+      <label title="The fleet is routed on this race's course">Route on <select id="retroDef" onchange="retroSetup(this.value)">
+        <option value="" ${Retro.defRace ? "" : "selected"}>Pick a race</option>
+        ${(Lab.races || []).map((x) => `<option value="${attr(x.race_id)}" ${x.race_id === Retro.defRace ? "selected" : ""}>${esc(x.name || x.race_id)}</option>`).join("")}
+      </select></label>
+      ${((Retro.setup || {}).courses || []).length > 1 ? `<label>Course <select onchange="Retro.courseId=this.value">
+        ${Retro.setup.courses.map((c) => `<option value="${attr(c.id)}" ${c.id === Retro.courseId ? "selected" : ""}>${esc(c.name)}</option>`).join("")}
+      </select></label>` : ""}
+      <label>YB race id <input type="text" id="retroYb" value="${attr(Retro.ybId)}" placeholder="from the race's tracker" style="width:170px"></label>
       <button class="mini" onclick="retroIngest()" ${Retro.busy ? "disabled" : ""}>1 · Get race</button>
       <button class="mini" onclick="retroPolars()" ${Retro.busy ? "disabled" : ""}>2 · Find ORC polars</button>
       <button class="mini" onclick="retroRun()" ${Retro.busy || running ? "disabled" : ""}>${running ? "Scoring…" : "3 · Score the fleet"}</button>
       <button class="mini" onclick="retroReport()" ${Retro.busy ? "disabled" : ""}>4 · Report</button>
       ${Retro.msg ? `<span class="muted" style="font-size:12px">${esc(Retro.msg)}</span>` : ""}
     </div>
+    ${Retro.setup && Retro.setup.note && !Retro.ybId ? `<div class="muted" style="font-size:12px;margin-top:6px">${esc(Retro.setup.note)}</div>` : ""}
     ${jobLine}
     ${retroReportHtml()}
     <div class="muted" style="font-size:12px;margin-top:6px">Compares each boat's line and speed with its best route. Shows patterns, not proof.
@@ -4164,6 +4175,36 @@ function retroReportHtml() {
 async function retroRefresh() {
   try { Retro.races = (await (await apiGet("/api/retro/races")).json()).races || []; } catch (e) { Retro.races = []; }
 }
+// The typed YB id, when the box is on the page; else keep what we have (the card may not be drawn yet)
+function retroReadYb() {
+  const box = document.getElementById("retroYb");
+  if (box && typeof box.value === "string") Retro.ybId = box.value.trim();
+  return Retro.ybId;
+}
+// Pick the race whose course the fleet is routed on: fills its YB id (if the box is empty), course
+// and ORC countries from the race definition.
+async function retroSetup(defRace) {
+  retroReadYb();
+  Retro.defRace = defRace || ""; Retro.setup = null; Retro.courseId = null;
+  if (defRace) {
+    let setup = null;
+    try {
+      const r = await apiGet("/api/retro/setup?def_race_id=" + encodeURIComponent(defRace));
+      if (r.ok) setup = await r.json();
+    } catch (e) { /* card still works with a typed id */ }
+    // a slower answer for a race picked earlier must not overwrite the race picked now
+    if (Retro.defRace !== defRace) return;
+    Retro.setup = setup;
+    if (setup) {
+      Retro.courseId = setup.course_id;
+      if (!Retro.ybId && setup.yb_id) Retro.ybId = setup.yb_id;
+    }
+  }
+  if (location.hash.replace("#", "") === "debrief") paintDebrief();
+}
+function retroBody(extra) {
+  return JSON.stringify(Object.assign({ race_id: Retro.ybId, def_race_id: Retro.defRace || null }, extra || {}));
+}
 async function retroPick(raceId) {
   // click an archived-race pill → select it + load its report (no ids to remember)
   Retro.ybId = raceId; Retro.report = null;
@@ -4171,32 +4212,30 @@ async function retroPick(raceId) {
   await retroReport();
 }
 async function retroIngest() {
-  Retro.ybId = document.getElementById("retroYb").value.trim();
+  retroReadYb();
   Retro.busy = true; Retro.msg = "getting tracks and results…"; paintDebrief();
   try {
-    const r = await (await api("/api/retro/ingest", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ race_id: Retro.ybId }) })).json();
+    const r = await (await api("/api/retro/ingest", { method: "POST", headers: { "Content-Type": "application/json" }, body: retroBody() })).json();
     Retro.msg = r.ok ? `got ${r.tracks} tracks, ${r.results} results, ${r.divisions} divisions` : (r.note || r.detail || "couldn't get the race");
   } catch (e) { Retro.msg = "couldn't get the race"; }
   Retro.busy = false; await retroRefresh(); paintDebrief();
 }
 async function retroPolars() {
-  Retro.ybId = document.getElementById("retroYb").value.trim();
-  Retro.busy = true; Retro.msg = "finding ORC polars (USA + CAN)…"; paintDebrief();
+  retroReadYb();
+  Retro.busy = true; Retro.msg = "finding ORC polars…"; paintDebrief();
   try {
-    let total = 0;
-    for (const cc of ["USA", "CAN"]) {
-      const r = await (await api("/api/retro/polars", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ race_id: Retro.ybId, country: cc }) })).json();
-      if (r.ok) total += r.matched;
-    }
-    Retro.msg = `${total} boats matched to ORC polars`;
+    // Countries come from the picked race (its list, else venue + sail numbers), else sail numbers
+    const r = await (await api("/api/retro/polars", { method: "POST", headers: { "Content-Type": "application/json" }, body: retroBody() })).json();
+    Retro.msg = r.ok ? `${r.matched} boats matched to ORC polars (${(r.countries || []).join(", ")})` : (r.note || r.detail || "polar match failed");
   } catch (e) { Retro.msg = "polar match failed"; }
   Retro.busy = false; await retroRefresh(); paintDebrief();
 }
 async function retroRun() {
-  Retro.ybId = document.getElementById("retroYb").value.trim();
+  retroReadYb();
   Retro.msg = "";
+  if (!Retro.defRace) { Retro.msg = "Pick a race to route on."; paintDebrief(); return; }
   try {
-    const r = await (await api("/api/retro/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ race_id: Retro.ybId }) })).json();
+    const r = await (await api("/api/retro/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: retroBody({ course_id: Retro.courseId || null }) })).json();
     if (!r.ok && r.note) { Retro.msg = r.note; paintDebrief(); return; }
     Retro.job = { state: "running", progress: [] };
     if (Retro.poll) clearInterval(Retro.poll);
@@ -4210,7 +4249,7 @@ async function retroPoll() {
   if (location.hash.replace("#", "") === "debrief") paintDebrief();
 }
 async function retroReport() {
-  Retro.ybId = document.getElementById("retroYb").value.trim();
+  retroReadYb();
   Retro.busy = true; Retro.msg = "building report…"; paintDebrief();
   try { Retro.report = await (await apiGet("/api/retro/report?race_id=" + encodeURIComponent(Retro.ybId))).json(); Retro.msg = ""; }
   catch (e) { Retro.msg = "report failed"; }

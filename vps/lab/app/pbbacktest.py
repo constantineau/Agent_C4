@@ -18,9 +18,11 @@ the host against the real vps/agent selector/matcher code:
      per step, plus the frozen fingerprint interpolated to the same moment → one JSON the
      host-side replay consumes.
 
-Run via docker cp + exec (the lab image bakes its source):
-  docker cp vps/lab/app/pbbacktest.py sr33-dev-lab-1:/srv/app/pbbacktest.py
-  docker exec sr33-dev-lab-1 python3 -c "from app import pbbacktest; pbbacktest.run()"
+No race is built in (#310): the caller names the Lab race definition (course geometry), the
+archived retro race (tracks + results), the course, the gun and the boats to replay, e.g.
+  pbbacktest.run(def_race_id=..., retro_race_id=..., course_id=..., gun=..., team_ids=(...))
+
+Run via docker cp + exec into the Lab container (the lab image bakes its source).
 """
 import datetime as dt
 import json
@@ -34,11 +36,6 @@ from . import optimizer
 
 OUT_DIR = os.path.join(os.path.dirname(retrostore.RETRO_DB), "backtest")
 
-DEF_RACE = "bayview-mackinac-2026"        # course geometry (same course sailed in 2025)
-RETRO_RACE = "bayviewmack2025"
-COURSE = "cove_island"
-GUN = 1752338400.0                        # C4's division gun (Div I Class E, 2025-07-12)
-
 
 def _out(name):
     os.makedirs(OUT_DIR, exist_ok=True)
@@ -47,7 +44,7 @@ def _out(name):
 
 # ------------------------------------------------------------------ Phase A: as-of synthesis
 def _archive_fingerprint(bundle, definition, course_id, gun, models):
-    """The drift reference the 2025 boat would have frozen: the SAME gun blend sampled along
+    """The drift reference the boat would have frozen at its gun: the SAME gun blend sampled along
     the recommended variant's route (source-labeled so nobody mistakes it for Open-Meteo)."""
     rec = bundle.get("recommended")
     v = next((x for x in (bundle.get("variants") or []) if x.get("id") == rec), None)
@@ -71,15 +68,15 @@ def _archive_fingerprint(bundle, definition, course_id, gun, models):
     return {"source": "archive-gun-blend", "built_at": round(gun), "points": out}
 
 
-def synth_asof(def_race_id=DEF_RACE, retro_race_id=RETRO_RACE, course_id=COURSE,
-               gun=GUN, fan_depth="standard", use_waves=False):
-    """The playbook as-of the 2025 gun. Returns the signed bundle (also written to disk).
+def synth_asof(*, def_race_id, retro_race_id, course_id, gun, fan_depth="standard",
+               use_waves=False):
+    """The playbook as-of the gun. Returns the signed bundle (also written to disk).
     race_id is suffixed -backtest so nothing here can ever land in a real race's deploy list."""
     d = dict(store.get_race(def_race_id) or {})
     if not d:
         return {"available": False, "note": f"unknown definition {def_race_id!r}"}
     d["race_id"] = f"{retro_race_id}-backtest"
-    d["name"] = f"{d.get('name', def_race_id)} (2025 backtest)"
+    d["name"] = f"{d.get('name', def_race_id)} (backtest)"
     models = archive.gun_sources(gun, context=f"retro:{retro_race_id}")
     bundle = synthesis.synthesize(d, course_id, gun, models,
                                   ensemble_members=0, use_waves=use_waves, fan_depth=fan_depth)
@@ -103,7 +100,7 @@ def synth_asof(def_race_id=DEF_RACE, retro_race_id=RETRO_RACE, course_id=COURSE,
 
 
 # ------------------------------------------------------------- realized wind (oracle chain)
-def build_oracle_field(bbox, t0, t1, retro_race_id=RETRO_RACE):
+def build_oracle_field(bbox, t0, t1, retro_race_id):
     """The wind that actually blew: hourly HRRR f00 (analysis) frames chained over the race
     window — the judge-loop's oracle definition, via the same pinned-archive fetch path."""
     src = archive.ArchiveHRRR()
@@ -178,11 +175,12 @@ def _fp_at(fp_points, t):
     return None
 
 
-def sample_replay(bundle=None, team_ids=(3168, 1676), step_s=900, retro_race_id=RETRO_RACE,
-                  def_race_id=DEF_RACE, course_id=COURSE, hours_cap=48.0):
+def sample_replay(bundle=None, *, team_ids, retro_race_id, def_race_id, course_id, gun,
+                  division=None, step_s=900, hours_cap=48.0):
     """Stage-1 sampling → backtest/replay_input.json for the host-side selector replay.
     Per boat per step: interpolated position + realized (oracle) wind there + the frozen
-    fingerprint's expectation for that moment."""
+    fingerprint's expectation for that moment. `division` picks which results table gives the
+    boats' ranks (None = every result row)."""
     if bundle is None:
         with open(_out("bundle.json")) as f:
             bundle = json.load(f)
@@ -190,11 +188,11 @@ def sample_replay(bundle=None, team_ids=(3168, 1676), step_s=900, retro_race_id=
     bbox = optimizer.course_bbox(d, course_id)
     entries = {e["team_id"]: e for e in retrostore.get_entries(retro_race_id)}
     results = {r["team_id"]: r for r in retrostore.get_results(retro_race_id)
-               if r.get("division") == "Division I Overall"}
+               if division is None or r.get("division") == division}
     fp_points = (bundle.get("forecast_fingerprint") or {}).get("points") or []
 
     guns = [entries[t]["start_epoch"] for t in team_ids if t in entries]
-    t0 = min(guns) if guns else GUN
+    t0 = min(guns) if guns else gun
     t1 = t0 + hours_cap * 3600
     wf = build_oracle_field(bbox, t0 - 3600, t1, retro_race_id)
     if not wf.loaded:
@@ -234,7 +232,7 @@ def sample_replay(bundle=None, team_ids=(3168, 1676), step_s=900, retro_race_id=
     out = {
         "ok": True,
         "race_id": retro_race_id,
-        "gun": GUN,
+        "gun": gun,
         "bundle": {
             "race_id": bundle.get("race_id"),
             "recommended": rec,
@@ -257,9 +255,13 @@ def sample_replay(bundle=None, team_ids=(3168, 1676), step_s=900, retro_race_id=
     return {"ok": True, "boats": {k: len(v['steps']) for k, v in boats.items()}}
 
 
-def run(fan_depth="standard", team_ids=(3168, 1676)):
+def run(*, def_race_id, retro_race_id, course_id, gun, team_ids, division=None,
+        fan_depth="standard"):
     """Phase A + stage-1 sampling in one go (the ~10-min path is the synthesis fan)."""
-    bundle = synth_asof(fan_depth=fan_depth)
+    bundle = synth_asof(def_race_id=def_race_id, retro_race_id=retro_race_id,
+                        course_id=course_id, gun=gun, fan_depth=fan_depth)
     if not bundle.get("available", True):
         return bundle
-    return sample_replay(bundle, team_ids=team_ids)
+    return sample_replay(bundle, team_ids=team_ids, retro_race_id=retro_race_id,
+                         def_race_id=def_race_id, course_id=course_id, gun=gun,
+                         division=division)

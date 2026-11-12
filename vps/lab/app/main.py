@@ -1326,13 +1326,29 @@ async def retro_races():
     return {"races": retrostore.list_races(), "grib_archive": retrostore.grib_stats()}
 
 
+@app.get("/api/retro/setup")
+async def retro_setup(def_race_id: str):
+    """What the retro card fills in from a Lab race: its YB id (or why none), course, countries."""
+    d = store.get_race(def_race_id)
+    if not d:
+        return JSONResponse({"detail": "not found"}, status_code=404)
+    return retro.setup_for(d)
+
+
 @app.post("/api/retro/ingest")
 async def retro_ingest(body: dict):
-    """Pull a YB race (entries + full-fleet tracks + results) into the persistent retro archive."""
-    rid = (body or {}).get("race_id")
+    """Pull a YB race (entries + full-fleet tracks + results) into the persistent retro archive.
+    No `race_id` → the YB id named by the picked race definition's tracker (`def_race_id`)."""
+    b = body or {}
+    rid = b.get("race_id")
+    if not rid and b.get("def_race_id"):
+        d = store.get_race(b["def_race_id"])
+        su = retro.setup_for(d) if d else {"note": "That race isn't in the library."}
+        rid = su.get("yb_id")
+        if not rid:
+            return JSONResponse({"detail": su.get("note")}, status_code=400)
     if not rid:
-        return JSONResponse({"detail": "race_id required (the YB id, e.g. bayviewmack2025)"},
-                            status_code=400)
+        return JSONResponse({"detail": "Type a YB race id."}, status_code=400)
     try:
         return await run_in_threadpool(retro.ingest_race, rid)
     except Exception as exc:
@@ -1348,8 +1364,8 @@ async def retro_run(body: dict):
     rid = b.get("race_id")
     if not rid:
         return JSONResponse({"detail": "race_id required"}, status_code=400)
-    return retro.start_fleet_job(rid, b.get("def_race_id") or "bayview-mackinac-2026",
-                                 b.get("course_id") or "cove_island", b.get("teams"),
+    # No race default (#310): the course comes from the race definition the user picked.
+    return retro.start_fleet_job(rid, b.get("def_race_id"), b.get("course_id"), b.get("teams"),
                                  b.get("limit"), b.get("resolution") or "auto")
 
 
@@ -1369,13 +1385,15 @@ async def retro_report(race_id: str):
 
 @app.post("/api/retro/polars")
 async def retro_polars(body: dict):
-    """Match every ingested entry to its public ORC cert + store the converted polar."""
-    rid = (body or {}).get("race_id")
+    """Match every ingested entry to its public ORC cert + store the converted polar. Countries:
+    the ones typed, else the picked race's (`def_race_id`), else the entrants' sail prefixes."""
+    b = body or {}
+    rid = b.get("race_id")
     if not rid:
         return JSONResponse({"detail": "race_id required"}, status_code=400)
     try:
-        return await run_in_threadpool(retro.match_polars, rid,
-                                       (body or {}).get("country") or "USA")
+        return await run_in_threadpool(retro.match_polars, rid, b.get("country") or None,
+                                       b.get("def_race_id") or None)
     except Exception as exc:
         return JSONResponse({"detail": f"retro polar match failed: {exc}"}, status_code=500)
 

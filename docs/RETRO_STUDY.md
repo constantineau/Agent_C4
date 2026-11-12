@@ -155,6 +155,8 @@ known outcome (right paid 18:2 in the Div-I top third).
    descriptive ARMED list the crew reads alongside the deterministic recommendation, but worth
    remembering: armed ≠ act.
 5. Reproduce: `docker cp vps/lab/app/pbbacktest.py sr33-dev-lab-1:/srv/app/ && docker exec
-   sr33-dev-lab-1 python3 -c "from app import pbbacktest; pbbacktest.run()"` → copy
+   sr33-dev-lab-1 python3 -c "from app import pbbacktest; pbbacktest.run(def_race_id='bayview-mackinac-2026',
+   retro_race_id='bayviewmack2025', course_id='cove_island', gun=1752338400.0, team_ids=(3168, 1676),
+   division='Division I Overall')"` (the tool has no built-in race since #310) → copy
    `/srv/retro/backtest/replay_input.json` out → `PYTHONPATH=vps/agent:. python3
    vps/agent/backtest_replay.py <replay_input.json>`.
