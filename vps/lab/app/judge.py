@@ -198,6 +198,7 @@ def run_judge(race_id, playbook_id=None, models=None, on_progress=None, recordin
         "windfield": tac.get("windfield") or {},
         "actual_track": scored,
         "caveat": tac.get("caveat") or "",
+        "data": _sea_data(cur, wv, d, tac.get("course_id") or (pb or {}).get("course_id"), t),
     }
     log("writing the critique…")
     report["critique"] = _critique(report) or _deterministic_critique(report)
@@ -284,6 +285,23 @@ def _own_speed_fields(t, tac, gun, start_epoch, log):
     except Exception:
         wv = None
     return cur, wv
+
+
+def _sea_data(cur, wv, d, course_id, t):
+    """The debrief's `data` block (#308): the current and wave sources the boat's speed was scored
+    on, or "none: why". A field that could not be built at all counts as no data."""
+    from . import seasource
+    from .current import ZeroCurrent
+    from .wave import ZeroWave
+    cur = cur if cur is not None else ZeroCurrent(seasource.NO_DATA)
+    wv = wv if wv is not None else ZeroWave(seasource.NO_DATA)
+    if course_id is not None or (d or {}).get("courses"):
+        return optimizer.sea_data(cur, wv, d, course_id)
+    try:
+        bbox = _track_bbox(t) if t else None
+    except Exception:          # a track with no usable fixes: no area, so no tidal check
+        bbox = None
+    return seasource.data_block(cur, wv, d, bbox)
 
 
 def _regret_basis(cur, wv, boat_from="plan", plan_waves=True, polar_changed=False):

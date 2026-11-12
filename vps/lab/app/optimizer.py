@@ -1633,6 +1633,7 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
             "sea_state_hs_mean": round(sum((l.get("hs_mean") or 0.0) * (l.get("leg_minutes") or 0.0)
                                            for l in legs) / tot, 2),
             "wave_source": waves.status().get("source") if waves is not None else None,
+            "wave_label": getattr(waves, "label", None) if waves is not None else None,
         }
         if wave_stats is not None:                 # the reshape gate: did the sea bend the route or only tax ETA?
             realized["wave_reshape"] = wave_reshape
@@ -1650,6 +1651,9 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
                                            exclude_sails=exclude_sails, boat_polar=boat_polar)
     safety = route_safety(definition, cid or course_id, marks, full_path, leg_end_idx, incomplete,
                           obstacles, leg_obstacles, land_failed, from_mark=int(from_mark or 0))
+    data = sea_data(cur, waves, definition, cid or course_id)
+    if data.get("warning"):            # tidal water routed with no current: first, not buried
+        warnings.insert(0, data["warning"])
     return {
         "available": True, "course_id": cid,
         "safety": safety,                  # #242: can this route be frozen, deployed, sent as GPX?
@@ -1669,6 +1673,7 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
         "leg_end_idx": leg_end_idx,
         "incomplete": incomplete,
         "warnings": warnings,
+        "data": data,                      # #308: which current and wave sources, or "none: why"
         "legs": legs,
         "sail_plan": sail_seq,
         "roundings": race_def.marks_with_side(definition, course_id),   # crew-facing required sides
@@ -1953,6 +1958,17 @@ def _per_model_paths(definition, course_id, start_epoch, wf, obstacles, P, marks
 
 
 # --- course extent / horizon -------------------------------------------------
+def sea_data(cur, waves, definition, course_id=None):
+    """The `data` block (#308): the current and wave sources a route used, or "none: why", the
+    plain notes for what's missing, and the tidal-water warning."""
+    from . import seasource
+    try:
+        bbox = course_bbox(definition, course_id)
+    except Exception:
+        bbox = None
+    return seasource.data_block(cur, waves, definition, bbox)
+
+
 def course_bbox(definition: dict, course_id=None, pad=0.5):
     """(north, south, west, east) bounding the course marks, padded. None if no coords."""
     marks, _skip, _cid = race_def.course_to_marks(definition, course_id)
@@ -1992,7 +2008,7 @@ def briefing(result: dict, race_name: str = "") -> str:
     cur = result.get("current") or {}
     current_text = ""
     if cur.get("loaded"):
-        src = cur.get("source", "current model")
+        src = cur.get("label") or cur.get("source", "current model")
         if cur.get("source") == "constant":
             bits = f"set {cur.get('set_deg','?')}° / drift {cur.get('drift_kn','?')} kts"
         else:
@@ -2007,7 +2023,7 @@ def briefing(result: dict, race_name: str = "") -> str:
         helm = int(round(rz.get("helm_factor", 1.0) * 100))
         hs = rz.get("sea_state_hs_mean") or 0.0
         wsrc = rz.get("wave_source")
-        wvia = " (GLWU)" if wsrc == "glwu" else ""
+        wvia = f" ({rz.get('wave_label') or wsrc})" if wsrc and wsrc != "constant" else ""
         sea = f", sea state ~{hs:.1f} m{wvia}" if hs > 0.05 else ""
         reshape = ""
         if hs > 0.05 and "wave_reshape" in rz:

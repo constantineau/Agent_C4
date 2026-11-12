@@ -1836,6 +1836,7 @@ function renderOptResult(r) {
         <button id="shareBtn" onclick="shareGameplan(this)" title="A view-only link to the route player. No login needed.">🔗 Share player</button></div>
       ${r.start && r.start.note ? `<div class="opt-start-note">${esc(r.start.note)}</div>` : ""}
       ${optDegradedBanner(r)}
+      ${seaDataNote(r.data, false)}
       ${safetyPanel(r.safety, "route", { race: r.race_id, course: r.course_id })}
       ${r.timed_out ? '<div class="pill warn">Routing ran out of time. The route may be incomplete.</div>' : ""}
       <details class="rail-sec" open><summary>Legs</summary>
@@ -1962,10 +1963,22 @@ function optRealizedStat(r) {
   return `<div title="Route speed as % of the full polar (helm and waves). The gap is speed left to find."><b class="conf ${cls}">${pct}%</b><span>of polar · helm ${helm}%${sea}${rsh}</span></div>`;
 }
 
+// #308: what sea data a route, playbook or debrief used. Missing data is said plainly; tidal water
+// with no current is loud (`loud`: show it here, where it isn't already in the warnings).
+function seaDataNote(d, loud) {
+  if (!d) return "";
+  const notes = (d.notes || []).filter((n) => !/turned off/.test(n));
+  const warn = loud && d.warning
+    ? `<div class="pill bad" style="display:block;margin-top:8px;text-align:left"><b>⚠ ${esc(d.warning)}</b></div>` : "";
+  const quiet = notes.length
+    ? `<div class="muted sea-data" style="font-size:12px;margin-top:6px">${notes.map(esc).join(" ")}</div>` : "";
+  return warn + quiet;
+}
+
 function optCurrentStat(r) {
   const c = r.current;
   if (!c || !c.loaded) return "";
-  const src = (c.source || "current").toUpperCase();
+  const src = c.label || (c.source || "current").toUpperCase();
   const peak = r.current_grid && r.current_grid.peak_drift_kn;
   const sub = c.source === "constant"
     ? `${c.drift_kn ?? "?"} kts @ ${c.set_deg ?? "?"}°`
@@ -2124,6 +2137,7 @@ function renderPbResult(b) {
       </div>
       ${pbBoatModelNote(b)}
       ${pbWarnings(b)}
+      ${seaDataNote(b.data, false)}
       ${safetyPanel(b.safety || { ok: false, problems: [{ text: "Built before route checks. Build the playbook again." }] }, "playbook", pbCtx(b))}
     </div>
     <div class="pb-variants">${b.variants.map((v) => pbVariantCard(v, v.id === b.recommended)).join("")}</div>
@@ -4057,6 +4071,7 @@ function debReport(r) {
     <h3>${esc(r.race_name || "Debrief")} <span class="muted" style="font-weight:400">— ${w && w.start_ts ? esc(new Date(w.start_ts * 1000).toISOString().slice(0, 16).replace("T", " ") + "Z") + (w.hours != null ? " · " + w.hours + " h" : "") : "loaded track"}</span></h3>
     ${r.archived_id ? `<div class="muted" style="font-size:12px">Saved debrief #${r.archived_id}${r.archived_at ? " · " + new Date(r.archived_at * 1000).toLocaleString() : ""}.</div>` : ""}
     ${r.tactics_available ? "" : `<div class="banner" style="font-size:12px;margin-top:6px"><b>Speed only.</b> ${esc(r.tactics_note || "No frozen playbook, so tactics aren't checked.")}</div>`}
+    ${seaDataNote(r.data, true)}
   </div>`;
   return head + (r.tactics_available ? debTacticsCard(r) : "") + `
     <div class="card">

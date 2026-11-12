@@ -284,7 +284,7 @@ Remove: `sudo systemctl disable --now sr33-orin-reroute`, delete the unit, `rm -
 | `REROUTE_API_TIMEOUT_S` | `60` | one ICON/GEM load, in all (capped by what's left of the budget) |
 | `REROUTE_ROUTE_BUDGET_S` | `300` | optimizer time cap |
 | `REROUTE_JOB_TIMEOUT_S` | `600` | a run is killed after this, with its whole process group (job.py + its GRIB parser); no new run starts until that group is gone |
-| `REROUTE_CURRENT` / `REROUTE_WAVES` | `0` / `0` | LMHOFS current / GLWU sea state (online only) |
+| `REROUTE_CURRENT` / `REROUTE_WAVES` | `0` / `0` | Water current / sea state, online only, from the source that covers the course (LMHOFS or HYCOM ESPC; GLWU or GFS-Wave, #308). Offline the route says "No current data: no internet." |
 | Pi: `ORIN_REROUTE_URL` | `http://10.10.10.2:8210` | |
 
 ## Tests

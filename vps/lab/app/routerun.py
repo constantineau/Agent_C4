@@ -78,7 +78,8 @@ def run_course(definition, course_id, start_epoch, models, *, ensemble_members=0
                per_model=False, resolution="auto", use_waves=True, use_current=True,
                on_progress=None, boat=None, chart_source=None, model_skill=True,
                obstacles=None, time_budget_s=None, fallback_tries=None, bbox=None, t_end=None,
-               briefing=True, grids=True, on_phase=None, leg_obstacles=None, boat_polar=None):
+               briefing=True, grids=True, on_phase=None, leg_obstacles=None, boat_polar=None,
+               offline=False):
     """Blocking: build the multi-model wind field, route the course, write the briefing.
 
     `models` are model names or ModelSource instances (the Orin passes cache-first wrappers).
@@ -88,7 +89,8 @@ def run_course(definition, course_id, start_epoch, models, *, ensemble_members=0
     map's wind/current/sea-state grids). `on_phase(name)` hears "weather" then "routing" (the
     Orin's progress). Lab defaults reproduce the Lab route exactly. `boat_polar` = the boat's
     polar block when the caller holds it (the Orin's, from Deploy); else the profile's own. A boat
-    with no polar is refused before any download."""
+    with no polar is refused before any download. `offline` = no internet (the Orin at sea): the
+    current and waves asked for are not fetched, and the result says so."""
     from .wind import build_windfield
     from . import current, wave
     from shared.boat_polar import NO_POLAR
@@ -113,12 +115,22 @@ def run_course(definition, course_id, start_epoch, models, *, ensemble_members=0
     if not wf.loaded:
         return {"available": False, "note": "No forecast could be loaded (not out yet, or no "
                 "internet).", "windfield": wf.status(), "log": log}
-    # water current: opt-out per run (compare with vs without) — LMHOFS surface currents, ZeroCurrent on any miss
-    cur = (current.build_currentfield(bbox, start_epoch, t_end, on_progress=log.append)
-           if use_current else current.ZeroCurrent())
-    # sea state (phase 1 seam) — opt-out per run; helm factor still applies (it's crew efficiency, not waves)
-    waves = (wave.build_wavefield(bbox, start_epoch, t_end, on_progress=log.append)
-             if use_waves else wave.ZeroWave())
+    # water current: opt-out per run (compare with vs without) — the source that covers the area
+    # (seasource.pick), ZeroCurrent(why) on any miss
+    from . import seasource
+    if not use_current:
+        cur = current.ZeroCurrent(seasource.OFF)
+    elif offline:
+        cur = current.ZeroCurrent(seasource.OFFLINE)
+    else:
+        cur = current.build_currentfield(bbox, start_epoch, t_end, on_progress=log.append)
+    # sea state — opt-out per run; helm factor still applies (it's crew efficiency, not waves)
+    if not use_waves:
+        waves = wave.ZeroWave(seasource.OFF)
+    elif offline:
+        waves = wave.ZeroWave(seasource.OFFLINE)
+    else:
+        waves = wave.build_wavefield(bbox, start_epoch, t_end, on_progress=log.append)
     phase("routing")
     result = optimizer.optimize_course(definition, course_id, start_epoch, wf, avoid=avoid,
                                        source=chart_source, obstacles=obstacles,
