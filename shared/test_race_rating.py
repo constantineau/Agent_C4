@@ -142,6 +142,15 @@ check("our boat's stale rating is not shipped", blob["own"]["rating"] is None)
 check("the blob names them", blob["stale_ratings"] == ["Stale", "Legacy", "Good", "(our boat)"])
 check("the definition itself is untouched", d["fleet"][0]["rating"] == 1.1 and d["own"]["rating"] == 1.0)
 check("a clean race has no stale list", "stale_ratings" not in R.fleet_blob(race()))
+# an explicit own (the Pi's /fleet/load override) is checked the same way
+blob = R.fleet_blob(race(rating_system="ORC", rating_column="COL_B"),
+                    {"boat": "Us", "rating": 1.0, "rating_col": "COL_A"})
+check("an own override off another column is not loaded", blob["own"]["rating"] is None
+      and blob["stale_ratings"] == ["(our boat)"])
+ov = {"boat": "Us", "rating": 0.9, "rating_col": "COL_B"}
+blob = R.fleet_blob(race(rating_system="ORC", rating_column="COL_B"), ov)
+check("an own override on the column is loaded as given", blob["own"]["rating"] == 0.9
+      and "stale_ratings" not in blob and ov["rating"] == 0.9)
 
 print("the shipped race file carries its own columns (migrated off the code map):")
 with open(os.path.join(ROOT, "vps", "lab", "races", "bayview_mackinac_2026.json")) as f:

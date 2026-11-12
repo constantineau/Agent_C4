@@ -268,12 +268,13 @@ function withOverrides(snap) {
 // The fixes belong to what was SENT: the baseline is the sent copy with them applied, and the editor
 // takes a fixed number only where that boat's number is unchanged since the send, so an edit made
 // while the save was in flight survives (and still shows as unsaved).
-const _RATING_KEYS = ["rating", "rating_col", "tod_allowance", "tod_col"];
+// each number moves with its column tag: if either changed since the send, both are kept
+const _RATING_PAIRS = [["rating", "rating_col"], ["tod_allowance", "tod_col"]];
 function _takeRatingFix(cur, sent, fixed) {
   if (!cur || !sent || !fixed) return;
-  _RATING_KEYS.forEach((k) => {
-    if (JSON.stringify(cur[k]) !== JSON.stringify(sent[k])) return;   // edited since send: keep
-    if (fixed[k] === undefined) delete cur[k]; else cur[k] = fixed[k];
+  _RATING_PAIRS.forEach((pair) => {
+    if (pair.some((k) => JSON.stringify(cur[k]) !== JSON.stringify(sent[k]))) return;   // edited: keep
+    pair.forEach((k) => { if (fixed[k] === undefined) delete cur[k]; else cur[k] = fixed[k]; });
   });
 }
 function markSaved(snap, ed) {

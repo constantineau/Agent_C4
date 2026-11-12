@@ -57,7 +57,7 @@ function saveCtx(ed, fix) {
   const out = { clean: null };
   const ctx = { Lab: { editDef: ed, ratingFix: fix }, markClean(s) { out.clean = s; }, JSON, Object };
   vm.createContext(ctx);
-  vm.runInContext(grab("_RATING_KEYS") + grab("_takeRatingFix") + grab("markSaved") + "\nthis.__f = markSaved;", ctx);
+  vm.runInContext(grab("_RATING_PAIRS") + grab("_takeRatingFix") + grab("markSaved") + "\nthis.__f = markSaved;", ctx);
   return { markSaved: ctx.__f, out, ctx };
 }
 
@@ -90,6 +90,17 @@ test("edits made while the save was in flight survive the fixes and stay unsaved
   assert.equal(base.name, "Old");                                  // baseline = what was sent, fixed
   assert.equal(base.fleet[1].rating, null);
   assert.notEqual(out.clean, JSON.stringify(ed));                  // so the new edits show unsaved
+});
+
+test("re-typing the same number in flight keeps the number with its new manual tag", () => {
+  const ed = { race_id: "r", fleet: [{ boat: "A", rating: 1.1, rating_col: "COL_A", tod_allowance: 600, tod_col: "T_A" }] };
+  const snap = JSON.stringify(ed);
+  ed.fleet[0].rating = 1.1; ed.fleet[0].rating_col = "manual";        // same value, now typed
+  const { markSaved } = saveCtx(ed, { fleet: [{ boat: "A", rating: null, tod_allowance: null }], own: {} });
+  markSaved(snap, ed);
+  assert.deepEqual([ed.fleet[0].rating, ed.fleet[0].rating_col], [1.1, "manual"]);   // pair kept
+  assert.equal(ed.fleet[0].tod_allowance, null);                                     // untouched pair fixed
+  assert.ok(!("tod_col" in ed.fleet[0]));
 });
 
 test("a roster reordered in flight takes no fix on the wrong boat", () => {

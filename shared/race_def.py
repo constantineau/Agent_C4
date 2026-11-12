@@ -724,6 +724,8 @@ def fleet_blob(definition: dict, own: dict = None) -> dict:
     # scores on now (or a legacy import of unknown column) never reaches the boat, whatever path
     # wrote the file. Works on a copy; `stale_ratings` names the boats so the Lab can say so.
     definition = json.loads(json.dumps(definition or {}))
+    if own:                       # an explicit own entry is checked like the saved one (#311)
+        definition["own"] = json.loads(json.dumps(own))
     stale = clear_stale_ratings(definition)
     roster = []
     for e in definition.get("fleet", []) or []:
@@ -746,7 +748,7 @@ def fleet_blob(definition: dict, own: dict = None) -> dict:
         e = _gun_epoch(v, tz_name)
         if e is not None:
             division_starts[str(k)] = e
-    out = {"fleet": roster, "scoring": scoring, "own": own or definition.get("own") or {},
+    out = {"fleet": roster, "scoring": scoring, "own": definition.get("own") or {},
            "tracker": tracker, "division_starts": division_starts}
     if stale["boats"] or stale["own"]:
         out["stale_ratings"] = stale["boats"] + (["(our boat)"] if stale["own"] else [])
