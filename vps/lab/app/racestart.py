@@ -11,6 +11,7 @@ One function decides it (`resolve`), used by the optimizer, the playbook synth/f
 """
 import time
 
+from shared import race_def
 from shared.race_def import _gun_epoch
 
 
@@ -20,16 +21,20 @@ def race_start(definition):
     carries no usable gun time."""
     d = definition or {}
     tz = d.get("timezone") or ""
-    guns = {}
+    guns, unreadable = {}, set()
     for k, v in (d.get("division_starts") or {}).items():
         e = _gun_epoch(v, tz)
         if e is not None:
             guns[str(k).strip()] = e
-    if not guns:
-        return None
+        elif race_def._is_local_time(v):      # a local time we can't place without the zone
+            unreadable.add(str(k).strip())
     own = str((d.get("own") or {}).get("division") or "").strip()
     if own and own in guns:
         return {"epoch": guns[own], "division": own, "basis": "own_division"}
+    if unreadable:                            # our gun, or one that might be earliest, can't be read: never guess
+        return None
+    if not guns:
+        return None
     div = min(guns, key=lambda k: guns[k])
     return {"epoch": guns[div], "division": div, "basis": "earliest_gun"}
 
@@ -43,6 +48,10 @@ def resolve(definition, start_epoch=None, now=None):
     if start_epoch not in (None, "", 0):
         return {"epoch": float(start_epoch), "source": "picked", "race_start": rs,
                 "note": "Routed from the start you picked."}
+    if rs is None and race_def.timezone_issues(definition or {})[0]:
+        return {"epoch": now, "source": "now_no_gun", "race_start": None,
+                "note": "Gun times need the race's time zone, so it routed from now. "
+                        "Set the time zone in race review, or pick a Start."}
     if rs is None:
         return {"epoch": now, "source": "now_no_gun", "race_start": None,
                 "note": "No gun time is set for this race, so it routed from now. "

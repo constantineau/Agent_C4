@@ -492,6 +492,7 @@
     const r = await fetchJSON("/course", 8000);
     if (!r) return;                       // no answer: keep the map we have
     App.courseMap = r.available && (r.marks || []).length >= 2 ? r : null;
+    App.courseFirst = (r.available && (r.marks || []).find((m) => validPos(m))) || null;
   }
   async function fetchTrack() {   // NOT memoized — a mid-day re-push replaces the playbook
     const r = await fetchJSON("/playbook/track", 8000);
@@ -2314,7 +2315,7 @@
   const App = {
     src: "live", demoScn: "calm",
     theme: localStorage.getItem("sr33.dash.theme") || "auto",
-    pos: { lat: 45.33, lon: -82.0 },
+    courseFirst: null,   // the loaded course's first mark: the day/night fallback with no fix (#312)
     openTile: null, streamTimer: null, pollTimer: null, seriesTimer: null, briefTimer: null,
     adhereTimer: null, coachTimer: null, devTimer: null, driftTimer: null, selTimer: null, polling: false,
     powerTimer: null, healthTimer: null, power: null, health: null,
@@ -2337,10 +2338,35 @@
   }
 
   /* ============================ theme ============================ */
+  /* Auto day/night follows the sun where the boat is (#312): the live fix, else the course's first
+     mark. No position at all: the iPad's own clock (06–19 day). Never a fixed venue. */
+  function validPos(p) {
+    return !!p && typeof p.lat === "number" && typeof p.lon === "number" && isFinite(p.lat) && isFinite(p.lon)
+      && Math.abs(p.lat) <= 90 && Math.abs(p.lon) <= 180 && !(p.lat === 0 && p.lon === 0);
+  }
+  function themePos() {
+    const live = App.nav && App.nav.position;
+    if (validPos(live)) return live;
+    return validPos(App.courseFirst) ? App.courseFirst : null;
+  }
+  /* sun elevation (deg) at lat/lon/date — NOAA low-precision formulas, well under a degree off */
+  function sunElevation(lat, lon, date) {
+    const rad = Math.PI / 180, d = date.getTime() / 86400000 - 10957.5;   // days since J2000.0
+    const g = (357.529 + 0.98560028 * d) * rad, q = 280.459 + 0.98564736 * d;
+    const L = (q + 1.915 * Math.sin(g) + 0.020 * Math.sin(2 * g)) * rad, e = (23.439 - 0.00000036 * d) * rad;
+    const ra = Math.atan2(Math.cos(e) * Math.sin(L), Math.cos(L)), dec = Math.asin(Math.sin(e) * Math.sin(L));
+    const gmst = (18.697374558 + 24.06570982441908 * d) % 24;
+    const ha = (gmst * 15 + lon) * rad - ra;
+    return Math.asin(Math.sin(lat * rad) * Math.sin(dec) + Math.cos(lat * rad) * Math.cos(dec) * Math.cos(ha)) / rad;
+  }
+  function isDay(date) {
+    const p = themePos();
+    if (!p) { const h = date.getHours(); return h >= 6 && h < 19; }
+    return sunElevation(p.lat, p.lon, date) > -0.833;   // sunrise/sunset: upper limb + refraction
+  }
   function resolveTheme() {
     if (App.theme !== "auto") return App.theme;
-    const day = window.Sun ? Sun.isDaylight(App.pos.lat, App.pos.lon, new Date()) : true;
-    return day ? "day" : "night";
+    return isDay(new Date(Date.now())) ? "day" : "night";
   }
   function applyTheme() {
     const r = resolveTheme();
@@ -3133,6 +3159,7 @@
     document.getElementById("chkTag").addEventListener("click", () => openDetail("checklist"));
     App.playsTimer = setInterval(fetchPlays, SYN_EVERY);
     document.getElementById("themeBtn").addEventListener("click", cycleTheme);
+    fetchCourse().then(() => { if (App.theme === "auto") applyTheme(); });   // day/night fallback
     // Demo scenarios are a bench/dev surface — on the boat the crew wants LIVE only (user call,
     // 2026-07-15). Opt back in with ?demo in the URL (the Playwright harness + bench walkthroughs).
     if (new URLSearchParams(location.search).has("demo")) {
@@ -3180,7 +3207,7 @@
       provenanceTableHtml: provenanceTableHtml, twsTrendTile: twsTrendTile, fetchSailState: fetchSailState,
       fetchCourse: fetchCourse, fetchSelector: fetchSelector, navControlsHtml: navControlsHtml,
       navAction: navAction, fetchDeviation: fetchDeviation, fetchCopilotHealth: fetchCopilotHealth,
-      rerouteView: rerouteView,
+      rerouteView: rerouteView, resolveTheme: resolveTheme, sunElevation: sunElevation,
       deviationHtml: deviationHtml, currentData: currentData, rawDead: rawDead });
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
   else init();
