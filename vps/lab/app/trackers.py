@@ -344,7 +344,8 @@ def parse_fleet_files(files, definition=None) -> dict:
         if e is not None:
             guns[str(k)] = e
 
-    teams, tracks, results, untimed = [], {}, [], []
+    teams, tracks, results, untimed, no_start = [], {}, [], [], []
+    division_of = _roster_divisions(d, guns)
     for b in boats.values():
         fixes = sorted(({"lat": p["lat"], "lon": p["lon"], "t": p["t"], "sog": None, "cog": None}
                         for p in b["pts"] if p["t"] is not None
@@ -355,8 +356,11 @@ def parse_fleet_files(files, definition=None) -> dict:
             continue
         track_mod._derive_sog_cog(fixes)
         tid = len(teams) + 1
-        div = b["meta"].get("division") or ""
-        teams.append({"id": tid, "name": b["name"], "sail": b["meta"].get("sail") or "",
+        sail = b["meta"].get("sail") or ""
+        div = division_of(b["meta"].get("division"), sail, b["name"])
+        if div not in guns:
+            no_start.append(b["name"])
+        teams.append({"id": tid, "name": b["name"], "sail": sail,
                       "division": div, "tcf": None, "start": guns.get(div)})
         tracks[tid] = fixes
         rank = b["meta"].get("rank")
@@ -366,8 +370,46 @@ def parse_fleet_files(files, definition=None) -> dict:
                             "status": ""})
     if not teams:
         return {"ok": False, "note": NO_TIMES if untimed else "No tracks found in the file."}
-    start = min(guns.values()) if guns else min(f[0]["t"] for f in tracks.values())
+    # the race start is only a label for the archive: each boat is scored from ITS division's gun,
+    # and a boat with none is not scored (`retro.run_fleet`), never given the first fix as a gun
+    start = min(guns.values()) if guns else None
+    notes = [no_start_note(no_start) if no_start else None,
+             None if results else "No finish ranks in the file, so no report."]
     return {"ok": True, "source": "file", "setup": {"source": "file", "boats": len(teams)},
             "start": start, "teams": teams, "tracks": tracks, "results": results,
-            "results_note": None if results else "No finish ranks in the file, so no report.",
-            "blocks": len(teams), "unmatched": untimed}
+            "results_note": " ".join(n for n in notes if n) or None,
+            "blocks": len(teams), "unmatched": untimed, "no_start": no_start}
+
+
+def no_start_note(names) -> str:
+    shown = ", ".join(names[:8]) + (f" and {len(names) - 8} more" if len(names) > 8 else "")
+    return f"No start for {shown}. Not scored."
+
+
+def _roster_divisions(definition, guns):
+    """division_of(file_division, sail, name) → the division id whose gun the boat starts on.
+
+    A division the file names is used when the race has a gun for it (case-insensitive). Else
+    the boat is looked up in the race's own roster (`fleet`, and our boat), by sail number, else
+    name. A GPX names no division, so the roster is the only source there. Returns the file's or
+    roster's division as given when no gun matches it ("" when none): the caller then lists the
+    boat as having no start. Never another division's gun."""
+    from . import fleetimport as fi
+    by_lower = {k.strip().lower(): k for k in guns}
+    roster = list(definition.get("fleet") or [])
+    own = definition.get("own") or {}
+    if own.get("boat"):
+        roster.append(own)
+    by_sail = {fi._norm_sail(e.get("sail")): e.get("division") for e in roster
+               if fi._norm_sail(e.get("sail")) and e.get("division")}
+    by_name = {fi._norm(e.get("boat")): e.get("division") for e in roster
+               if fi._norm(e.get("boat")) and e.get("division")}
+
+    def division_of(file_div, sail, name):
+        cands = [file_div, by_sail.get(fi._norm_sail(sail)) if fi._norm_sail(sail) else None,
+                 by_name.get(fi._norm(name)) if fi._norm(name) else None]
+        for c in cands:
+            if c and str(c).strip().lower() in by_lower:
+                return by_lower[str(c).strip().lower()]
+        return next((str(c).strip() for c in cands if c), "")
+    return division_of

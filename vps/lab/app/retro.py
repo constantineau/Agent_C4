@@ -74,6 +74,8 @@ def ingest_race(race_id: str, provider: str = "yb") -> dict:
 
 
 RESCORE = "Old scores cleared. Score the fleet again."
+BUSY = "Scoring is running. Upload after it ends."
+STALE = "The fleet was imported again while scoring. Nothing more saved. Score the fleet again."
 
 
 def ingest_file(race_id: str, files, definition=None) -> dict:
@@ -83,6 +85,9 @@ def ingest_file(race_id: str, files, definition=None) -> dict:
     polar, when unchanged) whatever order the file lists it in (`stable_ids`)."""
     if not race_id:
         return {"ok": False, "note": NO_RACE}
+    job = fleet_job_status()
+    if job.get("state") == "running" and job.get("race_id") == race_id:
+        return {"ok": False, "busy": True, "note": BUSY}
     fleet = trackers.parse_fleet_files(files, definition)
     if not fleet.get("ok"):
         return fleet
@@ -91,6 +96,7 @@ def ingest_file(race_id: str, files, definition=None) -> dict:
                                fleet["teams"], fleet["tracks"], fleet["results"])
     out = _summary(race_id, fleet)
     out["cleared"] = cleared
+    out["no_start"] = fleet.get("no_start") or []
     notes = [fleet.get("results_note"), RESCORE if cleared["runs"] else None]
     if any(notes):
         out["note"] = " ".join(n for n in notes if n)
@@ -225,8 +231,19 @@ def run_fleet(race_id: str, def_race_id: str = None, course_id: str = None, team
     bbox = optimizer.course_bbox(d, course_id)
     fields = {}          # start-hour bucket -> WindField
     done, failed = [], []
+    # The import this run scores (#345): a re-import mid-run (a fleet file uploaded again) changes
+    # the race's stamp, and every write below is refused once it has, so old routes never land
+    # against new tracks or ranks.
+    stamp = race.get("ingested_at")
     for e in targets:
-        start = float(e.get("start_epoch") or race["start_epoch"])
+        # A fleet file's boat starts on its own division's gun or isn't scored: it is never given
+        # another division's gun or its first fix (#345). A YB team falls back to the race start,
+        # as it always did.
+        start = e.get("start_epoch") or (race["start_epoch"] if race.get("source") != "file" else None)
+        if start is None:
+            failed.append({"boat": e["boat"], "note": trackers.no_start_note([e["boat"]])})
+            continue
+        start = float(start)
         bucket = int(start // 3600)
         wf = fields.get(bucket)
         if wf is None:
@@ -240,7 +257,7 @@ def run_fleet(race_id: str, def_race_id: str = None, course_id: str = None, team
             continue
 
         P = rs.get_polar(race_id, e["team_id"])
-        say(f"optimize {e['boat']} ({len(P)} polar pts, start +{round((start - race['start_epoch'])/60)}min)")
+        say(f"optimize {e['boat']} ({len(P)} polar pts, start +{round((start - (race['start_epoch'] or start))/60)}min)")
         try:
             result = optimizer.optimize_course(d, course_id, start, wf, polar=P, avoid=True,
                                                resolution=resolution, emit_exploration=False,
@@ -261,10 +278,11 @@ def run_fleet(race_id: str, def_race_id: str = None, course_id: str = None, team
         why = optimizer.incomplete_reason(result, (marks[-1][2], marks[-1][3]))
         if why:
             slim = {k: v for k, v in result.items() if k not in _RESULT_HEAVY}
-            rs.save_run(race_id, e["team_id"], "gun_forecast_partial",
-                        {"def_race_id": def_race_id, "course_id": course_id,
-                         "start_epoch": start, "resolution": resolution,
-                         "finish_gap_nm": round(gap_nm, 1)}, {}, slim)
+            if rs.save_run(race_id, e["team_id"], "gun_forecast_partial",
+                           {"def_race_id": def_race_id, "course_id": course_id,
+                            "start_epoch": start, "resolution": resolution,
+                            "finish_gap_nm": round(gap_nm, 1)}, {}, slim, stamp=stamp) is None:
+                return _stale(race_id, done, failed, fields)
             failed.append({"boat": e["boat"], "note": f"route incomplete — {why}"})
             continue
         slim = {k: v for k, v in result.items() if k not in _RESULT_HEAVY}
@@ -273,18 +291,26 @@ def run_fleet(race_id: str, def_race_id: str = None, course_id: str = None, team
                               "start_epoch": start, "resolution": resolution,
                               "polar_pts": len(P)},
                              {"models": [m for m in (result.get("wind_field") or {}).get("models", [])]},
-                             slim)
+                             slim, stamp=stamp)
+        if run_id is None:
+            return _stale(race_id, done, failed, fields)
         fixes = rs.get_track(race_id, e["team_id"])
         try:
             metrics = track_mod.score_track({"fixes": fixes}, result, marks, start, wf=wf, polars=P)
         except Exception as exc:
             metrics = {"available": False, "note": f"scoring error: {exc}"}
-        rs.save_score(race_id, e["team_id"], run_id, metrics)
+        if not rs.save_score(race_id, e["team_id"], run_id, metrics, stamp=stamp):
+            return _stale(race_id, done, failed, fields)
         done.append({"boat": e["boat"], "run_id": run_id,
                      "opt_hours": result.get("total_hours"),
                      "scored": bool(metrics.get("available"))})
     return {"ok": True, "race_id": race_id, "ran": len(done), "failed": failed[:20],
             "wind_fields": len(fields), "boats": done}
+
+
+def _stale(race_id, done, failed, fields):
+    return {"ok": False, "stale": True, "note": STALE, "race_id": race_id, "ran": len(done),
+            "failed": failed[:20], "wind_fields": len(fields), "boats": done}
 
 
 def _spearman(xs, ys):

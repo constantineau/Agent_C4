@@ -34,7 +34,13 @@ tracker import then read it from there. A file gives no TCFs; results only when 
 Uploading again replaces the race: boats, tracks and ranks the new file leaves out are gone, and
 the race's runs and scores are cleared (score the fleet again). A boat keeps its id, matched by sail
 number, else name, whatever order the file lists it in. It keeps its ORC polar only if its name and
-sail are unchanged.
+sail are unchanged. An upload is refused while that race is being scored, and a scoring run
+stops saving if the race is imported again under it.
+
+Each boat starts on its own division's gun. The division comes from the file (CSV), else the
+race's roster by sail number, else name. A GPX has none, so it needs the roster. A boat with no
+known gun is listed ("No start for X. Not scored.") and skipped, never given another division's
+gun or its first fix.
 
 ## 3. Persistence — EVERYTHING gathered is kept (user requirement)
 

@@ -1379,7 +1379,7 @@ async def retro_upload(def_race_id: str, race_id: str = None,
     except ValueError as exc:
         return JSONResponse({"detail": str(exc)}, status_code=400)
     if not res.get("ok"):
-        return JSONResponse({"detail": res.get("note")}, status_code=400)
+        return JSONResponse({"detail": res.get("note")}, status_code=409 if res.get("busy") else 400)
     return res
 
 

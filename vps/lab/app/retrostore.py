@@ -189,20 +189,50 @@ def save_polar(race_id, team_id, cert_id, polar, match_by, match_confidence):
                   (race_id, team_id, cert_id, match_by, match_confidence, json.dumps(polar)))
 
 
-def save_run(race_id, team_id, kind, config, windfield, result):
-    with _conn() as c:
-        cur = c.execute("INSERT INTO runs (race_id, team_id, created_at, kind, config_json, "
-                        "windfield_json, result_json) VALUES (?,?,?,?,?,?,?)",
-                        (race_id, team_id, time.time(), kind, json.dumps(config),
-                         json.dumps(windfield), json.dumps(result)))
-        return cur.lastrowid
+_NO_STAMP = object()
 
 
-def save_score(race_id, team_id, run_id, metrics):
-    with _conn() as c:
-        c.execute("INSERT OR REPLACE INTO scores (race_id, team_id, run_id, created_at, "
-                  "metrics_json) VALUES (?,?,?,?,?)",
-                  (race_id, team_id, run_id, time.time(), json.dumps(metrics)))
+def _guarded(stamp, race_id, sql, args):
+    """Run one write, but only while the race's import is still `stamp` (its `ingested_at`), in
+    the same locked transaction as the check (#345). Without a stamp it just writes. Returns the
+    cursor, or None when the race was re-imported (or removed) since the stamp was read."""
+    c = _conn()
+    try:
+        c.isolation_level = None
+        c.execute("BEGIN IMMEDIATE")
+        try:
+            if stamp is not _NO_STAMP:
+                row = c.execute("SELECT ingested_at FROM races WHERE race_id=?", (race_id,)).fetchone()
+                if row is None or row[0] != stamp:
+                    c.execute("ROLLBACK")
+                    return None
+            cur = c.execute(sql, args)
+            c.execute("COMMIT")
+            return cur
+        except Exception:
+            c.execute("ROLLBACK")
+            raise
+    finally:
+        c.close()
+
+
+def save_run(race_id, team_id, kind, config, windfield, result, stamp=_NO_STAMP):
+    """The new run's id; None (nothing written) when `stamp` is given and the race was imported
+    again since."""
+    cur = _guarded(stamp, race_id,
+                   "INSERT INTO runs (race_id, team_id, created_at, kind, config_json, "
+                   "windfield_json, result_json) VALUES (?,?,?,?,?,?,?)",
+                   (race_id, team_id, time.time(), kind, json.dumps(config),
+                    json.dumps(windfield), json.dumps(result)))
+    return cur.lastrowid if cur is not None else None
+
+
+def save_score(race_id, team_id, run_id, metrics, stamp=_NO_STAMP):
+    """True when written; False when `stamp` is given and the race was imported again since."""
+    return _guarded(stamp, race_id,
+                    "INSERT OR REPLACE INTO scores (race_id, team_id, run_id, created_at, "
+                    "metrics_json) VALUES (?,?,?,?,?)",
+                    (race_id, team_id, run_id, time.time(), json.dumps(metrics))) is not None
 
 
 # ---------------------------------------------------------------- GRIB pinning

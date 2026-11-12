@@ -4141,7 +4141,8 @@ function retroCard() {
     || '<span class="muted">nothing archived yet</span>';
   const jobLine = running
     ? `<div class="muted" style="font-size:12px;margin-top:6px">Scoring the fleet… <span class="loading-dot"></span><br>${esc((j.progress || []).slice(-3).join(" · "))}</div>`
-    : (j.state === "done" && j.result ? `<div class="muted" style="font-size:12px;margin-top:6px"><b>Done:</b> ${j.result.ran} boats scored${(j.result.failed || []).length ? ", " + j.result.failed.length + " failed" : ""}.</div>`
+    : (j.state === "done" && j.result && j.result.ok === false ? `<div class="muted" style="font-size:12px;margin-top:6px"><b>Stopped:</b> ${esc(j.result.note || "")}</div>`
+       : j.state === "done" && j.result ? `<div class="muted" style="font-size:12px;margin-top:6px"><b>Done:</b> ${j.result.ran} boats scored${(j.result.failed || []).length ? ", " + j.result.failed.length + " failed" : ""}.</div>`
        : (j.state === "error" ? `<div class="muted" style="font-size:12px;margin-top:6px"><b>Error:</b> ${esc(j.error || "")}</div>` : ""));
   const su = Retro.setup || {};
   return `<div class="card">

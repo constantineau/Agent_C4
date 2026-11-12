@@ -192,13 +192,136 @@ def test_gpx_fleet_file():
     assert len(f["tracks"][2]) == 2                       # the untimed fix is dropped
     gun = 1_826_294_400.0                                 # 11:00 New York = 16:00Z
     assert f["start"] == gun and f["results"] == [] and "no report" in f["results_note"]
+    # a GPX names no division and this race has no roster: no start, never A's gun
+    assert [t["start"] for t in f["teams"]] == [None, None]
+    assert f["no_start"] == ["Bravo", "Charlie"]
+    assert "No start for Bravo, Charlie. Not scored." in f["results_note"]
+
+
+TWO_GUNS = {"A": "2027-11-15T10:00:00", "B": "2027-11-15T11:00:00"}
+
+
+def test_gpx_divisions_come_from_the_roster():
+    """A 10:00, B 11:00: Charlie (B, matched by sail) starts at 11:00, not A's 10:00."""
+    d = _race(division_starts=TWO_GUNS,
+              fleet=[{"boat": "Bravo", "sail": "USA 1", "division": "A"},
+                     {"boat": "Chaz", "sail": "USA-2", "division": "b"}],    # other name, same sail
+              own={})
+    f = trackers.parse_fleet_files([("fleet.gpx", GPX), ("f.csv", b"boat,sail,time,lat,lon\nCharlie,USA 2,2027-11-15T16:00:00Z,26.1,-80.1\n")], d)
+    by = {t["name"]: t for t in f["teams"]}
+    assert by["Bravo"]["division"] == "A" and by["Bravo"]["start"] == 1_826_290_800.0      # 15:00Z
+    assert by["Charlie"]["division"] == "B" and by["Charlie"]["start"] == 1_826_294_400.0  # 16:00Z
+    assert f["no_start"] == []
+
+
+def test_unmatched_boat_has_no_start():
+    d = _race(division_starts=TWO_GUNS, fleet=[{"boat": "Bravo", "division": "A"}])
+    f = trackers.parse_fleet_files([("fleet.gpx", GPX)], d)
+    by = {t["name"]: t for t in f["teams"]}
+    assert by["Bravo"]["start"] == 1_826_290_800.0 and by["Charlie"]["start"] is None
+    assert f["no_start"] == ["Charlie"]
+    # a CSV division with no gun is not swapped for another division's
+    csv = b"boat,division,time,lat,lon\nDelta,C,2027-11-15T16:00:00Z,26.1,-80.1\nDelta,C,2027-11-15T16:10:00Z,26.2,-80.1\n"
+    f = trackers.parse_fleet_files([("f.csv", csv)], d)
+    assert f["teams"][0]["division"] == "C" and f["teams"][0]["start"] is None
+
+
+def test_race_with_no_guns_has_no_start():
+    f = trackers.parse_fleet_files([("fleet.csv", CSV)], _race(division_starts={}))
+    assert f["start"] is None and all(t["start"] is None for t in f["teams"])
+    assert f["no_start"] == ["Bravo", "Charlie"]
+
+
+def _stub_run(monkeypatch, on_optimize=None):
+    """run_fleet with the wind field, router and scoring stubbed: records the gun each boat got."""
+    from app import optimizer
+    import app.wind as wind_mod
+    import app.wind.archive as archive_mod
+    guns = []
+
+    class WF:
+        loaded = True
+    monkeypatch.setattr(wind_mod, "build_windfield", lambda *a, **k: WF())
+    monkeypatch.setattr(archive_mod, "gun_sources", lambda *a, **k: [])
+    monkeypatch.setattr(optimizer, "course_bbox", lambda *a: None)
+    monkeypatch.setattr(optimizer, "incomplete_reason", lambda *a: None)
+    monkeypatch.setattr(retro.race_def, "course_to_marks",
+                        lambda d, cid: ([("s", "", 26.1, -80.1), ("f", "", 26.2, -80.1)], [], cid))
+
+    def optimize(d, cid, start, wf, **k):
+        guns.append(start)
+        if on_optimize:
+            on_optimize()
+        return {"path": [{"lat": 26.2, "lon": -80.1}], "total_hours": 1.0}
+    monkeypatch.setattr(optimizer, "optimize_course", optimize)
+    monkeypatch.setattr(track_mod, "score_track", lambda *a, **k: {"available": True})
+    return guns
+
+
+def _polars_for_all(rid="orc-na-2027"):
+    for tid in _ids(rid).values():
+        rs.save_polar(rid, tid, None, [[1, 2, 3]], "sail", 0.9)
+
+
+def test_run_scores_each_boat_from_its_own_gun(monkeypatch):
+    d = _race(division_starts=TWO_GUNS, fleet=[{"boat": "Bravo", "division": "A"},
+                                               {"boat": "Charlie", "division": "B"}])
+    monkeypatch.setattr(store, "get_race", lambda rid: d)
+    retro.ingest_file("orc-na-2027", [("fleet.gpx", GPX)], d)
+    _polars_for_all()
+    guns = _stub_run(monkeypatch)
+    r = retro.run_fleet("orc-na-2027", def_race_id="orc-na-2027")
+    assert r["ok"] and r["ran"] == 2 and sorted(guns) == [1_826_290_800.0, 1_826_294_400.0]
+
+
+def test_run_skips_a_boat_with_no_start(monkeypatch):
+    d = _race(division_starts=TWO_GUNS, fleet=[{"boat": "Bravo", "division": "A"}])
+    monkeypatch.setattr(store, "get_race", lambda rid: d)
+    retro.ingest_file("orc-na-2027", [("fleet.gpx", GPX)], d)
+    _polars_for_all()
+    guns = _stub_run(monkeypatch)
+    r = retro.run_fleet("orc-na-2027", def_race_id="orc-na-2027")
+    assert r["ran"] == 1 and guns == [1_826_290_800.0]
+    assert {"boat": "Charlie", "note": "No start for Charlie. Not scored."} in r["failed"]
+
+
+def test_upload_refused_while_that_race_is_scoring(monkeypatch):
+    monkeypatch.setattr(retro, "fleet_job_status", lambda: {"state": "running", "race_id": "orc-na-2027"})
+    r = retro.ingest_file("orc-na-2027", [("fleet.gpx", GPX)], _race())
+    assert r == {"ok": False, "busy": True, "note": "Scoring is running. Upload after it ends."}
+    assert rs.get_race("orc-na-2027") is None
+    # another race's job doesn't block this one
+    monkeypatch.setattr(retro, "fleet_job_status", lambda: {"state": "running", "race_id": "other"})
+    assert retro.ingest_file("orc-na-2027", [("fleet.gpx", GPX)], _race())["ok"]
+
+
+def test_run_drops_its_writes_after_a_reimport(monkeypatch):
+    """The file is uploaded again while the job optimizes boat 1: nothing of the old run lands."""
+    d = _race(division_starts=TWO_GUNS, fleet=[{"boat": "Bravo", "division": "A"},
+                                               {"boat": "Charlie", "division": "B"}])
+    monkeypatch.setattr(store, "get_race", lambda rid: d)
+    retro.ingest_file("orc-na-2027", [("fleet.gpx", GPX)], d)
+    _polars_for_all()
+    reimport = lambda: retro.ingest_file("orc-na-2027", [("fleet.gpx", GPX)], d)
+    _stub_run(monkeypatch, on_optimize=reimport)
+    r = retro.run_fleet("orc-na-2027", def_race_id="orc-na-2027")
+    assert r["ok"] is False and r["stale"] and r["note"] == retro.STALE and r["ran"] == 0
+    assert rs.get_scores("orc-na-2027") == []
+    assert rs._rows("SELECT COUNT(*) AS n FROM runs WHERE race_id=?", ("orc-na-2027",))[0]["n"] == 0
+
+
+def test_unstamped_writes_still_work():
+    rid = "x"
+    assert rs.save_run(rid, 1, "k", {}, {}, {}) is not None
+    assert rs.save_run(rid, 1, "k", {}, {}, {}, stamp=123.0) is None      # no such race
 
 
 def test_one_gpx_per_boat_takes_the_file_name():
     one = b'<gpx><trk><trkseg><trkpt lat="1" lon="2"><time>2027-01-01T00:00:00Z</time></trkpt>' \
           b'<trkpt lat="1.1" lon="2"><time>2027-01-01T00:01:00Z</time></trkpt></trkseg></trk></gpx>'
     f = trackers.parse_fleet_files([("Bravo.gpx", one), ("Delta.gpx", one)], _race(division_starts={}))
-    assert [t["name"] for t in f["teams"]] == ["Bravo", "Delta"] and f["start"] == 1798761600.0
+    assert [t["name"] for t in f["teams"]] == ["Bravo", "Delta"]
+    assert f["start"] is None                             # never the first fix
 
 
 def test_csv_fleet_file_with_ranks():
