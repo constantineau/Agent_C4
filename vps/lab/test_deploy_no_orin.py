@@ -1,9 +1,10 @@
 """Deploy on a boat with no Orin (#313; vps/lab/app/deploy.py push + boat_status).
 
 Pins:
-  * a boat whose profile says `hardware.orin: false` → the push has no copilot step, says
-    "No Orin on this boat." and is green when everything else loaded;
-  * the Pi's own skip (its `copilot` answer says `absent`) is taken the same way;
+  * only the Pi's word counts: when its `copilot` answer says `absent` (the profile it holds says
+    no Orin) the push has no copilot step, says "No Orin on this boat." and is green when
+    everything else loaded; the Lab's own profile saying no Orin never drops a failed copilot
+    step;
   * a boat WITH an Orin (said, or not said) still fails the push when the Orin doesn't load it:
     a real failure is never hidden;
   * the live check doesn't call the missing Orin "unreachable";
@@ -80,19 +81,23 @@ check(f"a bad one is refused, field by field ({errs})",
       {"bad hardware.orin", "hardware.battery.nominal_v must be between 6 and 60"} <= set(errs)
       and any("max_route_waypoints" in e for e in errs))
 
-print("a boat with no Orin:")
+print("the Lab's profile says no Orin, but the Pi tried and failed (older Pi, or its profile says an Orin):")
+res = D.push("r1")
+st = res["steps"][-1]
+check("the copilot step is kept and red: the Lab's own profile never hides an Orin result",
+      not res["ok"] and st["target"] == "orin-copilot" and not st["ok"] and "notes" not in res)
+
+print("the Pi says no Orin (copilot absent, by the profile it holds):")
+COP["answer"] = {"loaded": False, "absent": True, "detail": BH.NO_ORIN}
 res = D.push("r1")
 check("green: every step that exists loaded", res["ok"] and res["pushed_playbook"])
 check("no copilot step", [s["target"] for s in res["steps"]].count("orin-copilot") == 0)
 check(f"said plainly ({res.get('notes')})", res.get("notes") == [BH.NO_ORIN])
 check("recorded for the Deploy tab", D.last_push()["last"]["notes"] == [BH.NO_ORIN]
       and D.last_push()["last"]["ok"])
-
-print("the Pi skipped it (its profile says no Orin):")
 BOAT["profile"] = WITH
-COP["answer"] = {"loaded": False, "absent": True, "detail": BH.NO_ORIN}
 res = D.push("r1")
-check("taken as no Orin, not a failure", res["ok"] and res.get("notes") == [BH.NO_ORIN]
+check("the same whatever the Lab's profile says", res["ok"] and res.get("notes") == [BH.NO_ORIN]
       and "orin-copilot" not in [s["target"] for s in res["steps"]])
 
 print("a boat with an Orin that didn't load it:")

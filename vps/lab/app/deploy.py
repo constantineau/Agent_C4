@@ -231,9 +231,10 @@ def _push(race_id):
         step("pi-engine", "checklist", f"{eng}/checklist/load", pkg["checklist_load"], check=taken)
     if pkg.get("watch_load"):
         step("pi-engine", "watch", f"{eng}/watch", pkg["watch_load"], check=taken)
-    # a boat whose profile says it has no Orin (#313): no copilot step, said plainly, so a Pi-only
-    # boat's push can be all green and a real failure still shows
-    orin = boat_hardware.has_orin(assets.get("boat"))
+    # a boat with no Orin (#313): no copilot step, said plainly, so a Pi-only boat's push can be
+    # all green and a real failure still shows. Only the Pi's word counts (its `copilot` answer
+    # says `absent`, by the profile IT holds): the Lab's own profile never hides an Orin result.
+    orin = True
     if bundle:
         step("pi-engine", "playbook", f"{eng}/playbook/load", bundle,
              check=lambda r: r.get("loaded"))
@@ -241,7 +242,7 @@ def _push(race_id):
         pb = steps[-1]
         cop = (pb["detail"] or {}).get("copilot") if pb["ok"] else None
         if isinstance(cop, dict) and cop.get("absent"):
-            orin = False                 # the Pi skipped it: the boat's profile says no Orin
+            orin = False                 # the Pi skipped it: the profile it holds says no Orin
         if not orin:
             pass
         elif not isinstance(cop, dict):
