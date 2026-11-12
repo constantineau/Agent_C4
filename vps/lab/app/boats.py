@@ -219,6 +219,15 @@ def sail_config(b):
         cfg["code0"] = c0
     if isinstance(mr, dict) and mr:
         cfg["main_reefs"] = mr
+    # the boat's own sail words (#305): its family map, and its Code 0's name when it isn't "C0",
+    # so the sail plan calls the sail the boat carries
+    from shared import sail_vocab
+    fams = b.get("sail_families")
+    if isinstance(fams, dict) and fams:
+        cfg["sail_families"] = fams
+    c0_names = sail_vocab.of_family("code0", b)
+    if c0_names and c0_names[0] != "C0":
+        cfg["code0_sail"] = c0_names[0]
     return cfg or None
 
 

@@ -365,7 +365,7 @@ def _wave_reshape_decision(waves, stats):
             f"Waves are even across the course ({stats['spread']:.1f} m range), so they only slow the boat.")
 
 
-def _sail_polar_key(sail, rated=()):
+def _sail_polar_key(sail, rated=(), src=None):
     """The per-sail polar-curve key for a DISPLAY sail; `rated` = the boat's rated sails (its
     curves / crossover inventory). The ORC cert rates ONE headsail; the other jibs (or genoas) are
     the crew's change-downs sharing the upwind slot, so they map to the rated headsail's curve for
@@ -375,8 +375,8 @@ def _sail_polar_key(sail, rated=()):
     peel. Families come from the boat's sail names (shared/sail_vocab.py, #305)."""
     if not sail or sail in rated:
         return sail
-    if sail_vocab.family(sail) in sail_vocab.HEADSAILS + ("code0",):
-        return next((r for r in rated if sail_vocab.family(r) in sail_vocab.HEADSAILS), sail)
+    if sail_vocab.family(sail, src) in sail_vocab.HEADSAILS + ("code0",):
+        return next((r for r in rated if sail_vocab.family(r, src) in sail_vocab.HEADSAILS), sail)
     return sail
 
 
@@ -608,13 +608,14 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, deadline=None,
         PEEL_HOLD_TOL off the optimal sail, then PEEL to the optimal sail at full (envelope) speed +
         a peel cost. A jib change-down (same aero family) is a free relabel, not a routing peel."""
         opt = sailplan.optimal_sail(tws, twa, jib_crossovers, sail_config, xo=xo)
-        if sail_aware and opt is not None and _sail_polar_key(opt, rated) not in dom:
+        if sail_aware and opt is not None and _sail_polar_key(opt, rated, sail_config) not in dom:
             # gear-loss (exclude_sails): the cert-optimal sail has no curve in the FILTERED inventory
             # — the honest call is the fastest REMAINING sail (the rebuilt envelope already prices it)
             opt = max(SP, key=lambda s: _sail_speed(SP, dom, s, tws, twa), default=None)
         if not sail_aware or opt is None:
             return (opt or cur_sail, sp_env, False)          # sail-aware off → envelope speed, no peel
-        if cur_sail is None or _sail_polar_key(cur_sail, rated) == _sail_polar_key(opt, rated):
+        if (cur_sail is None or _sail_polar_key(cur_sail, rated, sail_config)
+                == _sail_polar_key(opt, rated, sail_config)):
             return (opt, sp_env, False)                      # initial set, or same family → relabel free
         hold = _sail_speed(SP, dom, cur_sail, tws, twa)
         if hold > 0.3 and hold >= sp_env * (1.0 - PEEL_HOLD_TOL):
@@ -1490,7 +1491,7 @@ def _optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s
         """Per-leg display sail — remapped to the fastest REMAINING sail under a gear-loss
         exclusion (the crossover table doesn't know a sail is out of service)."""
         s = sailplan.optimal_sail(tws, twa, jib_crossovers, sail_config, xo=xo)
-        if s and _gone and _sail_polar_key(s, _rated).upper() in _gone and SP:
+        if s and _gone and _sail_polar_key(s, _rated, sail_config).upper() in _gone and SP:
             s = max(SP, key=lambda k: _sail_speed(SP, _dom, k, tws, twa), default=s)
         return s
 
@@ -1583,7 +1584,7 @@ def _optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s
         _sail = (_headline_sail(det["tws"], twa) if det and twa is not None else None)
         # main reef decoration (crew thresholds — depower in breeze / open the A3 slot); label-only
         _reef = (sailplan.reef_for(det["tws"], pos, _sail,
-                                   (sail_config or {}).get("main_reefs"))
+                                   (sail_config or {}).get("main_reefs"), sail_config)
                  if det and _sail else None)
         legs.append({
             "to": name, "seq": seq,

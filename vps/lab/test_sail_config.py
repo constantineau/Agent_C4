@@ -179,5 +179,33 @@ check("the slot-reef play names the boat's own asym",
       a2 is not None and a2["name"] == "Reef 1 with the A2 — open the slot"
       and a2["params"].get("hoisted") == "A2")
 
+# ---- 8) the boat's own Code 0 name and sail_families reach the sail plan (Codex on #334) ----------
+print("8) a custom Code 0 name and the boat's sail_families")
+from app import boats as BOATS   # noqa: E402
+RB = {"boat_id": "rb", "draft_m": 2.0, "sail_inventory": ["J1", "J2", "J3", "REACHER", "BIGRED", "S1"],
+      "sail_families": {"REACHER": "code0", "BIGRED": "asym"}, "code0": CFG["code0"],
+      "main_reefs": mr}
+RCFG = BOATS.sail_config(RB)
+check("the sail config carries the Code 0's own name and the family map",
+      RCFG.get("code0_sail") == "REACHER" and RCFG.get("sail_families", {}).get("BIGRED") == "asym")
+check("sr33's sail config is unchanged (no extra keys)",
+      set(BOATS.sail_config({"sail_inventory": ["J1", "C0", "A3"], "code0": CFG["code0"],
+                             "main_reefs": mr})) == {"code0", "main_reefs"})
+check("in the band the plan calls REACHER, never a C0 the boat doesn't carry",
+      sailplan.optimal_sail(6, 80, JIBS, RCFG) == "REACHER")
+rrows = sailplan.crossovers_specialized(JIBS, RCFG)
+shorts = {z.get("short") for zs in rrows.values() for z in zs}
+check("the crossover chart carves REACHER, no C0", "REACHER" in shorts and "C0" not in shorts)
+check("the slot reef fires for BIGRED (asym by the family map)",
+      (sailplan.reef_for(17, "run", "BIGRED", mr, RCFG) or {}).get("reef") == "R1"
+      and sailplan.reef_for(17, "run", "BIGRED", mr) is None)
+check("a named headsail is a headsail by the family map",
+      sailplan._is_headsail("HEAVY", {"sail_families": {"HEAVY": "jib"}})
+      and not sailplan._is_headsail("HEAVY"))
+check("REACHER reads the rated headsail's curve, BIGRED its own",
+      OPT._sail_polar_key("REACHER", ["J1", "A3"], RCFG) == "J1"
+      and OPT._sail_polar_key("BIGRED", ["J1", "BIGRED"], RCFG) == "BIGRED")
+check("gear-loss plays use the family map", PB._gear_sails({"J1", "BIGRED", "S1"}, RCFG) == ["BIGRED", "S1"])
+
 print("RESULT:", "PASS" if ok else "FAIL")
 raise SystemExit(0 if ok else 1)

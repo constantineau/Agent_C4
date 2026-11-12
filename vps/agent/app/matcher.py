@@ -102,11 +102,31 @@ def get_sail_state():
         return {}
 
 
-def _primary(flying):
+def _boat_sails():
+    """The boat's sail names + families (`sail_inventory`, `sail_families`): the frozen playbook's
+    boat model when it lists them, else the current boat's profile. {} when neither is known."""
+    try:
+        bm = (deviation._load_playbook() or {}).get("boat_model") or {}
+        if bm.get("sail_inventory") or bm.get("sail_families"):
+            return bm
+    except Exception:
+        pass
+    try:
+        from . import boatinfo
+        return boatinfo.profile() or {}
+    except Exception:
+        return {}
+
+
+def _primary(flying, boat=None):
     """The driving sail of the flying set — the legacy single-sail mirror: by family, the kite
-    over the Code 0 over the headsail over the staysail (#305: the boat's own names)."""
+    over the Code 0 over the headsail over the staysail (#305: the boat's own names, and its own
+    `sail_families` for a name the shorthand doesn't say)."""
     from shared import sail_vocab
-    return min(flying, key=sail_vocab.drive_rank) if flying else None
+    if not flying:
+        return None
+    src = _boat_sails() if boat is None else boat
+    return min(flying, key=lambda s: sail_vocab.drive_rank(s, src))
 
 
 def set_sail_state(hoisted=None, flying=None, reef=None, out_of_service=None):

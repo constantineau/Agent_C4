@@ -789,7 +789,8 @@ async def crossovers():
     xo = sailplan.of(boats.polar_for(b))           # the selected boat's own table (#303)
     m = sailplan.model(xo)
     jibs = b.get("jib_crossovers") or []
-    cfg = {"code0": b.get("code0") or {}, "main_reefs": b.get("main_reefs") or {}}
+    cfg = dict(boats.sail_config(b) or {}, code0=b.get("code0") or {},
+               main_reefs=b.get("main_reefs") or {})       # + the boat's sail words (#305)
     if b.get("sail_inventory"):
         m["inventory"] = b["sail_inventory"]        # the boat's real inventory (incl. J2/J3, C0)
     # each sail's family, so the screens name and colour the boat's own sails (#305)
@@ -798,7 +799,7 @@ async def crossovers():
         dict(b, sail_inventory=m.get("inventory") or []))}
     m["jib_crossovers"] = jibs
     m["crossovers"] = sailplan.crossovers_specialized(jibs, cfg, xo=xo)  # real jib per TWS row + C0
-    m["overlaps"] = sailplan.overlaps_specialized(jibs, xo=xo)  # toss-up bands, jib relabelled
+    m["overlaps"] = sailplan.overlaps_specialized(jibs, xo=xo, sail_config=cfg)  # toss-up bands
     if not xo:
         m["note"] = "No sail crossovers for this boat."
     m["code0"] = cfg["code0"]                       # light-air reacher band (crew, not cert)

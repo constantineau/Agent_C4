@@ -305,8 +305,13 @@ def _advice(tws: float = None, twa: float = None, hoisted: str = None, boat_mode
         return {"available": False, "note": note, "crew_sail": _crew_norm(hoisted, src),
                 "sails": _sail_list(src)}
     if tws is None or twa is None:
+        # no wind, no call — but the boat's sails still list, so the crew can set what's flying
+        # and mark gear out with no wind sensor (Codex on #334)
+        src = _names_src(boat_model)
+        rated = _guide_sails(sections)
         return {"available": False, "note": "Need live wind speed and angle.",
-                "have": {"tws": tws, "twa": twa}}
+                "have": {"tws": tws, "twa": twa},
+                "crew_sail": _crew_norm(hoisted, src, rated), "sails": _sail_list(src, rated)}
 
     key = _nearest_tws(tws)
     rows = sections[key]

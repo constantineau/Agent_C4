@@ -74,12 +74,20 @@ def crossovers_specialized(jib_crossovers, sail_config=None, xo=None):
         new = []
         for z in zones:
             base = z.get("short") or z.get("sail")
-            if _is_headsail(base):
+            if _is_headsail(base, sail_config):
                 jib = jib_for_tws(tws, jib_crossovers, base) if jib_crossovers else base
-                z = {**z, "sail": jib, "short": jib, "label": _jib_label(jib, base, z.get("label"))}
-            new.extend(_carve_code0(z, tws, c0))
-        out[tws_key] = _merge_c0(new)
+                z = {**z, "sail": jib, "short": jib,
+                     "label": _jib_label(jib, base, z.get("label"), sail_config)}
+            new.extend(_carve_code0(z, tws, c0, code0_name(sail_config)))
+        out[tws_key] = _merge_c0(new, code0_name(sail_config))
     return out
+
+
+def code0_name(sail_config):
+    """The boat's own name for its Code 0 (`code0_sail` in the sail config, boats.sail_config),
+    else the shorthand "C0" (#305)."""
+    n = (sail_config or {}).get("code0_sail")
+    return n if isinstance(n, str) and n.strip() else "C0"
 
 
 def _code0_band(sail_config):
@@ -92,7 +100,7 @@ def _code0_band(sail_config):
     return c0
 
 
-def _carve_code0(zone, tws, c0):
+def _carve_code0(zone, tws, c0, name="C0"):
     """Split one cert zone against the Code 0 band for this row's TWS: returns 1–3 zones (below /
     C0 / above). The band is the CREW'S call, so it carves whatever cert sail it overlaps (jib or
     light kite) — labels only, the rated envelope speed underneath is untouched. No overlap
@@ -106,18 +114,18 @@ def _carve_code0(zone, tws, c0):
     out = []
     if float(zone["twa_min"]) < lo:
         out.append({**zone, "twa_max": lo})
-    out.append({**zone, "sail": "C0", "short": "C0", "twa_min": lo, "twa_max": hi,
+    out.append({**zone, "sail": name, "short": name, "twa_min": lo, "twa_max": hi,
                 "label": "Code 0 (light-air reacher)"})
     if float(zone["twa_max"]) > hi:
         out.append({**zone, "twa_min": hi})
     return out
 
 
-def _merge_c0(zones):
-    """Adjacent C0 fragments (the band carved across a jib/kite boundary) merge into one zone."""
+def _merge_c0(zones, name="C0"):
+    """Adjacent Code 0 fragments (the band carved across a jib/kite boundary) merge into one zone."""
     out = []
     for z in zones:
-        if (out and z.get("short") == "C0" and out[-1].get("short") == "C0"
+        if (out and z.get("short") == name and out[-1].get("short") == name
                 and abs(float(out[-1]["twa_max"]) - float(z["twa_min"])) < 0.51):
             out[-1] = {**out[-1], "twa_max": z["twa_max"]}
         else:
@@ -125,7 +133,7 @@ def _merge_c0(zones):
     return out
 
 
-def overlaps_specialized(jib_crossovers, xo=None):
+def overlaps_specialized(jib_crossovers, xo=None, sail_config=None):
     """The per-TWS toss-up bands with the upwind jib in each band's sail list relabelled to the actual
     jib for THAT row's TWS (J1/J2/J3) — mirrors crossovers_specialized so the chart's overlaps match."""
     raw = _load(xo).get("overlaps", {})
@@ -138,22 +146,23 @@ def overlaps_specialized(jib_crossovers, xo=None):
         except ValueError:
             out[tws_key] = bands
             continue
-        out[tws_key] = [{**b, "sails": [jib_for_tws(tws, jib_crossovers, s) if _is_headsail(s) else s
+        out[tws_key] = [{**b, "sails": [jib_for_tws(tws, jib_crossovers, s)
+                                        if _is_headsail(s, sail_config) else s
                                         for s in b.get("sails", [])]}
                         for b in bands]
     return out
 
 
-def _is_headsail(sail):
+def _is_headsail(sail, sail_config=None):
     """The cert's upwind headsail slot — the one its jib (or genoa) change-downs share (#305: by the
-    sail's family, not a fixed name)."""
-    return sail_vocab.family(sail) in sail_vocab.HEADSAILS
+    sail's family — the boat's `sail_families`, else the shorthand — not a fixed name)."""
+    return sail_vocab.family(sail, sail_config) in sail_vocab.HEADSAILS
 
 
-def _jib_label(jib, rated, cert_label):
+def _jib_label(jib, rated, cert_label, sail_config=None):
     if jib == rated:
         return cert_label
-    return f"{'Genoa' if sail_vocab.family(jib) == 'genoa' else 'Jib'} {jib}"
+    return f"{'Genoa' if sail_vocab.family(jib, sail_config) == 'genoa' else 'Jib'} {jib}"
 
 
 def jib_for_tws(tws, jib_crossovers, rated=None):
@@ -195,13 +204,13 @@ def optimal_sail(tws, twa, jib_crossovers=None, sail_config=None, xo=None):
     c0 = _code0_band(sail_config)
     if (c0 and tws is not None and tws <= float(c0["tws_max"])
             and float(c0["twa_min"]) <= twa <= float(c0["twa_max"])):
-        return "C0"          # the crew's light-air reacher band owns the call, whatever the cert says
-    if jib_crossovers and _is_headsail(base):
+        return code0_name(sail_config)   # the crew's light-air reacher band owns the call
+    if jib_crossovers and _is_headsail(base, sail_config):
         return jib_for_tws(tws, jib_crossovers, base)
     return base
 
 
-def reef_for(tws, point_of_sail, sail, main_reefs):
+def reef_for(tws, point_of_sail, sail, main_reefs, sail_config=None):
     """The main reef the crew should carry at (tws, point_of_sail, headsail): {'reef','why'} or
     None. Two crew thresholds (not in the cert): `r1_tws_kn` — tuck in reef 1 to DEPOWER in breeze
     (any point of sail); `r1_a3_slot_tws_kn` — reef 1 when running an asymmetric kite to OPEN THE
@@ -213,7 +222,7 @@ def reef_for(tws, point_of_sail, sail, main_reefs):
     slot = mr.get("r1_a3_slot_tws_kn")
     # an asym up already implies off-wind (nobody beats under a kite) — keying on the sail keeps this
     # robust to the two point-of-sail vocabularies (beat/reach/run vs upwind/reaching/downwind)
-    if slot is not None and sail_vocab.family(sail) == "asym" and tws >= float(slot):
+    if slot is not None and sail_vocab.family(sail, sail_config) == "asym" and tws >= float(slot):
         return {"reef": "R1", "why": f"open the slot between the {sail} and the main"}
     r1 = mr.get("r1_tws_kn")
     if r1 is not None and tws >= float(r1):

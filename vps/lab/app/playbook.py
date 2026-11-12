@@ -275,12 +275,13 @@ def _scenario_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
 _PACE_DELAYS_H = (2, 4, -2)          # behind / deep-behind / ahead (Phase C — the user-priority plays)
 
 
-def _gear_sails(nominal_sails):
+def _gear_sails(nominal_sails, sail_config=None):
     """The kites we author a loss play for: every kite (asym or sym, by the boat's own sail names,
     #305) in the nominal plan, the asym first."""
     from shared import sail_vocab
-    return sorted((s for s in nominal_sails if s and sail_vocab.family(s) in sail_vocab.KITES),
-                  key=sail_vocab.drive_rank)
+    return sorted((s for s in nominal_sails
+                   if s and sail_vocab.family(s, sail_config) in sail_vocab.KITES),
+                  key=lambda s: sail_vocab.drive_rank(s, sail_config))
 
 
 def _internal_fan(definition, course_id, start_epoch, wf, consensus, cur, waves, marks,
@@ -354,7 +355,7 @@ def _internal_fan(definition, course_id, start_epoch, wf, consensus, cur, waves,
 
     # ---- GEAR-LOSS plays: kites actually in the nominal plan -----------------------------------
     nominal_sails = set(_sail_seq(consensus))
-    for sail in _gear_sails(nominal_sails):
+    for sail in _gear_sails(nominal_sails, sail_config):
         def _route_without(budget):
             return optimizer.optimize_course(definition, course_id, start_epoch, wf,
                                              exclude_sails=[sail], time_budget_s=budget,

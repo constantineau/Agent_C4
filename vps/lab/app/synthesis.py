@@ -250,6 +250,14 @@ def _opus_synthesis(playbook: dict, definition, course_id, race_name):
 
 # ---------------------------------------------------------------------------- bundle assembly
 
+def _sail_cfg(b):
+    """Boat `b`'s sail config for the sail plan: Code 0 band, reefs, its sail words (#305)."""
+    from . import boats
+    return dict({"code0": b.get("code0") or {}, "main_reefs": b.get("main_reefs") or {}},
+                **{k: v for k, v in (boats.sail_config(b) or {}).items()
+                   if k in ("sail_families", "code0_sail")})
+
+
 def _boat_model(boat=None, boat_polar=None):
     """The reviewed boat sail/draft model frozen into the bundle — so the polars + sail crossovers
     the homework assumes travel onboard (the copilot/engine can surface the per-leg sail plan and the
@@ -272,10 +280,10 @@ def _boat_model(boat=None, boat_polar=None):
         "sail_names": sm.get("sail_names", {}),
         # per-TWS×TWA zones with the upwind jib specialised to J1/J2/J3 by this boat's change-downs
         "crossovers": sailplan.crossovers_specialized(
-            b.get("jib_crossovers") or [],
-            {"code0": b.get("code0") or {}, "main_reefs": b.get("main_reefs") or {}}, xo=xo),
+            b.get("jib_crossovers") or [], _sail_cfg(b), xo=xo),
         # per-TWS toss-up bands (two sails within ~2% of target — the near-ties the zones can't show)
-        "overlaps": sailplan.overlaps_specialized(b.get("jib_crossovers") or [], xo=xo),
+        "overlaps": sailplan.overlaps_specialized(b.get("jib_crossovers") or [], xo=xo,
+                                                  sail_config=_sail_cfg(b)),
         "jib_crossovers": b.get("jib_crossovers", []),  # J1/J2/J3 by TWS (crew/sailmaker, not cert)
         # Code 0 band + main reef points — crew config the cert can't express (label overlays);
         # frozen so the copilot's sail-configuration calls are grounded in the reviewed model
@@ -634,7 +642,8 @@ def _reef_guidance_plays(consensus, sail_config):
             continue
         for kind, thr, cond in (
                 ("depower", mr.get("r1_tws_kn"), True),
-                ("a3_slot", mr.get("r1_a3_slot_tws_kn"), sail_vocab.family(sail) == "asym")):
+                ("a3_slot", mr.get("r1_a3_slot_tws_kn"),
+                 sail_vocab.family(sail, sail_config) == "asym")):
             if thr is None or not cond or kind in seen:
                 continue
             if not (w - 2 <= float(thr) <= w + 8):     # threshold within reach of this leg's breeze

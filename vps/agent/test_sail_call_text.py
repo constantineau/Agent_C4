@@ -106,5 +106,25 @@ check(f"no disagreements ({len(bad)} found)", not bad)
 check("sweep covers an enabled C0 in every verdict",
       {("C0", f) for f in ("in_range", "overpowered", "wrong_angle")} <= fits)
 
+print("no wind: no call, but the boat's sails still list (Codex on #334)")
+r = sails.get_sail_advice(None, None, "J2", BOAT)
+check("not available, says why", r["available"] is False and "wind" in r["note"])
+check("the sails bar still gets the boat's sails",
+      [x["name"] for x in r.get("sails") or []][:7] == sail_vocab.names(BOAT))
+check("the crew's sail is still named", r.get("crew_sail") == "J2")
+
+print("the driving sail reads the boat's family map (Codex on #334)")
+from app import matcher  # noqa: E402
+BIG = {"sail_inventory": ["J1", "BIGRED"], "sail_families": {"BIGRED": "asym"}}
+check("BIGRED (asym by the map) drives over the J1", matcher._primary(["BIGRED", "J1"], BIG) == "BIGRED")
+check("sr33's order unchanged", matcher._primary(["SS", "J2", "A3"], BOAT) == "A3"
+      and matcher._primary(["J1", "C0"], BOAT) == "C0")
+_orig = matcher._boat_sails
+matcher._boat_sails = lambda: BIG
+try:
+    check("with no boat passed, the boat's own map is used", matcher._primary(["J1", "BIGRED"]) == "BIGRED")
+finally:
+    matcher._boat_sails = _orig
+
 print("RESULT:", "PASS" if ok else "FAIL")
 raise SystemExit(0 if ok else 1)
