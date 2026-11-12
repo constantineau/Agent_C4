@@ -175,6 +175,12 @@ def approved_hash():
         r = EngineClient()._get("/playbook/copilot")
         r = r if isinstance(r, dict) else {}
         h = r.get("hash")
+        if r.get("error") and "hash" not in r:
+            # the Pi couldn't be asked (timeout, HTTP error): no approval, but the boat being
+            # sailed is still the one it last said — one dropped request must not hand the
+            # copilot the playbook's boat back (Codex on #342)
+            _pin.update(at=now, hash=None)
+            return None
         b = r.get("boat")
         _pin.update(at=now, hash=h if isinstance(h, str) else None,
                     boat=b if isinstance(b, dict) and "boat_id" in b else None,
