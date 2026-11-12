@@ -307,7 +307,30 @@ def test_set_fields_cli():
     assert sc == {"system": "ORC", "rating_system": "ORC", "rating_countries": ["GBR", "FRA"],
                   "course_columns": [{"course": "long", "column": "XX_RACE_A_TOT",
                                       "column_tod": "XX_A_TOD"}]}, sc
-    print("PASS set_fields: the migration CLI writes the rating fields (and a dry run writes nothing)")
+    # the CLI runs the same cleanup as a save: a rating tagged A is cleared by --column B, a legacy
+    # import is kept only when --legacy-col says what it was read off, a typed one always
+    with tempfile.TemporaryDirectory() as td:
+        p = os.path.join(td, "race.json")
+        race = {"race_id": "r", "rules_profile": {"scoring": {"rating_system": "ORC", "rating_column": "A"}},
+                "fleet": [{"boat": "TaggedA", "source": "orc", "rating": 1.1, "rating_col": "A"},
+                          {"boat": "Legacy", "source": "website+orc", "rating": 1.2},
+                          {"boat": "Typed", "source": "website", "rating": 0.9}],
+                "own": {"boat": "Us", "rating": 1.0, "rating_col": "A"}}
+        with open(p, "w") as f:
+            json.dump(race, f)
+        assert ratings._main(["set", p, "--column", "B", "--dry-run"]) == 0
+        with open(p) as f:
+            assert json.load(f)["fleet"][0]["rating"] == 1.1                    # dry run: untouched
+        d, rep = ratings.migrate(race, column="B")
+        assert rep["boats"] == ["TaggedA", "Legacy"] and rep["own"] and rep["tagged"] == 0, rep
+        assert [e["rating"] for e in d["fleet"]] == [None, None, 0.9], d["fleet"]
+        d, rep = ratings.migrate(race, column="A", legacy_col="A")
+        assert rep["boats"] == [] and rep["tagged"] == 1 and d["fleet"][1]["rating_col"] == "A", rep
+        ratings._main(["set", p, "--column", "B"])
+        with open(p) as f:
+            assert [e["rating"] for e in json.load(f)["fleet"]] == [None, None, 0.9]
+    print("PASS set_fields: the migration CLI writes the rating fields, clears stale ratings the same "
+          "way a save does (dry run writes nothing), and tags legacy imports when told their column")
 
 
 def test_import_fleet_both():

@@ -264,12 +264,32 @@ function withOverrides(snap) {
 }
 // After a save resolves: only re-baseline if the same definition is still in the editor (the user
 // may have switched race or discarded while the request was in flight).
-// A save may clear imported ratings that no longer match their boat's column (#311, server side):
-// take the cleaned roster back so the screen shows what's on disk, and baseline on that.
+// A save may clear imported ratings that no longer match their boat's column (#311, server side).
+// The fixes belong to what was SENT: the baseline is the sent copy with them applied, and the editor
+// takes a fixed number only where that boat's number is unchanged since the send, so an edit made
+// while the save was in flight survives (and still shows as unsaved).
+const _RATING_KEYS = ["rating", "rating_col", "tod_allowance", "tod_col"];
+function _takeRatingFix(cur, sent, fixed) {
+  if (!cur || !sent || !fixed) return;
+  _RATING_KEYS.forEach((k) => {
+    if (JSON.stringify(cur[k]) !== JSON.stringify(sent[k])) return;   // edited since send: keep
+    if (fixed[k] === undefined) delete cur[k]; else cur[k] = fixed[k];
+  });
+}
 function markSaved(snap, ed) {
   const fix = Lab.ratingFix; Lab.ratingFix = null;
   if (Lab.editDef !== ed) return;
-  if (fix) { ed.fleet = fix.fleet; ed.own = fix.own; snap = JSON.stringify(ed); }
+  if (fix) {
+    const sent = JSON.parse(snap);
+    const fixedSent = Object.assign({}, sent, { fleet: fix.fleet, own: fix.own });
+    const sameBoat = (a, b) => a && b && (a.boat || "") === (b.boat || "") && (a.sail || "") === (b.sail || "");
+    (ed.fleet || []).forEach((e, i) => {
+      const s = (sent.fleet || [])[i], f = (fix.fleet || [])[i];
+      if (sameBoat(e, s) && sameBoat(s, f)) _takeRatingFix(e, s, f);
+    });
+    if (ed.own) _takeRatingFix(ed.own, sent.own || {}, fix.own || {});
+    snap = JSON.stringify(fixedSent);
+  }
   markClean(snap);
 }
 // Every RaceDefinition write goes through one queue: two overlapping saves (bar + in-page button)
@@ -2552,7 +2572,7 @@ function paintDeploy() {
       <div class="dep-grid">
         <div class="dep-row">${depPill(r.reviewed, "Race reviewed")}<span class="muted">${r.reviewed ? "approved" : "approve it in the Races tab"}</span></div>
         <div class="dep-row">${depPill(c.ready, "Course")}<span class="muted">${esc(c.course_id || "—")} · ${c.marks} marks${c.skipped && c.skipped.length ? " · ⚠ " + c.skipped.length + " without a position (" + c.skipped.map(esc).join(", ") + ")" : ""}</span></div>
-        <div class="dep-row">${depPill(fl.ready, "Fleet")}<span class="muted">${fl.roster} boats${fl.scoring ? " · " + esc(fl.scoring) : ""}${fl.tracker_permitted ? " · tracker permitted" : ""}</span></div>
+        <div class="dep-row">${depPill(fl.ready, "Fleet")}<span class="muted">${fl.roster} boats${fl.scoring ? " · " + esc(fl.scoring) : ""}${fl.tracker_permitted ? " · tracker permitted" : ""}${(fl.stale_ratings || []).length ? ` · <b>${fl.stale_ratings.length} old rating${fl.stale_ratings.length === 1 ? "" : "s"} not sent. Re-read ratings.</b>` : ""}</span></div>
         <div class="dep-row">${depPill(ck.ready, "Checklists")}<span class="muted">${ck.total} items · ${ck.ipad} go to the iPad as reminders</span></div>
         <div class="dep-row">${depPill((r.watch || {}).ready, "Watch plan")}<span class="muted">${(r.watch || {}).ready ? (r.watch.blocks + " watches. The iPad can still change them.") : "optional. Set it up in the Races tab."}</span></div>
         <div class="dep-row">${depPill(pbReady, "Playbook")}<span class="muted">${pbReady ? pbs.length + " frozen for this race" : "Build and freeze one in Gameplan."}</span></div>
@@ -2795,14 +2815,14 @@ async function renderFleet() {
 async function fleetPickRace(id) {
   if (!(await confirmLeave())) return paintFleet();   // Stay → repaint puts the picker back
   Lab.sel = id; Lab.editDef = null; Lab.fleetMsg = ""; Lab.fleetCols = []; renderFleet(); }
-// A number typed by hand loses its import tag (#311): the Lab keeps hand-typed competitor numbers
+// A number typed by hand is tagged "manual" (#311): the Lab keeps hand-typed competitor numbers
 // across a column switch, and only clears numbers it imported off another column.
 const _FLEET_TAG = { rating: "rating_col", tod_allowance: "tod_col" };
 function fleetSet(i, f, v) {
   const e = Lab.editDef && Lab.editDef.fleet[i];
   if (!e) return;
   e[f] = v;
-  if (_FLEET_TAG[f]) delete e[_FLEET_TAG[f]];
+  if (_FLEET_TAG[f]) e[_FLEET_TAG[f]] = "manual";
 }
 // Our boat's number is stamped with the column in force when typed, so a later column switch
 // asks for it again instead of scoring the fleet against a number for another column.
@@ -2810,7 +2830,10 @@ function _fleetOwnCols() {
   const d = Lab.editDef, sc = (d.rules_profile || {}).scoring || {};
   const div = ((d.own || {}).division || "").trim();
   const dv = (d.divisions || []).find((x) => div && String(x.id || "").trim() === div);
-  const row = dv && (sc.course_columns || []).find((r) => r && r.column && r.course === dv.course_ref);
+  const rows = (sc.course_columns || []).filter((r) => r && r.column);
+  let row = dv && rows.find((r) => r.course === dv.course_ref);
+  // same rule as race_def.rating_spec: no course known → the only per-course column, if just one
+  if (!dv && !row && rows.length && new Set(rows.map((r) => r.column + "/" + (r.column_tod || ""))).size === 1) row = rows[0];
   return row ? { rating: row.column, tod: row.column_tod || null }
              : { rating: sc.rating_column || null, tod: sc.rating_column_tod || null };
 }

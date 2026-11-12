@@ -95,6 +95,54 @@ d2["fleet"] = [{"boat": "x", "rating": 1.0, "rating_col": "OLD"}]
 check("a race-wide column switch clears it", R.clear_stale_ratings(d2)["boats"] == ["x"])
 check("nothing to clear → empty report", R.clear_stale_ratings(race()) == {"boats": [], "own": False})
 
+print("legacy imports and typed numbers (tags):")
+d = race(rating_system="ORC", rating_column="COL_B")
+d["fleet"] = [{"boat": "LegacyOrc", "source": "yb+orc", "rating": 1.1},          # pre-tag import
+              {"boat": "LegacyTyped", "source": "website", "rating": 0.9},       # pre-tag, typed
+              {"boat": "TypedNow", "source": "yb+orc", "rating": 0.8, "rating_col": "manual"},
+              {"boat": "NoRating", "source": "yb+orc", "rating": None}]
+hit = R.clear_stale_ratings(d)
+f = {e["boat"]: e for e in d["fleet"]}
+check("an untagged ORC import is cleared (its column is unknown)", f["LegacyOrc"]["rating"] is None)
+check("an untagged typed number is kept", f["LegacyTyped"]["rating"] == 0.9)
+check("a number tagged manual is kept", f["TypedNow"]["rating"] == 0.8)
+check("only real clears are named", hit["boats"] == ["LegacyOrc"])
+d = race(rating_system="ORC", rating_column="COL_B")
+d["fleet"] = [{"boat": "L", "source": "website+orc", "rating": 1.1}, {"boat": "T", "rating": 1.0}]
+check("tag_legacy tags only untagged ORC imports", R.tag_legacy(d, "COL_B") == 1
+      and d["fleet"][0]["rating_col"] == "COL_B" and "rating_col" not in d["fleet"][1])
+check("a tagged legacy import on the current column is kept",
+      R.clear_stale_ratings(d)["boats"] == [] and d["fleet"][0]["rating"] == 1.1)
+
+print("boats whose division the race doesn't list:")
+d = race(rating_system="ORC", course_columns=PER)
+d["fleet"] = [{"boat": "x", "division": "Class E"}, {"boat": "y", "division": "A"}]
+check("flagged with no race-wide column",
+      "1 boat in a division the race doesn't list: rating column unknown" in R.validate(d)[1])
+d["rules_profile"]["scoring"]["rating_column"] = "XX_A_TOT"
+check("flagged with the race-wide fallback",
+      "1 boat in a division the race doesn't list: race-wide rating column used" in R.validate(d)[1])
+check("and the fallback is the column they get",
+      R.rating_spec_for(d, {"division": "Class E"})["column"] == "XX_A_TOT")
+
+print("fleet_blob (what the boat gets) never carries a stale rating:")
+d = race(rating_system="ORC", rating_column="COL_B")
+d["fleet"] = [{"boat": "Stale", "rating": 1.1, "rating_col": "COL_A"},
+              {"boat": "Legacy", "source": "website+orc", "rating": 1.2},
+              {"boat": "Good", "rating": 1.3, "rating_col": "COL_B", "tod_allowance": 600.0,
+               "tod_col": "TOD_OLD"},
+              {"boat": "Typed", "rating": 0.9}]
+d["own"] = {"boat": "Us", "rating": 1.0, "rating_col": "COL_A"}
+blob = R.fleet_blob(d)
+got = {e["boat"]: (e["rating"], e["tod_allowance"]) for e in blob["fleet"]}
+check("stale and legacy ratings are not shipped", got["Stale"][0] is None and got["Legacy"][0] is None)
+check("current and typed ratings are", got["Good"][0] == 1.3 and got["Typed"][0] == 0.9)
+check("a stale ToD allowance is not shipped", got["Good"][1] is None)
+check("our boat's stale rating is not shipped", blob["own"]["rating"] is None)
+check("the blob names them", blob["stale_ratings"] == ["Stale", "Legacy", "Good", "(our boat)"])
+check("the definition itself is untouched", d["fleet"][0]["rating"] == 1.1 and d["own"]["rating"] == 1.0)
+check("a clean race has no stale list", "stale_ratings" not in R.fleet_blob(race()))
+
 print("the shipped race file carries its own columns (migrated off the code map):")
 with open(os.path.join(ROOT, "vps", "lab", "races", "bayview_mackinac_2026.json")) as f:
     shipped = json.load(f)

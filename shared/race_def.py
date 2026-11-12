@@ -499,20 +499,57 @@ def rating_spec_for(definition: dict, entry: dict, course_id: str = None) -> dic
     return rating_spec(definition, course)
 
 
+# Column tags (#311). An imported number carries the certificate column it was read off
+# (`rating_col` / `tod_col`); a number typed in the Lab carries MANUAL_TAG and is never cleared.
+# A number with NO tag on an entry whose `source` says it came from ORC is a LEGACY import (before
+# tags existed): its column is unknown, so it is cleared unless a migration tags it first
+# (`tag_legacy`). An untagged number on any other entry was typed before tags existed: kept.
+MANUAL_TAG = "manual"
+_LEGACY = object()
+
+
+def _imported(e) -> bool:
+    return "orc" in str((e or {}).get("source") or "").lower()
+
+
+def stale_numbers(e: dict, want_tot, want_tod) -> bool:
+    """Clear `rating` / `tod_allowance` on one entry when they were imported off a column other
+    than the one wanted now (see the tag rules above). Returns True when a number was cleared."""
+    hit = False
+    for num, tag, want in (("rating", "rating_col", want_tot), ("tod_allowance", "tod_col", want_tod)):
+        if tag in e:
+            have = e.get(tag)
+        elif num == "rating" and _imported(e) and e.get(num) is not None:
+            have = _LEGACY
+        else:
+            continue
+        if have == MANUAL_TAG or (have is not _LEGACY and (have or None) == (want or None)):
+            continue
+        hit = hit or e.get(num) is not None
+        e[num] = None
+        e.pop(tag, None)
+    return hit
+
+
+def tag_legacy(definition: dict, column: str) -> int:
+    """Migration: tag every legacy ORC import's rating (no tag, ORC source) with the column it is
+    known to have been read off. Returns how many were tagged."""
+    n = 0
+    for e in (definition or {}).get("fleet") or []:
+        if (isinstance(e, dict) and "rating_col" not in e and _imported(e)
+                and e.get("rating") is not None):
+            e["rating_col"] = column
+            n += 1
+    return n
+
+
 def clear_stale_ratings(definition: dict) -> dict:
-    """On save (#311): clear any IMPORTED rating / ToD allowance whose column tag (`rating_col` /
-    `tod_col`) is not the column that boat's course scores on now. Numbers with no tag were typed
-    by hand and are kept. Mutates `definition`; returns {"boats": [names], "own": bool}."""
+    """On save and in the migration (#311): clear any imported rating / ToD allowance that is not
+    off the column its boat's course scores on now (tag rules above). Mutates `definition`;
+    returns {"boats": [names], "own": bool}."""
     def _fix(e):
         spec = rating_spec_for(definition, e)
-        hit = False
-        for num, tag, want in (("rating", "rating_col", spec["column"]),
-                               ("tod_allowance", "tod_col", spec["column_tod"])):
-            if tag in e and (e.get(tag) or None) != (want or None):
-                hit = hit or e.get(num) is not None
-                e[num] = None
-                e.pop(tag)
-        return hit
+        return stale_numbers(e, spec["column"], spec["column_tod"])
     boats = [str(e.get("boat") or "?") for e in (definition.get("fleet") or [])
              if isinstance(e, dict) and _fix(e)]
     own = definition.get("own")
@@ -563,6 +600,17 @@ def rating_warnings(d: dict) -> list:
             out.append("Rating column unknown: pick one (scoring)")
     elif not system and d.get("fleet"):
         out.append("Rating system unknown: set it in scoring")
+    # boats whose division the race doesn't list can't be put on a course: with per-course
+    # columns they fall back to the race-wide one (or none), so say how many
+    per = {(r.get("column"), r.get("column_tod") or "")
+           for r in (sc.get("course_columns") or []) if isinstance(r, dict) and r.get("column")}
+    if len(per) > 1:
+        n = sum(1 for e in d.get("fleet") or []
+                if isinstance(e, dict) and not course_of_division(d, e.get("division")))
+        if n:
+            out.append(f"{n} boat{'s' if n != 1 else ''} in a division the race doesn't list: "
+                       + ("race-wide rating column used" if sc.get("rating_column")
+                          else "rating column unknown"))
     return out
 
 
@@ -672,6 +720,11 @@ def fleet_blob(definition: dict, own: dict = None) -> dict:
     neutral coefficient. Also carries the public-tracker config (over-the-horizon fleet source); its
     `permitted` flag is driven STRICTLY by `rules_profile.tracker_permitted` (default conservative —
     None/False → off), never by the tracker block itself. Returns {fleet, scoring, own, tracker}."""
+    # last line of defence (#311): a rating imported off another column than its boat's course
+    # scores on now (or a legacy import of unknown column) never reaches the boat, whatever path
+    # wrote the file. Works on a copy; `stale_ratings` names the boats so the Lab can say so.
+    definition = json.loads(json.dumps(definition or {}))
+    stale = clear_stale_ratings(definition)
     roster = []
     for e in definition.get("fleet", []) or []:
         roster.append({"boat": e.get("boat"), "division": e.get("division", ""),
@@ -693,8 +746,11 @@ def fleet_blob(definition: dict, own: dict = None) -> dict:
         e = _gun_epoch(v, tz_name)
         if e is not None:
             division_starts[str(k)] = e
-    return {"fleet": roster, "scoring": scoring, "own": own or definition.get("own") or {},
-            "tracker": tracker, "division_starts": division_starts}
+    out = {"fleet": roster, "scoring": scoring, "own": own or definition.get("own") or {},
+           "tracker": tracker, "division_starts": division_starts}
+    if stale["boats"] or stale["own"]:
+        out["stale_ratings"] = stale["boats"] + (["(our boat)"] if stale["own"] else [])
+    return out
 
 
 if __name__ == "__main__":

@@ -135,19 +135,9 @@ def _cols(definition, entry, course_id=None):
 
 
 def drop_stale(e, tot_col, tod_col):
-    """Clear an imported number read off a different column than the one asked for now (#311).
-    An imported `rating` carries `rating_col`, an imported `tod_allowance` carries `tod_col`; a
-    number with no such tag was typed by hand and is kept. Returns True when something was cleared."""
-    cleared = False
-    if "rating_col" in e and e.get("rating_col") != tot_col:
-        e.pop("rating_col")
-        cleared = cleared or e.get("rating") is not None
-        e["rating"] = None
-    if "tod_col" in e and e.get("tod_col") != tod_col:
-        e.pop("tod_col")
-        cleared = cleared or e.get("tod_allowance") is not None
-        e["tod_allowance"] = None
-    return cleared
+    """Clear numbers imported off a different column than the one asked for now (#311). The tag
+    rules (imported / typed / legacy) live in race_def so the import and every save agree."""
+    return race_def.stale_numbers(e, tot_col, tod_col)
 
 
 def _set_numbers(e, rec, tot_col, tod_col):

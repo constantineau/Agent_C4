@@ -12,11 +12,17 @@ A feed is any object with:
 
 Also a small CLI to set a race's rating fields on a saved definition (deploy-time migration):
   python -m app.ratings set <race.json> --system ORC [--column C] [--column-tod C]
-         [--course ID=TOT[/TOD] ...] [--countries USA,CAN] [--dry-run]
+         [--course ID=TOT[/TOD] ...] [--countries USA,CAN] [--legacy-col C] [--dry-run]
+It then clears every imported rating that is not off its boat's column now (the same rule as a
+Lab save, shared/race_def.clear_stale_ratings) and prints what it cleared. `--legacy-col C` first
+tags ratings imported before column tags existed with the column they are known to be off;
+without it those are cleared, since their column is unknown.
 """
 import argparse
 import json
 import sys
+
+from shared import race_def
 
 _FEEDS = {}
 
@@ -73,6 +79,16 @@ def set_fields(definition, system=None, column=None, column_tod=None, courses=No
     return d
 
 
+def migrate(definition, system=None, column=None, column_tod=None, courses=None, countries=None,
+            legacy_col=None):
+    """set_fields, then tag legacy imports (if told their column), then clear stale numbers.
+    Returns (new definition, {"tagged": n, "boats": [...], "own": bool})."""
+    d = set_fields(definition, system, column, column_tod, courses, countries)
+    tagged = race_def.tag_legacy(d, legacy_col) if legacy_col else 0
+    hit = race_def.clear_stale_ratings(d)
+    return d, dict(hit, tagged=tagged)
+
+
 def _main(argv=None):
     ap = argparse.ArgumentParser(prog="python -m app.ratings")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -83,12 +99,21 @@ def _main(argv=None):
     s.add_argument("--column-tod")
     s.add_argument("--course", action="append", default=[], help="ID=TOT[/TOD], repeatable")
     s.add_argument("--countries")
+    s.add_argument("--legacy-col", help="column untagged ORC imports were read off")
     s.add_argument("--dry-run", action="store_true")
     a = ap.parse_args(argv)
     with open(a.path) as f:
         before = json.load(f)
-    after = set_fields(before, a.system, a.column, a.column_tod, a.course, a.countries)
+    after, rep = migrate(before, a.system, a.column, a.column_tod, a.course, a.countries,
+                         a.legacy_col)
     print(json.dumps(after["rules_profile"]["scoring"], indent=2))
+    rated = sum(1 for e in after.get("fleet") or [] if e.get("rating") is not None)
+    print(f"legacy imports tagged: {rep['tagged']}")
+    print(f"ratings cleared: {len(rep['boats'])}"
+          + (f" ({', '.join(rep['boats'][:10])}{', ...' if len(rep['boats']) > 10 else ''})"
+             if rep["boats"] else ""))
+    print(f"our boat's rating cleared: {'yes' if rep['own'] else 'no'}")
+    print(f"boats still rated: {rated} of {len(after.get('fleet') or [])}")
     if a.dry_run or after == before:
         print("no change written" if after == before else "dry run: not written")
         return 0

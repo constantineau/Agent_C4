@@ -382,6 +382,8 @@ def readiness(race_id, course_id=None):
         "fleet": {"roster": len(roster),
                   "scoring": (blob.get("scoring") or {}).get("method", ""),
                   "tracker_permitted": bool((blob.get("tracker") or {}).get("permitted")),
+                  # ratings off another column are not shipped (#311): say which boats lost one
+                  "stale_ratings": blob.get("stale_ratings") or [],
                   "ready": len(roster) > 0},
         "checklists": {"total": len(reqs), "ipad": len(ipad), "ready": len(reqs) > 0},
         "watch": {"blocks": len((d.get("watch_plan") or {}).get("blocks") or []),
