@@ -134,13 +134,20 @@
   }
 
   // The "Up:" buttons are the boat's own sails (#305), rebuilt when the list changes.
-  let shownSails = "";
+  // An explicit `sails: []` (a boat that lists none) clears them, never leaving another boat's
+  // buttons live; a missing field (a gated or older answer) keeps the buttons shown.
+  let shownSails = null;
   function buttons() {
-    const list = ((last && last.sails) || []).map((x) => x.name);
+    if (!last || !Array.isArray(last.sails)) return;
+    const list = last.sails.map((x) => x && x.name).filter(Boolean);
     const key = list.join(",");
     const sel = document.getElementById("sailSel");
-    if (!sel || !list.length || key === shownSails) return;
+    if (!sel || key === shownSails) return;
     shownSails = key;
+    if (hoisted && !list.includes(hoisted)) {          // the last boat's sail: not this boat's
+      hoisted = "";
+      try { localStorage.setItem("sr33.hoisted", ""); } catch (e) { /* private mode */ }
+    }
     sel.querySelectorAll("button").forEach((b) => b.remove());
     list.concat([""]).forEach((name) => {
       const b = document.createElement("button");

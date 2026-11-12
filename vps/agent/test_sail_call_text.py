@@ -139,5 +139,21 @@ check("HEAVY (a jib by the profile) at 140° is the wrong sail",
       r["crew_sail"] == "HEAVY" and r["wrong_sail"] is True and r["fit"] == "wrong_angle"
       and r["optimal_sail"] in ("A3", "S1"))
 
+print("a rated sail with its own hyphenated name keeps it (Codex round 3 on #334)")
+_rows = [{"twa": a, "btv": 5.0, "vmg": 3.0, "awa": 30.0, "heel": 5.0, "sail": sl}
+         for a, sl in ((45, "J1"), (60, "J1"), (90, "J1"), (120, "BIG-RED"), (140, "BIG-RED"), (170, "BIG-RED"))]
+_g = sails._guide
+# the guide as read from disk (the answer's pinned, resolved copy still wins, as in _guide)
+sails._guide = lambda: sails._PINNED.get() or (sails._sections_of({"10": _rows}), {})
+BR = {"sail_inventory": ["J1", "BIG-RED"], "sail_families": {"BIG-RED": "asym"}}
+try:
+    r = sails.get_sail_advice(10, 140, "BIG-RED", BR)
+finally:
+    sails._guide = _g
+check("the optimal sail is BIG-RED, not BIG", r["optimal_sail"] == "BIG-RED")
+check("the crew's BIG-RED is right", r["crew_sail"] == "BIG-RED" and r["wrong_sail"] is False)
+check("no phantom BIG in the boat's sails", [x["name"] for x in r["sails"]] == ["J1", "BIG-RED"])
+check("the text names BIG-RED", "BIG-RED" in r["recommendation"] and "BIG " not in r["recommendation"])
+
 print("RESULT:", "PASS" if ok else "FAIL")
 raise SystemExit(0 if ok else 1)

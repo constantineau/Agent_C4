@@ -3039,8 +3039,10 @@
       // is the old reading again, not a new one (#184-4)
       if (res[0] != null) pushWind(res[0], at[0] / 1000);
       pushForecast(p.forecast);
+      // the boat's sails: an explicit [] means this boat lists none (clear the chips, never keep
+      // another boat's); a missing field (an older engine, a gated answer) keeps what we have
       const sl = res[keys.indexOf("sail")];
-      if (sl && Array.isArray(sl.sails) && sl.sails.length) {
+      if (sl && Array.isArray(sl.sails)) {
         const names = sl.sails.map((x) => x && x.name).filter(Boolean);
         if (names.join() !== (App.sailList || []).join()) { App.sailList = names; renderSailsBar(); }
       }
@@ -3221,7 +3223,7 @@
       fetchCourse: fetchCourse, fetchSelector: fetchSelector, navControlsHtml: navControlsHtml,
       navAction: navAction, fetchDeviation: fetchDeviation, fetchCopilotHealth: fetchCopilotHealth,
       rerouteView: rerouteView, resolveTheme: resolveTheme, sunElevation: sunElevation,
-      deviationHtml: deviationHtml, currentData: currentData, rawDead: rawDead });
+      deviationHtml: deviationHtml, currentData: currentData, rawDead: rawDead, sailsInv: sailsInv });
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
   else init();
 })();

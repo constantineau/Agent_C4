@@ -637,6 +637,22 @@ test("#312 auto day/night follows the live fix, else the course's first mark —
   ok(r === "day" || r === "night", "no position at all: " + r);
 });
 
+/* ---------------- #305: the sails bar is this boat's ---------------- */
+test("#305 the sails bar lists the boat's sails; an explicit [] clears another boat's", async () => {
+  const T = load();
+  pollAnswers(T, { conditions: COND, sail: { available: false, sails: [{ name: "G1" }, { name: "A2" }] } });
+  await T.D.poll();
+  ok(T.D.sailsInv().join() === "G1,A2", "first boat's sails: " + T.D.sailsInv().join());
+  pollAnswers(T, { conditions: COND, sail: { available: false, sails: [] } });
+  await T.D.poll();
+  ok(T.D.sailsInv().length === 0, "a boat with no sails kept the last boat's: " + T.D.sailsInv().join());
+  pollAnswers(T, { conditions: COND, sail: { available: false, sails: [{ name: "J1" }] } });
+  await T.D.poll();
+  pollAnswers(T, { conditions: COND, sail: { available: false, note: "Sail advice withheld" } });
+  await T.D.poll();
+  ok(T.D.sailsInv().join() === "J1", "an answer with no sails field must keep the list: " + T.D.sailsInv().join());
+});
+
 (async () => {
   let fails = 0;
   for (const [name, fn] of cases) {

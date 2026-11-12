@@ -68,7 +68,8 @@ def _prompt_parts():
     if guide:
         for rows in BP.parse_speed_guide(guide).values():
             for r in rows:
-                t = sail_vocab.token(r.get("sail"))
+                # the boat's own name when the cell starts with one (BIG-RED), else the token
+                t = sail_vocab.match(r.get("sail") or "", prof) or sail_vocab.token(r.get("sail"))
                 if t and t not in rated:
                     rated.append(t)
     return prof, guide, rated

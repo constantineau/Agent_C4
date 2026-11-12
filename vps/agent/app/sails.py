@@ -82,10 +82,25 @@ def _sections_of(guide):
             tws = float(k)
         except (TypeError, ValueError):
             continue
-        rs = [dict(r, sail=_family(r.get("sail"))) for r in rows or ()
+        # `raw` keeps the cell as written: a boat's own name (BIG-RED) is matched against its
+        # inventory per answer (`_resolved`); `sail` is the shorthand token until then
+        rs = [dict(r, raw=r.get("sail"), sail=_family(r.get("sail"))) for r in rows or ()
               if isinstance(r, dict) and isinstance(r.get("twa"), (int, float))]
         if rs:
             out[tws] = sorted(rs, key=lambda r: r["twa"])
+    return out
+
+
+def _resolved(sections, src):
+    """`sections` with each row's sail named as the boat names it: the longest inventory name the
+    cell starts with ('BIG-RED' stays BIG-RED, 'A3-A' → A3), else the shorthand token. Unchanged
+    when the boat lists no inventory."""
+    if not SV.names(src):
+        return sections
+    out = {}
+    for k, rows in sections.items():
+        out[k] = [dict(r, sail=SV.match(r.get("raw") or r.get("sail") or "", src) or r.get("sail"))
+                  for r in rows]
     return out
 
 
@@ -283,15 +298,19 @@ def _sail_list(src, rated=()):
 
 
 def get_sail_advice(tws: float = None, twa: float = None, hoisted: str = None, boat_model: dict = None):
-    """Sail-range advice for the dial + agent (see `_advice`), on one snapshot of the guide."""
-    tok = _PINNED.set(_guide())
+    """Sail-range advice for the dial + agent (see `_advice`), on one snapshot of the guide, its
+    sails named in the boat's own words (resolved once for this answer)."""
+    src = _names_src(boat_model)
+    sections, overlaps = _guide()
+    tok = _PINNED.set((_resolved(sections, src), overlaps))
     try:
-        return _advice(tws, twa, hoisted, boat_model)
+        return _advice(tws, twa, hoisted, boat_model, src)
     finally:
         _PINNED.reset(tok)
 
 
-def _advice(tws: float = None, twa: float = None, hoisted: str = None, boat_model: dict = None):
+def _advice(tws: float = None, twa: float = None, hoisted: str = None, boat_model: dict = None,
+            src: dict = None):
     """Sail-range advice for the dial + agent. tws/twa are live values; hoisted is the
     crew-reported sail (the boat's own name) so we can flag flying the wrong one."""
     sections = _guide()[0]
@@ -302,13 +321,13 @@ def _advice(tws: float = None, twa: float = None, hoisted: str = None, boat_mode
             if orinassets.boat_polar() is None:
                 note = BP.NO_POLAR      # the boat being sailed has none (#320: e.g. an Other boat)
         # no sail model, but the crew-set sail is still named in the boat's own words (#305)
-        src = _names_src(boat_model)
+        src = _names_src(boat_model) if src is None else src
         return {"available": False, "note": note, "crew_sail": _crew_norm(hoisted, src),
                 "sails": _sail_list(src)}
     if tws is None or twa is None:
         # no wind, no call — but the boat's sails still list, so the crew can set what's flying
         # and mark gear out with no wind sensor (Codex on #334)
-        src = _names_src(boat_model)
+        src = _names_src(boat_model) if src is None else src
         rated = _guide_sails(sections)
         return {"available": False, "note": "Need live wind speed and angle.",
                 "have": {"tws": tws, "twa": twa},
@@ -316,7 +335,7 @@ def _advice(tws: float = None, twa: float = None, hoisted: str = None, boat_mode
 
     key = _nearest_tws(tws)
     rows = sections[key]
-    src = _names_src(boat_model)      # the boat's sail words, resolved once for this answer
+    src = _names_src(boat_model) if src is None else src   # the boat's sail words
     zones = _zones(rows, src)
     # The record wraps TWA to 0–360 (a port beat at 36° arrives as 324°): take it signed first,
     # or abs() reads a beat as a run and flags the right jib wrong (#47).
