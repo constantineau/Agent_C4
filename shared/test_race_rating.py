@@ -124,6 +124,17 @@ check("flagged with the race-wide fallback",
       "1 boat in a division the race doesn't list: race-wide rating column used" in R.validate(d)[1])
 check("and the fallback is the column they get",
       R.rating_spec_for(d, {"division": "Class E"})["column"] == "XX_A_TOT")
+# round 6: our division is on course short (XX_B_TOT); an unlisted division must NOT inherit it
+d["own"] = {"boat": "Us", "division": "B"}
+check("an unlisted division never inherits our course",
+      R.rating_spec_for(d, {"division": "Class E"})["column"] == "XX_A_TOT")
+d["fleet"] = [{"boat": "x", "division": "Class E", "rating": 1.1, "rating_col": "XX_A_TOT"}]
+check("so a valid race-wide rating survives a save", R.clear_stale_ratings(d)["boats"] == []
+      and d["fleet"][0]["rating"] == 1.1)
+del d["rules_profile"]["scoring"]["rating_column"]
+check("no race-wide column → unknown (not our course's)",
+      R.rating_spec_for(d, {"division": "Class E"})["column"] is None)
+check("our own boat still uses its course", R.rating_spec_for(d, d["own"])["column"] == "XX_B_TOT")
 
 print("fleet_blob (what the boat gets) never carries a stale rating:")
 d = race(rating_system="ORC", rating_column="COL_B")

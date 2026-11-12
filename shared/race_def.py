@@ -465,14 +465,14 @@ def _course_for(definition: dict, course_id: str = None):
     return course_of_division(definition, ((definition or {}).get("own") or {}).get("division"))
 
 
-def rating_spec(definition: dict, course_id: str = None) -> dict:
+def rating_spec(definition: dict, course_id: str = None, own_course: bool = True) -> dict:
     """Which certificate number the race scores on: {system, column, column_tod, course}.
     `column` is None when the race does not say: callers must then ask, never guess one.
     A per-course column (scoring.course_columns) wins over the race-wide `rating_column`; with no
     course given, our division's course is used, or the only per-course column there is."""
     sc = (((definition or {}).get("rules_profile") or {}).get("scoring")) or {}
     rows = [r for r in (sc.get("course_columns") or []) if isinstance(r, dict) and r.get("column")]
-    cid = _course_for(definition, course_id)
+    cid = _course_for(definition, course_id) if own_course else course_id
     row = next((r for r in rows if cid and str(r.get("course")) == str(cid)), None)
     if row is None and not cid and len({(r["column"], r.get("column_tod") or "") for r in rows}) == 1:
         row = rows[0]
@@ -492,11 +492,12 @@ def course_of_division(definition: dict, division) -> Optional[str]:
 
 
 def rating_spec_for(definition: dict, entry: dict, course_id: str = None) -> dict:
-    """`rating_spec` for one boat: the course asked, else the boat's division's course, else the
-    race default (our division's course / the only per-course column / the race-wide column). The
-    Lab import and the save check both use this, so they agree on every boat's column."""
+    """`rating_spec` for one boat: the course asked, else the boat's division's course. A boat whose
+    division the race doesn't list never inherits OUR course: it gets the race-wide column (or the
+    only per-course column, when every course uses the same one), else unknown. The Lab import, the
+    save check and the boat blob all use this, so they agree on every boat's column."""
     course = course_id or course_of_division(definition, (entry or {}).get("division"))
-    return rating_spec(definition, course)
+    return rating_spec(definition, course, own_course=False)
 
 
 # Column tags (#311). An imported number carries the certificate column it was read off

@@ -85,10 +85,20 @@ def test_course_column_follows_course():
     windquest = next(e for e in entries if e["boat"] == "Windquest")
     assert windquest.get("rating") is None and windquest["orc_gph"] == 560.0, windquest   # cert lacks it
     assert en["note"] == "1 boat lacks XX_RACE_B_TOT on the cert.", en
-    # no course asked → our division's course
-    d = dict(_race(course_columns=_PER_COURSE), own={"division": "B"})
-    en = fleetimport.enrich_from_orc([{"boat": "Il Mostro", "sail": "USA 60"}], country="USA", definition=d)
-    assert en["tot_col"] == "XX_RACE_B_TOT" and en["entries"][0]["rating"] == 0.97, en
+    # no course asked → each boat's own division's course
+    d = dict(_race(course_columns=_PER_COURSE), own={"division": "A"})
+    en = fleetimport.enrich_from_orc([{"boat": "Il Mostro", "sail": "USA 60", "division": "B"}],
+                                     country="USA", definition=d)
+    assert en["entries"][0]["rating_col"] == "XX_RACE_B_TOT" and en["entries"][0]["rating"] == 0.97, en
+    # a division the race doesn't list never inherits OUR course (A): no race-wide column → unknown
+    en = fleetimport.enrich_from_orc([{"boat": "Il Mostro", "sail": "USA 60", "division": "Class E"}],
+                                     country="USA", definition=d)
+    assert en["entries"][0]["rating"] is None and en["note"] == "Rating column unknown: pick one", en
+    # ...and with a race-wide column it gets that one
+    d2 = dict(_race(course_columns=_PER_COURSE, rating_column="TMF_Inshore"), own={"division": "A"})
+    en = fleetimport.enrich_from_orc([{"boat": "Il Mostro", "sail": "USA 60", "division": "Class E"}],
+                                     country="USA", definition=d2)
+    assert en["entries"][0]["rating"] == 1.20 and en["entries"][0]["rating_col"] == "TMF_Inshore", en
     print("PASS course_column: per-course column follows the course / our division; a cert without it "
           "gets no rating and a note")
 
