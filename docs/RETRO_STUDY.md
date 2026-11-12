@@ -35,10 +35,12 @@ Uploading again replaces the race: boats, tracks and ranks the new file leaves o
 the race's runs and scores are cleared (score the fleet again). A boat keeps its id, matched by sail
 number, else name, whatever order the file lists it in. It keeps its ORC polar only if its name and
 sail are unchanged. An upload is refused while that race is being scored, and a scoring run
-stops saving if the race is imported again under it.
+stops saving if the race is imported again under it. So does the ORC polar match. Every import
+(YB or file) is one transaction.
 
 Each boat starts on its own division's gun. The division comes from the file (CSV), else the
-race's roster by sail number, else name. A GPX has none, so it needs the roster. A boat with no
+race's roster by sail number, else name. The first source that names one wins: a division the
+file names with no gun is not swapped for the roster's. A GPX has none, so it needs the roster. A boat with no
 known gun is listed ("No start for X. Not scored.") and skipped, never given another division's
 gun or its first fix.
 

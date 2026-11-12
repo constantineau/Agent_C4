@@ -75,6 +75,7 @@ def ingest_race(race_id: str, provider: str = "yb") -> dict:
 
 RESCORE = "Old scores cleared. Score the fleet again."
 BUSY = "Scoring is running. Upload after it ends."
+STALE_POLARS = "The fleet was imported again while matching. Nothing more saved. Find ORC polars again."
 STALE = "The fleet was imported again while scoring. Nothing more saved. Score the fleet again."
 
 
@@ -150,15 +151,9 @@ def store_fleet(race_id: str, fleet: dict) -> dict:
     always did: YB team ids are the feed's own, so they stay put across re-fetches."""
     if not fleet.get("ok"):
         return fleet
-    rs.upsert_race(race_id, fleet.get("setup") or {}, fleet.get("start"),
-                   source=fleet.get("source") or "yb")
-    for t in fleet.get("teams") or []:
-        rs.upsert_entry(race_id, t)
-    for tid, fixes in (fleet.get("tracks") or {}).items():
-        rs.save_track(race_id, tid, fixes)
-    for r in fleet.get("results") or []:
-        rs.save_result(race_id, r["team_id"], r["division"], r.get("elapsed"), r.get("corrected"),
-                       r.get("tcf"), r.get("rank"), r.get("finished"), r.get("status") or "")
+    rs.upsert_fleet(race_id, fleet.get("setup") or {}, fleet.get("start"),
+                    fleet.get("source") or "yb", fleet.get("teams") or [],
+                    fleet.get("tracks") or {}, fleet.get("results") or [])
     out = _summary(race_id, fleet)
     if fleet.get("results_note"):
         out["note"] = fleet["results_note"]
@@ -454,6 +449,9 @@ def match_polars(race_id: str, country=None, def_race_id: str = None) -> dict:
     (its scoring list, else venue country + entrants' sail prefixes), else the entrants' sail
     prefixes alone. A sail-number match in any country's dump beats a name match; country order
     only breaks ties within the same kind of match."""
+    # the import these entries belong to (#345): a re-import while the ORC dumps load must not
+    # get the old entries' polars written onto its boat ids
+    stamp = (rs.get_race(race_id) or {}).get("ingested_at")
     entries = rs.get_entries(race_id)
     if not entries:
         return {"ok": False, "note": "race not ingested yet — run ingest first"}
@@ -495,7 +493,9 @@ def match_polars(race_id: str, country=None, def_race_id: str = None) -> dict:
         refno = next((rec.get(k) for k in ("RefNo", "CertNo", "FileId", "BIN") if rec.get(k)),
                      f"{rec.get('SailNo')}|{rec.get('YachtName')}")
         cert_id = rs.save_cert(country, refno, rec.get("YachtName"), rec.get("SailNo"), rec)
-        rs.save_polar(race_id, e["team_id"], cert_id, polar, by, conf)
+        if not rs.save_polar(race_id, e["team_id"], cert_id, polar, by, conf, stamp=stamp):
+            return {"ok": False, "stale": True, "note": STALE_POLARS, "race_id": race_id,
+                    "matched": matched}
         matched += 1
     return {"ok": True, "race_id": race_id, "entries": len(entries), "matched": matched,
             "countries": [cc for cc, _ in idxs],

@@ -471,3 +471,66 @@ def test_new_boats_get_fresh_ids():
     retro.ingest_file("orc-na-2027", [("f.csv", _csv(("Bravo", "USA 1", 1), ("Charlie", "USA 2", 2)))], d)
     retro.ingest_file("orc-na-2027", [("f.csv", _csv(("Bravo", "USA 1", 1), ("Delta", "USA 3", 2)))], d)
     assert _ids() == {"Bravo": 1, "Delta": 3}                        # Charlie's id is not reused
+
+
+# ---- Codex round 3 on #345 -----------------------------------------------------------------
+def test_a_named_division_without_a_gun_never_takes_the_rosters():
+    """CSV says Bravo is in B; the roster says A; only A has a gun → no start, not A's."""
+    d = _race(division_starts={"A": "2027-11-15T10:00:00"},
+              fleet=[{"boat": "Bravo", "sail": "USA 1", "division": "A"}])
+    csv = (b"boat,sail,division,time,lat,lon\n"
+           b"Bravo,USA 1,B,2027-11-15T16:00:00Z,26.1,-80.1\n"
+           b"Bravo,USA 1,B,2027-11-15T16:10:00Z,26.2,-80.1\n")
+    f = trackers.parse_fleet_files([("f.csv", csv)], d)
+    t = f["teams"][0]
+    assert t["division"] == "B" and t["start"] is None and f["no_start"] == ["Bravo"]
+    assert "No start for Bravo. Not scored." in f["results_note"]
+    # the file's spelling of a division with a gun still resolves to the gun's spelling
+    f = trackers.parse_fleet_files([("f.csv", csv.replace(b",B,", b",a,"))], d)
+    assert f["teams"][0]["division"] == "A" and f["teams"][0]["start"] == 1_826_290_800.0
+
+
+def test_polar_match_racing_a_reupload_saves_nothing(monkeypatch):
+    """Bravo is re-uploaded with a new sail while the ORC dumps load: its polar was cleared, and
+    the pending matcher must not write the old cert's polar back onto Bravo's id."""
+    d = _race()
+    retro.ingest_file("orc-na-2027", [("f.csv", _csv(("Bravo", "USA 1", 1), ("Charlie", "USA 2", 2)))], d)
+    _analyse()
+    bravo = _ids()["Bravo"]
+    rows = [{"SailNo": "USA 1", "YachtName": "Bravo", "RefNo": "u1"},
+            {"SailNo": "USA 2", "YachtName": "Charlie", "RefNo": "u2"}]
+
+    def dump(cc):
+        retro.ingest_file("orc-na-2027", [("f.csv", _csv(("Bravo", "USA 11", 1), ("Charlie", "USA 2", 2)))], d)
+        return {"by_sail": {fi._norm_sail(r["SailNo"]): r for r in rows},
+                "by_name": {fi._norm(r["YachtName"]): r for r in rows}, "n": len(rows)}
+    monkeypatch.setattr(fi, "_orc_dump", dump)
+    monkeypatch.setattr(retro.orcpolar, "cert_polar", lambda rec: [["old cert"]])
+    r = retro.match_polars("orc-na-2027", country="USA")
+    assert r["ok"] is False and r["stale"] and r["note"] == retro.STALE_POLARS and r["matched"] == 0
+    assert rs.get_polar("orc-na-2027", bravo) is None                # cleared by the re-upload, stays so
+    assert rs.get_polar("orc-na-2027", _ids()["Charlie"]) == [["Charlie"]]
+
+
+def test_polar_match_without_a_reimport_still_saves(monkeypatch):
+    d = _race()
+    retro.ingest_file("orc-na-2027", [("f.csv", _csv(("Bravo", "USA 1", 1)))], d)
+    rows = [{"SailNo": "USA 1", "YachtName": "Bravo", "RefNo": "u1"}]
+    monkeypatch.setattr(fi, "_orc_dump", lambda cc: {"by_sail": {"usa1": rows[0]}, "by_name": {}, "n": 1})
+    monkeypatch.setattr(retro.orcpolar, "cert_polar", lambda rec: [[1, 2, 3]])
+    r = retro.match_polars("orc-na-2027", country="USA")
+    assert r["ok"] and r["matched"] == 1 and rs.get_polar("orc-na-2027", _ids()["Bravo"]) == [[1, 2, 3]]
+
+
+def test_yb_reingest_stops_a_pending_polar_match(monkeypatch):
+    """A YB import is one transaction with a new stamp, like a file re-upload."""
+    _stub_yb(monkeypatch)
+    retro.ingest_race("demo2026")
+    rows = [{"SailNo": "USA 1", "YachtName": "Bravo", "RefNo": "u1"}]
+
+    def dump(cc):
+        retro.ingest_race("demo2026")
+        return {"by_sail": {"usa1": rows[0]}, "by_name": {}, "n": 1}
+    monkeypatch.setattr(fi, "_orc_dump", dump)
+    monkeypatch.setattr(retro.orcpolar, "cert_polar", lambda rec: [[1, 2, 3]])
+    assert retro.match_polars("demo2026", country="USA")["stale"]

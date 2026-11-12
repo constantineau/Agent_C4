@@ -387,13 +387,14 @@ def no_start_note(names) -> str:
 
 
 def _roster_divisions(definition, guns):
-    """division_of(file_division, sail, name) → the division id whose gun the boat starts on.
+    """division_of(file_division, sail, name) → the boat's division id (the gun's spelling when
+    the race has a gun for it, matched case-insensitively).
 
-    A division the file names is used when the race has a gun for it (case-insensitive). Else
+    A division the file names is used as is. Else
     the boat is looked up in the race's own roster (`fleet`, and our boat), by sail number, else
-    name. A GPX names no division, so the roster is the only source there. Returns the file's or
-    roster's division as given when no gun matches it ("" when none): the caller then lists the
-    boat as having no start. Never another division's gun."""
+    name. A GPX names no division, so the roster is the only source there. The first source that
+    names a division wins; its gun is looked up after. With no gun for it (or no division at
+    all, "") the caller lists the boat as having no start. Never another division's gun."""
     from . import fleetimport as fi
     by_lower = {k.strip().lower(): k for k in guns}
     roster = list(definition.get("fleet") or [])
@@ -406,10 +407,11 @@ def _roster_divisions(definition, guns):
                if fi._norm(e.get("boat")) and e.get("division")}
 
     def division_of(file_div, sail, name):
+        # the division by source precedence FIRST (file, then roster by sail, then by name), and
+        # only then its gun: a division the file names with no gun stays without a start, it is
+        # never swapped for the roster's division that has one (#345)
         cands = [file_div, by_sail.get(fi._norm_sail(sail)) if fi._norm_sail(sail) else None,
                  by_name.get(fi._norm(name)) if fi._norm(name) else None]
-        for c in cands:
-            if c and str(c).strip().lower() in by_lower:
-                return by_lower[str(c).strip().lower()]
-        return next((str(c).strip() for c in cands if c), "")
+        div = next((str(c).strip() for c in cands if c and str(c).strip()), "")
+        return by_lower.get(div.lower(), div)
     return division_of

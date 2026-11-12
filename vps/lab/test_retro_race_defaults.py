@@ -98,7 +98,7 @@ def _stub_polars(monkeypatch, entries, dumps):
     monkeypatch.setattr(fi, "_orc_dump", dump)
     monkeypatch.setattr(rs, "get_entries", lambda rid: entries)
     monkeypatch.setattr(rs, "save_cert", lambda cc, ref, *a: saved.append(cc) or len(saved))
-    monkeypatch.setattr(rs, "save_polar", lambda *a: None)
+    monkeypatch.setattr(rs, "save_polar", lambda *a, **k: True)
     monkeypatch.setattr(retro.orcpolar, "cert_polar", lambda rec: [[1, 2, 3]])
     return asked, saved
 

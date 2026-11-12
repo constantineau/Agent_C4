@@ -11,6 +11,7 @@ sha256 (model/cycle/fhr/member/bbox/source-url/context). The NOMADS `lab_gribcac
 cache; this store is the archive — evicting the cache can never lose a study's inputs. Pinning is
 idempotent (same content → one archived copy, extra contexts recorded).
 """
+import contextlib
 import hashlib
 import json
 import os
@@ -22,6 +23,9 @@ from . import atomicio
 
 RETRO_DB = os.environ.get("RETRO_DB", "/srv/retro/retro.db")
 RETRO_GRIB_DIR = os.environ.get("RETRO_GRIB_DIR", "/srv/retro/grib")
+
+
+_NO_STAMP = object()     # a write not tied to an import (see `_guarded`)
 
 
 def _conn():
@@ -87,41 +91,58 @@ def _conn():
 
 # ---------------------------------------------------------------- race ingest writes
 
-def upsert_race(race_id, setup, start_epoch, source="yb"):
-    with _conn() as c:
-        c.execute("INSERT INTO races (race_id, source, start_epoch, setup_json, ingested_at) "
-                  "VALUES (?,?,?,?,?) ON CONFLICT(race_id) DO UPDATE SET "
-                  "source=excluded.source, start_epoch=excluded.start_epoch, "
-                  "setup_json=excluded.setup_json, ingested_at=excluded.ingested_at",
-                  (race_id, source, start_epoch, json.dumps(setup), time.time()))
+@contextlib.contextmanager
+def _locked():
+    """One write transaction that takes the write lock up front (BEGIN IMMEDIATE), so what it
+    reads cannot change under it before it writes. Commits on success, rolls back on error."""
+    c = _conn()
+    c.isolation_level = None
+    try:
+        c.execute("BEGIN IMMEDIATE")
+        try:
+            yield c
+        except BaseException:
+            c.execute("ROLLBACK")
+            raise
+        c.execute("COMMIT")
+    finally:
+        c.close()
 
 
-def upsert_entry(race_id, team):
-    with _conn() as c:
-        c.execute("INSERT OR REPLACE INTO entries (race_id, team_id, boat, sail, owner, model, "
-                  "division, tcf, start_epoch, finished_at, status) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                  (race_id, team.get("id"), team.get("name"), team.get("sail"),
-                   team.get("owner"), team.get("model"), team.get("division"),
-                   team.get("tcf"), team.get("start"), team.get("finishedAt"),
-                   team.get("status")))
+def _write_fleet(c, race_id, setup, start_epoch, source, teams, tracks, results):
+    """The race row (a new `ingested_at` = the import stamp) + entries, tracks, results, on an
+    open transaction. Rows are upserted; `replace_fleet` deletes the old ones first."""
+    c.execute("INSERT INTO races (race_id, source, start_epoch, setup_json, ingested_at) "
+              "VALUES (?,?,?,?,?) ON CONFLICT(race_id) DO UPDATE SET "
+              "source=excluded.source, start_epoch=excluded.start_epoch, "
+              "setup_json=excluded.setup_json, ingested_at=excluded.ingested_at",
+              (race_id, source, start_epoch, json.dumps(setup), time.time()))
+    c.executemany(
+        "INSERT OR REPLACE INTO entries (race_id, team_id, boat, sail, owner, model, division, "
+        "tcf, start_epoch, finished_at, status) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        [(race_id, t.get("id"), t.get("name"), t.get("sail"), t.get("owner"),
+          t.get("model"), t.get("division"), t.get("tcf"), t.get("start"),
+          t.get("finishedAt"), t.get("status")) for t in teams])
+    c.executemany(
+        "INSERT OR REPLACE INTO tracks (race_id, team_id, n_fixes, t0, t1, fixes_json) "
+        "VALUES (?,?,?,?,?,?)",
+        [(race_id, tid, len(fx), min(f["t"] for f in fx) if fx else None,
+          max(f["t"] for f in fx) if fx else None, json.dumps(fx))
+         for tid, fx in tracks.items()])
+    c.executemany(
+        "INSERT OR REPLACE INTO results (race_id, team_id, division, elapsed_s, corrected_s, tcf, "
+        "rank_division, finished, status) VALUES (?,?,?,?,?,?,?,?,?)",
+        [(race_id, r["team_id"], r["division"], r.get("elapsed"), r.get("corrected"),
+          r.get("tcf"), r.get("rank"), 1 if r.get("finished") else 0,
+          r.get("status") or "") for r in results])
 
 
-def save_track(race_id, team_id, fixes):
-    ts = [f["t"] for f in fixes] or [None, None]
-    with _conn() as c:
-        c.execute("INSERT OR REPLACE INTO tracks (race_id, team_id, n_fixes, t0, t1, fixes_json) "
-                  "VALUES (?,?,?,?,?,?)",
-                  (race_id, team_id, len(fixes), min(ts) if fixes else None,
-                   max(ts) if fixes else None, json.dumps(fixes)))
-
-
-def save_result(race_id, team_id, division, elapsed_s, corrected_s, tcf, rank_division,
-                finished, status=""):
-    with _conn() as c:
-        c.execute("INSERT OR REPLACE INTO results (race_id, team_id, division, elapsed_s, "
-                  "corrected_s, tcf, rank_division, finished, status) VALUES (?,?,?,?,?,?,?,?,?)",
-                  (race_id, team_id, division, elapsed_s, corrected_s, tcf, rank_division,
-                   1 if finished else 0, status))
+def upsert_fleet(race_id, setup, start_epoch, source, teams, tracks, results):
+    """A fetched import (YB): upsert the race, entries, tracks and results in ONE transaction,
+    as YB always upserted (its team ids are the feed's own). The new `ingested_at` makes any
+    scoring or polar match still working on the previous import save nothing more."""
+    with _locked() as c:
+        _write_fleet(c, race_id, setup, start_epoch, source, teams, tracks, results)
 
 
 def replace_fleet(race_id, setup, start_epoch, source, teams, tracks, results) -> dict:
@@ -131,43 +152,17 @@ def replace_fleet(race_id, setup, start_epoch, source, teams, tracks, results) -
     "Score the fleet" rebuilds them). A boat's matched polar is kept only when its id, name and
     sail are all unchanged; a removed or re-identified boat loses it. Ids must already be stable
     (`retro.stable_ids`). Returns how much analysis was cleared."""
-    c = _conn()
-    try:
-        with c:
-            old = {r["team_id"]: (r["boat"], r["sail"]) for r in c.execute(
-                "SELECT team_id, boat, sail FROM entries WHERE race_id=?", (race_id,))}
-            new = {t.get("id"): (t.get("name"), t.get("sail")) for t in teams}
-            drop_polars = [tid for tid, ident in old.items() if new.get(tid) != ident]
-            runs = c.execute("SELECT COUNT(*) FROM runs WHERE race_id=?", (race_id,)).fetchone()[0]
-            for tbl in ("entries", "tracks", "results", "runs", "scores"):
-                c.execute(f"DELETE FROM {tbl} WHERE race_id=?", (race_id,))
-            c.executemany("DELETE FROM polars WHERE race_id=? AND team_id=?",
-                          [(race_id, tid) for tid in drop_polars])
-            c.execute("INSERT INTO races (race_id, source, start_epoch, setup_json, ingested_at) "
-                      "VALUES (?,?,?,?,?) ON CONFLICT(race_id) DO UPDATE SET "
-                      "source=excluded.source, start_epoch=excluded.start_epoch, "
-                      "setup_json=excluded.setup_json, ingested_at=excluded.ingested_at",
-                      (race_id, source, start_epoch, json.dumps(setup), time.time()))
-            c.executemany(
-                "INSERT INTO entries (race_id, team_id, boat, sail, owner, model, division, tcf, "
-                "start_epoch, finished_at, status) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                [(race_id, t.get("id"), t.get("name"), t.get("sail"), t.get("owner"),
-                  t.get("model"), t.get("division"), t.get("tcf"), t.get("start"),
-                  t.get("finishedAt"), t.get("status")) for t in teams])
-            c.executemany(
-                "INSERT INTO tracks (race_id, team_id, n_fixes, t0, t1, fixes_json) "
-                "VALUES (?,?,?,?,?,?)",
-                [(race_id, tid, len(fx), min(f["t"] for f in fx) if fx else None,
-                  max(f["t"] for f in fx) if fx else None, json.dumps(fx))
-                 for tid, fx in tracks.items()])
-            c.executemany(
-                "INSERT INTO results (race_id, team_id, division, elapsed_s, corrected_s, tcf, "
-                "rank_division, finished, status) VALUES (?,?,?,?,?,?,?,?,?)",
-                [(race_id, r["team_id"], r["division"], r.get("elapsed"), r.get("corrected"),
-                  r.get("tcf"), r.get("rank"), 1 if r.get("finished") else 0,
-                  r.get("status") or "") for r in results])
-    finally:
-        c.close()
+    with _locked() as c:
+        old = {r["team_id"]: (r["boat"], r["sail"]) for r in c.execute(
+            "SELECT team_id, boat, sail FROM entries WHERE race_id=?", (race_id,))}
+        new = {t.get("id"): (t.get("name"), t.get("sail")) for t in teams}
+        drop_polars = [tid for tid, ident in old.items() if new.get(tid) != ident]
+        runs = c.execute("SELECT COUNT(*) FROM runs WHERE race_id=?", (race_id,)).fetchone()[0]
+        for tbl in ("entries", "tracks", "results", "runs", "scores"):
+            c.execute(f"DELETE FROM {tbl} WHERE race_id=?", (race_id,))
+        c.executemany("DELETE FROM polars WHERE race_id=? AND team_id=?",
+                      [(race_id, tid) for tid in drop_polars])
+        _write_fleet(c, race_id, setup, start_epoch, source, teams, tracks, results)
     return {"runs": runs, "polars": len(drop_polars)}
 
 
@@ -182,14 +177,13 @@ def save_cert(country, refno, yacht, sail, cert):
                          (country, str(refno))).fetchone()[0]
 
 
-def save_polar(race_id, team_id, cert_id, polar, match_by, match_confidence):
-    with _conn() as c:
-        c.execute("INSERT OR REPLACE INTO polars (race_id, team_id, cert_id, match_by, "
-                  "match_confidence, polar_json) VALUES (?,?,?,?,?,?)",
-                  (race_id, team_id, cert_id, match_by, match_confidence, json.dumps(polar)))
-
-
-_NO_STAMP = object()
+def save_polar(race_id, team_id, cert_id, polar, match_by, match_confidence, stamp=_NO_STAMP):
+    """True when written; False when `stamp` is given and the race was imported again since."""
+    return _guarded(stamp, race_id,
+                    "INSERT OR REPLACE INTO polars (race_id, team_id, cert_id, match_by, "
+                    "match_confidence, polar_json) VALUES (?,?,?,?,?,?)",
+                    (race_id, team_id, cert_id, match_by, match_confidence,
+                     json.dumps(polar))) is not None
 
 
 def _guarded(stamp, race_id, sql, args):
