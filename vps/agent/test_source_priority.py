@@ -235,5 +235,25 @@ check("read against today's clock, the same 2014 rows are all stale -> freshest,
       prefer("heel", [(ORCA, OLD - 3, 1.0), (GPS, OLD, 2.0)])[2] == 2.0)
 source_policy._time = _real_clock
 
+print("shore priority = the cloud table as it answers (#341):")
+from app import hardware, datasource as _DS   # noqa: E402
+_real_load, _real_onboard = _DS.load_priority, os.environ.pop("DATA_SOURCE", None)
+try:
+    _DS.load_priority = lambda: {}
+    check("an empty source_priority table is used as is, not the bundled list",
+          hardware.source_priority() == {})
+    _DS.load_priority = lambda: {"heel": ["orca"]}
+    check("a filled table is used", hardware.source_priority() == {"heel": ["orca"]})
+
+    def _down():
+        raise RuntimeError("no database")
+    _DS.load_priority = _down
+    check("no database -> the profile's", hardware.source_priority()
+          == _BH.source_priority(hardware.profile()))
+finally:
+    _DS.load_priority = _real_load
+    if _real_onboard is not None:
+        os.environ["DATA_SOURCE"] = _real_onboard
+
 print("\n" + ("PASS" if ok else "FAIL"))
 raise SystemExit(0 if ok else 1)

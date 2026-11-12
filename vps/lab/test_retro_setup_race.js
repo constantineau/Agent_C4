@@ -62,6 +62,20 @@ vm.runInContext(fnSource("retroReadYb") + "\n" + fnSource("retroSetup") + "\nthi
   pending.A(); await c;
   check("setup and course are A's", ctx.Retro.setup === SETUP.A && ctx.Retro.courseId === "a1");
 
+  console.log("A YB id typed while the setup request is out is kept (#341)");
+  const box = { value: "" };
+  ctx.document = { getElementById: (id) => (id === "retroYb" ? box : null) };
+  ctx.Retro.ybId = "";
+  const d = ctx.retroSetup("B");
+  box.value = " typed2027 ";
+  pending.B(); await d;
+  check("typed id kept", ctx.Retro.ybId === "typed2027");
+  box.value = "";
+  const e = ctx.retroSetup("A");
+  pending.A(); await e;
+  check("empty box still gets the race's id", ctx.Retro.ybId === "ybA");
+  ctx.document = { getElementById: () => null };
+
   console.log(ok ? "ALL OK" : "FAILED");
   process.exit(ok ? 0 : 1);
 })();

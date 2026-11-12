@@ -541,9 +541,10 @@ def stale_numbers(e: dict, want_tot, want_tod) -> bool:
 
 def tag_legacy(definition: dict, column: str) -> int:
     """Migration: tag every legacy ORC import's rating (no tag, ORC source) with the column it is
-    known to have been read off. Returns how many were tagged."""
+    known to have been read off, own entry included. Returns how many were tagged."""
+    d = definition or {}
     n = 0
-    for e in (definition or {}).get("fleet") or []:
+    for e in list(d.get("fleet") or []) + [d.get("own")]:
         if (isinstance(e, dict) and "rating_col" not in e and _imported(e)
                 and e.get("rating") is not None):
             e["rating_col"] = column

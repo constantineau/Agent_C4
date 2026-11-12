@@ -188,5 +188,23 @@ buoys._fetch = fetch_multi
 check("promise far outside its window → no forecast row (honest)",
       buoys.get_buoys()["stations"][0].get("forecast") is None)
 
+print("8) no bundle, no env: the Great Lakes list only on the Great Lakes (#309)")
+import os as _os
+_os.environ.pop("BUOY_STATIONS", None)
+stub(boat=(45.3, -84.5), nav_brg=0.0, feeds={s["id"]: "" for s in buoys._GL_FALLBACK})
+r = buoys.get_buoys()
+check("on Lake Huron with no bundle: the curated Great Lakes stations",
+      r["available"] and {s["id"] for s in r["stations"]} <= {s["id"] for s in buoys._GL_FALLBACK})
+stub(boat=(26.1, -80.0), nav_brg=0.0, feeds={})
+buoys._fetch = lambda url, timeout: (_ for _ in ()).throw(AssertionError("fetched " + url))
+r = buoys.get_buoys()
+check("off Fort Lauderdale with no bundle: a plain note, no Great Lakes station, no fetch",
+      r["available"] is False and r["note"] == buoys.NO_STATIONS_NOTE)
+FL = [{"id": "LKWF1", "lat": 26.61, "lon": -80.03, "name": "Lake Worth", "kind": "ndbc"}]
+stub(boat=(26.1, -80.0), nav_brg=0.0, stations=FL, feeds={"LKWF1": rt2([(20, 6.2, 90)])})
+r = buoys.get_buoys()
+check("off Fort Lauderdale with a bundle: the bundle's stations",
+      r["available"] and [s["id"] for s in r["stations"]] == ["LKWF1"])
+
 print("RESULT:", "PASS" if ok else "FAIL")
 raise SystemExit(0 if ok else 1)
