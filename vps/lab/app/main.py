@@ -552,10 +552,17 @@ def model_skill_backfill(body: dict):
     if not v or not v.get("station"):
         return JSONResponse({"detail": "venue has no observation station — can't score skill"},
                             status_code=422)
-    from . import jobs, modelskill
+    from . import jobs, modelskill, venuestudy
+    study = venuestudy.load(v["key"]) if v.get("study") else None
 
     def _work(progress):
-        modelskill.backfill_deep(v, modelskill.DEFAULT_MODELS, rd, log=progress)
+        if study:
+            # a studied venue deepens its study (same window and stations), so the study page and
+            # the route keep showing and using the same numbers
+            venuestudy.run(study["name"], study["lat"], study["lon"], study["radius_nm"], study["spec"],
+                           study["stations"], include_deep=True, log=progress)
+        else:
+            modelskill.backfill_deep(v, modelskill.DEFAULT_MODELS, rd, log=progress)
         return modelskill.venue_weights(v, refresh=False)
 
     return jobs.start("model_skill_backfill", _work, meta={"venue": v.get("tag") or v.get("station")})
@@ -565,6 +572,115 @@ def model_skill_backfill(body: dict):
 def model_skill_backfill_status():
     from . import jobs
     return jobs.status("model_skill_backfill")
+
+
+# ---------------------------------------------------------------- Venue study (any place, any race)
+def _study_point(body):
+    """(lat, lon, radius_nm) from a venue-study request, or raises ValueError (plain text)."""
+    try:
+        lat, lon = float(body.get("lat")), float(body.get("lon"))
+    except (TypeError, ValueError):
+        raise ValueError("Set the place: tap the map or type lat and lon.")
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        raise ValueError("Lat or lon is out of range.")
+    raw = body.get("radius_nm")
+    try:
+        r = 40.0 if raw is None or raw == "" else float(raw)
+    except (TypeError, ValueError):
+        raise ValueError("Radius must be 5 to 200 nm.")
+    if not 5 <= r <= 200:
+        raise ValueError("Radius must be 5 to 200 nm.")
+    return lat, lon, r
+
+
+@app.get("/api/venue-study")
+def venue_study_list():
+    """Saved venue studies, newest first."""
+    from . import venuestudy
+    return {"studies": venuestudy.list_all()}
+
+
+@app.get("/api/venue-study/status")
+def venue_study_status(job_id: str = ""):
+    """Poll a running study; the saved study rides on state=done under `result`."""
+    from . import jobs
+    return jobs.status("venue_study", job_id=job_id)
+
+
+@app.get("/api/venue-study/{key}")
+def venue_study_get(key: str):
+    from . import venuestudy
+    s = venuestudy.load(key)
+    if not s:
+        return JSONResponse({"detail": "no such study"}, status_code=404)
+    return s
+
+
+@app.delete("/api/venue-study/{key}")
+def venue_study_delete(key: str):
+    from . import venuestudy
+    try:
+        return {"deleted": venuestudy.delete(key)}
+    except ValueError as exc:          # a run there (page or "Add older years") would undo it
+        return JSONResponse({"detail": str(exc)}, status_code=409)
+
+
+@app.post("/api/venue-study/stations")
+def venue_study_stations(body: dict):
+    """Observation stations near a place (METAR + NDBC, anywhere), each checked for wind data in the
+    most recent past year of the study window. Sync: a few small downloads, well under the gateway
+    cap."""
+    from . import obsstations, venuestudy
+    body = body or {}
+    try:
+        lat, lon, r = _study_point(body)
+        spec = venuestudy.window_spec(body)
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=400)
+    win = venuestudy.probe_window(spec)
+    out = obsstations.discover(lat, lon, r, window=win)
+    out["key"] = venuestudy.venue_key(lat, lon)
+    out["checked_year"] = win[0] if win else None
+    return out
+
+
+@app.post("/api/venue-study/run")
+def venue_study_run(body: dict):
+    """Start a venue study as a BACKGROUND job (minutes; with older years, up to an hour or more).
+    Poll GET /api/venue-study/status?job_id=…; the saved study rides on `result`."""
+    from . import jobs, venuestudy
+    body = body or {}
+    try:
+        lat, lon, r = _study_point(body)
+        spec = venuestudy.window_spec(body)
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=400)
+    sts = []
+    for s in body.get("stations") or []:
+        try:
+            sts.append({"id": str(s["id"]).upper(), "kind": s["kind"], "lat": float(s["lat"]),
+                        "lon": float(s["lon"]), "name": str(s.get("name") or s["id"])[:80],
+                        **({"tz": s["tz"]} if s.get("tz") else {})})
+        except (KeyError, TypeError, ValueError):
+            continue
+    sts = [s for s in sts if s["kind"] in ("metar", "ndbc")]
+    if not sts:
+        return JSONResponse({"detail": "Tick at least one station."}, status_code=400)
+    if len(sts) > 8:
+        return JSONResponse({"detail": "Tick 8 stations or fewer."}, status_code=400)
+    from . import venue as venue_mod
+    if any(venue_mod._haversine_nm(lat, lon, s["lat"], s["lon"]) > r + 1 for s in sts):
+        # stations found for another place (the pin moved after Find stations) would score the
+        # wrong water under this place's key
+        return JSONResponse({"detail": "Some stations are outside the radius. Find stations again."},
+                            status_code=400)
+    name = str(body.get("name") or "").strip()[:80] or venuestudy.venue_key(lat, lon)
+    deep = bool(body.get("deep"))
+
+    def _work(progress):
+        return venuestudy.run(name, lat, lon, r, spec, sts, include_deep=deep, log=progress)
+
+    return jobs.start("venue_study", _work, meta={"key": venuestudy.venue_key(lat, lon), "name": name})
 
 
 

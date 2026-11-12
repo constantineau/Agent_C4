@@ -104,6 +104,16 @@ def _cell_key(lat, lon):
     return f"v{abs(la):04.1f}{'N' if la >= 0 else 'S'}{abs(lo):05.1f}{'E' if lo >= 0 else 'W'}"
 
 
+def _study_for(lat, lon, tag):
+    """The Lab venue study for this place (by the race's venue_tag, else the nearest within range),
+    or None. Never fails the caller: no study store just means no study."""
+    try:
+        from . import venuestudy
+        return venuestudy.match(lat, lon, tag)
+    except Exception:          # noqa: BLE001 — skill weighting is best-effort
+        return None
+
+
 def resolve_from_bbox(bbox, tag=None, name=None):
     """Venue record from a course bbox=(n,s,w,e). `tag` (race.venue_tag) overrides the auto cell key.
     Returns {key, label, centroid:[lat,lon], station|None}. station=None -> not skill-scoreable."""
@@ -111,7 +121,15 @@ def resolve_from_bbox(bbox, tag=None, name=None):
     clat, clon = (n + s) / 2.0, (w + e) / 2.0
     key = tag or _cell_key(clat, clon)
     stations = stations_for(clat, clon)
+    study = _study_for(clat, clon, tag)
+    if study and study.get("stations"):
+        # a Lab venue study covers this water: its key (so its scores apply) and the stations it
+        # was scored on, which also reach places the curated list doesn't
+        key = study["key"]
+        stations = sorted((dict(st, dist_nm=round(_haversine_nm(clat, clon, st["lat"], st["lon"]), 1))
+                           for st in study["stations"]), key=lambda st: st["dist_nm"])
     return {"key": key, "label": name or key, "centroid": [round(clat, 3), round(clon, 3)],
+            "study": (study or {}).get("name"),
             "station": stations[0] if stations else None,   # primary (nearest) — for display
             "stations": stations}                            # all anchors — skill pools across them
 
