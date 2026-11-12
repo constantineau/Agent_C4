@@ -623,12 +623,18 @@ def _refresh_own(feed, definition, course_id, country):
 
 def import_fleet(definition, source="both", country=None, course_id=None, url=None, text=None):
     """Orchestrate a DRAFT roster from public data — NOT saved. `source`:
-    'yb' (YB entry list only) · 'both' (YB entry list → ORC) · 'website' (regatta-site URL/text → ORC) ·
-    'orc' (enrich the existing roster). The entry list comes from YB OR the regatta website; ORC fills
+    'yb'/'tracker' (the race tracker's entry list only) · 'both' (tracker entry list → ORC) ·
+    'website' (regatta-site URL/text → ORC) ·
+    'orc' (enrich the existing roster). The entry list comes from the race tracker OR the regatta website; ORC fills
     the handicaps for both."""
     src = (source or "both").lower()
+    if src == "tracker":
+        src = "yb"
     if src in ("yb", "both"):
-        r = roster_from_yb(definition)
+        # the entry list from the race's tracker provider (#310): YB's RaceSetup, or the fleet
+        # file uploaded to the retro archive
+        from . import trackers
+        r = trackers.entries(definition)
         if not r.get("ok"):
             return r
         entries = r["entries"]

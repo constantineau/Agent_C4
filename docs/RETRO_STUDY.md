@@ -25,6 +25,25 @@ line were the winners, where, and why?
 
 2026 goes live race week (~Jul 11) — the same pipeline becomes this year's post-race analyzer.
 
+**Other trackers (#310).** The tracks come through a tracker provider (`vps/lab/app/trackers.py`)
+named by the race definition's `tracker.provider`. `yb` fetches as above. `file` (also `upload`,
+`gpx`, `csv`) takes an uploaded fleet file instead: a GPX with one named `<trk>` per boat, one GPX
+per boat, or a CSV of `boat,time,lat,lon` rows (optional `sail`, `division`, `rank`). It is stored
+in the same archive under the Lab race id; the debrief's "Get from tracker" and the Fleet tab's
+tracker import then read it from there. A file gives no TCFs; results only when it has `rank`.
+Uploading again replaces the race: boats, tracks and ranks the new file leaves out are gone, and
+the race's runs and scores are cleared (score the fleet again). A boat keeps its id, matched by sail
+number, else name, whatever order the file lists it in. It keeps its ORC polar only if its name and
+sail are unchanged. An upload is refused while that race is being scored, and a scoring run
+stops saving if the race is imported again under it. So does the ORC polar match. Every import
+(YB or file) is one transaction.
+
+Each boat starts on its own division's gun. The division comes from the file (CSV), else the
+race's roster by sail number, else name. The first source that names one wins: a division the
+file names with no gun is not swapped for the roster's. A GPX has none, so it needs the roster. A boat with no
+known gun is listed ("No start for X. Not scored.") and skipped, never given another division's
+gun or its first fix.
+
 ## 3. Persistence — EVERYTHING gathered is kept (user requirement)
 
 New named volume **`lab_retro`** (`/srv/retro`) + a pure-stdlib SQLite DB (`retrostore.py`, same

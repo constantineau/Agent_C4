@@ -1,6 +1,7 @@
 """Fleet retro study — ingest past races + run the optimizer for every boat (docs/RETRO_STUDY.md).
 
-R1 (this module, ingest): YB RaceSetup (entries, start, TCFs, divisions) + the AllPositions3
+R1 (this module, ingest): the race's tracker provider (`trackers`: YB, or an uploaded GPX/CSV
+fleet file). For YB: RaceSetup (entries, start, TCFs, divisions) + the AllPositions3
 full-fleet binary (decoder in `track.py`) + GetPositions (the ABSOLUTE-time anchor per team — the
 binary carries only relative seconds) + the leaderboard (YB's own corrected results per division,
 stored verbatim rather than recomputed) → the persistent `retrostore` archive.
@@ -22,33 +23,35 @@ from . import fleetimport as fi
 from . import orcpolar
 from . import retrostore as rs
 from . import track as track_mod
-
-_HOST = "https://cf.yb.tl"
+from . import trackers
 
 # No race is built in (#310): the fleet is routed on the course of a Lab race definition the user
-# picks, and the tracks come from that race's tracker. Retro reads YB only today.
+# picks, and the tracks come from that race's tracker provider (`trackers`: YB, or a fleet file).
 NO_RACE = "Pick a race to route on."
 NO_COURSE = "This race has no course with marks."
-_YB = ("yb", "ybtracking", "yellowbrick", "bycmack")
 
 
 def setup_for(definition: dict) -> dict:
-    """What the retro card needs from a Lab race definition: the YB race id its tracker names
-    (or a plain note why there is none), the course retro routes on, and the ORC countries to
-    search. Nothing here guesses a race."""
+    """What the retro card needs from a Lab race definition: its tracker provider and the race
+    id it names (or a plain note why there is none), the course retro routes on, and the ORC
+    countries to search. Nothing here guesses a race."""
     d = definition or {}
     tr = d.get("tracker") or {}
-    prov = str(tr.get("provider") or "").strip().lower()
+    prov = trackers.provider_name(d)
+    p = trackers.get(prov)
     yb_id, note = None, None
-    if prov in _YB and tr.get("race"):
-        yb_id = str(tr["race"]).strip()
-    elif prov and prov not in _YB and prov != "sample":
-        note = f"Retro reads YB tracks only. This race uses {prov}. Type a YB race id if it had one."
+    if p is trackers.YB and p.ref(tr):
+        yb_id = p.ref(tr)
+    elif p is trackers.File:
+        note = trackers.FILE_HINT
+    elif prov and p is None and prov != "sample":
+        note = trackers.unknown_note(prov) + " Or type a YB race id if it had one."
     else:
-        note = "No YB race id in this race. Type one."
+        note = "No YB race id in this race. Type one, or upload a fleet file."
     courses = [{"id": c.get("id"), "name": c.get("name") or c.get("id")}
                for c in d.get("courses") or [] if c.get("id")]
-    return {"race_id": d.get("race_id"), "yb_id": yb_id, "note": note,
+    return {"race_id": d.get("race_id"), "provider": p.name if p else (prov or None),
+            "upload": p is trackers.File, "yb_id": yb_id, "note": note,
             "course_id": default_course(d), "courses": courses,
             "countries": race_def.rating_countries(d)}
 
@@ -61,99 +64,100 @@ def default_course(definition: dict):
     return own if own in ids else (ids[0] if ids else None)
 
 
-def _yb(path, raw=False):
-    return track_mod._yb_get(f"{_HOST}/{path}", raw=raw)
+def ingest_race(race_id: str, provider: str = "yb") -> dict:
+    """Pull one race off a fetching tracker (YB) into the archive: race + entries + anchored
+    tracks + results."""
+    p = trackers.get(provider)
+    if p is None or not p.fetches:
+        return {"ok": False, "note": trackers.unknown_note(provider)}
+    return store_fleet(race_id, p.fleet(race_id))
 
 
-def _f(x):
-    try:
-        return float(x)
-    except (TypeError, ValueError):
-        return None
+RESCORE = "Old scores cleared. Score the fleet again."
+BUSY = "Scoring is running. Upload after it ends."
+STALE_POLARS = "The fleet was imported again while matching. Nothing more saved. Find ORC polars again."
+STALE = "The fleet was imported again while scoring. Nothing more saved. Score the fleet again."
 
 
-def ingest_race(race_id: str) -> dict:
-    """Pull one YB race into the archive: race + entries + anchored tracks + results."""
-    setup = _yb(f"JSON/{race_id}/RaceSetup")
-    teams = setup.get("teams") or []
-    if not teams:
-        return {"ok": False, "note": "race has no teams (unpublished/dormant feed)"}
-    tags = {t.get("id"): t for t in setup.get("tags") or []}
-    rs.upsert_race(race_id, setup, setup.get("start"))
+def ingest_file(race_id: str, files, definition=None) -> dict:
+    """Store an uploaded fleet file (GPX/CSV, `trackers.parse_fleet_files`) under `race_id`.
+    A re-upload REPLACES the race (`rs.replace_fleet`): boats, tracks and ranks the new file
+    leaves out are gone, the race's runs and scores are cleared, and a boat keeps its id (and its
+    polar, when unchanged) whatever order the file lists it in (`stable_ids`)."""
+    if not race_id:
+        return {"ok": False, "note": NO_RACE}
+    job = fleet_job_status()
+    if job.get("state") == "running" and job.get("race_id") == race_id:
+        return {"ok": False, "busy": True, "note": BUSY}
+    fleet = trackers.parse_fleet_files(files, definition)
+    if not fleet.get("ok"):
+        return fleet
+    stable_ids(fleet, rs.get_entries(race_id))
+    cleared = rs.replace_fleet(race_id, fleet.get("setup") or {}, fleet.get("start"), "file",
+                               fleet["teams"], fleet["tracks"], fleet["results"])
+    out = _summary(race_id, fleet)
+    out["cleared"] = cleared
+    out["no_start"] = fleet.get("no_start") or []
+    notes = [fleet.get("results_note"), RESCORE if cleared["runs"] else None]
+    if any(notes):
+        out["note"] = " ".join(n for n in notes if n)
+    return out
 
-    for t in teams:
-        division = json.dumps([tags[i]["name"] for i in (t.get("tags") or []) if i in tags])
-        rs.upsert_entry(race_id, {**t, "division": division, "tcf": _f(t.get("tcf1"))})
 
-    # --- tracks: decode all blocks, anchor + match by GetPositions latest fix -------------------
-    binb = _yb(f"BIN/{race_id}/AllPositions3", raw=True)
-    blocks = track_mod._decode_allpositions3(binb, len(teams))
-    anchors = {}
-    try:
-        gp = _yb(f"API3/Race/{race_id}/GetPositions?t=0")
-        for tm in gp.get("teams") or []:
-            ps = tm.get("positions") or []
-            if ps:
-                p = max(ps, key=lambda x: x.get("gpsAtMillis") or 0)
-                if p.get("gpsAtMillis"):
-                    anchors[(tm.get("name") or "").lower()] = (
-                        p["latitude"], p["longitude"], p["gpsAtMillis"] / 1000.0)
-    except Exception:
-        pass
+def _sail_key(sail):
+    return fi._norm_sail(sail) or None
 
-    used, n_tracks, unanchored = set(), 0, []
-    for t in teams:
-        a = anchors.get((t.get("name") or "").lower())
-        if not a:
-            unanchored.append(t.get("name"))
-            continue
-        best, bestd = None, 1e9
-        for bi, fx in enumerate(blocks):
-            if bi in used or not fx:
-                continue
-            d = track_mod._hav_nm((fx[-1]["lat"], fx[-1]["lon"]), (a[0], a[1]))
-            if d < bestd:
-                best, bestd = bi, d
-        if best is None or bestd > 1.0:
-            unanchored.append(t.get("name"))
-            continue
-        used.add(best)
-        fx = blocks[best]
-        tmax = fx[-1]["t"]
-        fixes = [{"lat": f["lat"], "lon": f["lon"], "t": a[2] - (tmax - f["t"]),
-                  "sog": None, "cog": None} for f in fx]
-        track_mod._derive_sog_cog(fixes)
-        rs.save_track(race_id, t.get("id"), fixes)
-        n_tracks += 1
 
-    # --- results: the leaderboard verbatim (YB's own corrected order per division) --------------
-    n_results, n_divisions = 0, 0
-    try:
-        lb = _yb(f"JSON/{race_id}/leaderboard")
-        lb_tags = lb.get("tags") or []
-        # tag identity: by id when present, else zip against the setup's lb-enabled tags in order
-        ordered = [t for t in sorted((setup.get("tags") or []), key=lambda x: x.get("sort") or 0)
-                   if t.get("lb")]
-        for i, lt in enumerate(lb_tags):
-            tag = tags.get(lt.get("id")) or (ordered[i] if i < len(ordered) else {})
-            name = tag.get("name") or f"tag{lt.get('id') or i}"
-            rows = lt.get("teams") or []
-            if rows:
-                n_divisions += 1
-            for r in rows:
-                rs.save_result(race_id, r.get("id"), name, _f(r.get("elapsed")),
-                               _f(r.get("cElapsed")), _f(r.get("tcf")), r.get("rankR"),
-                               bool(r.get("finished")), str(r.get("status") or ""))
-                n_results += 1
-    except Exception as exc:
-        return {"ok": True, "race_id": race_id, "teams": len(teams), "blocks": len(blocks),
-                "tracks": n_tracks, "results": 0, "divisions": 0,
-                "note": f"leaderboard unavailable ({type(exc).__name__}) — results skipped",
-                "unmatched_tracks": unanchored[:20]}
+def _name_key(name):
+    return fi._norm(name) or None
 
-    return {"ok": True, "race_id": race_id, "teams": len(teams), "blocks": len(blocks),
-            "tracks": n_tracks, "results": n_results, "divisions": n_divisions,
-            "unmatched_tracks": unanchored[:20]}
+
+def stable_ids(fleet: dict, existing: list) -> None:
+    """Give each uploaded boat the id it already has in the archive, matched by sail number,
+    else by name; a new boat gets the next unused id. Rewrites the fleet's teams, tracks and
+    results in place. Without this the ids follow the file's order, and a re-upload in another
+    order would hand each boat another boat's polar and scores."""
+    by_sail = {_sail_key(e.get("sail")): e["team_id"] for e in existing if _sail_key(e.get("sail"))}
+    by_name = {_name_key(e.get("boat")): e["team_id"] for e in existing if _name_key(e.get("boat"))}
+    nxt = max([e["team_id"] for e in existing] + [0]) + 1
+    used, remap = set(), {}
+    for t in fleet["teams"]:
+        tid = None
+        for key, table in ((_sail_key(t.get("sail")), by_sail), (_name_key(t.get("name")), by_name)):
+            if key and table.get(key) is not None and table[key] not in used:
+                tid = table[key]
+                break
+        if tid is None:
+            tid, nxt = nxt, nxt + 1
+        used.add(tid)
+        remap[t["id"]] = tid
+    for t in fleet["teams"]:
+        t["id"] = remap[t["id"]]
+    fleet["tracks"] = {remap[k]: v for k, v in fleet["tracks"].items()}
+    for r in fleet["results"]:
+        r["team_id"] = remap[r["team_id"]]
+
+
+def _summary(race_id, fleet):
+    results = fleet.get("results") or []
+    return {"ok": True, "race_id": race_id, "teams": len(fleet.get("teams") or []),
+            "blocks": fleet.get("blocks"), "tracks": len(fleet.get("tracks") or {}),
+            "results": len(results), "divisions": len({r["division"] for r in results}),
+            "unmatched_tracks": (fleet.get("unmatched") or [])[:20]}
+
+
+def store_fleet(race_id: str, fleet: dict) -> dict:
+    """Write a fetched provider's normalized fleet (YB) into the retro archive. Upserts, as YB
+    always did: YB team ids are the feed's own, so they stay put across re-fetches."""
+    if not fleet.get("ok"):
+        return fleet
+    rs.upsert_fleet(race_id, fleet.get("setup") or {}, fleet.get("start"),
+                    fleet.get("source") or "yb", fleet.get("teams") or [],
+                    fleet.get("tracks") or {}, fleet.get("results") or [])
+    out = _summary(race_id, fleet)
+    if fleet.get("results_note"):
+        out["note"] = fleet["results_note"]
+    return out
 
 
 _RESULT_HEAVY = ("isochrones", "laylines", "candidate_paths", "wind_grid", "current_grid",
@@ -222,8 +226,19 @@ def run_fleet(race_id: str, def_race_id: str = None, course_id: str = None, team
     bbox = optimizer.course_bbox(d, course_id)
     fields = {}          # start-hour bucket -> WindField
     done, failed = [], []
+    # The import this run scores (#345): a re-import mid-run (a fleet file uploaded again) changes
+    # the race's stamp, and every write below is refused once it has, so old routes never land
+    # against new tracks or ranks.
+    stamp = race.get("ingested_at")
     for e in targets:
-        start = float(e.get("start_epoch") or race["start_epoch"])
+        # A fleet file's boat starts on its own division's gun or isn't scored: it is never given
+        # another division's gun or its first fix (#345). A YB team falls back to the race start,
+        # as it always did.
+        start = e.get("start_epoch") or (race["start_epoch"] if race.get("source") != "file" else None)
+        if start is None:
+            failed.append({"boat": e["boat"], "note": trackers.no_start_note([e["boat"]])})
+            continue
+        start = float(start)
         bucket = int(start // 3600)
         wf = fields.get(bucket)
         if wf is None:
@@ -237,7 +252,7 @@ def run_fleet(race_id: str, def_race_id: str = None, course_id: str = None, team
             continue
 
         P = rs.get_polar(race_id, e["team_id"])
-        say(f"optimize {e['boat']} ({len(P)} polar pts, start +{round((start - race['start_epoch'])/60)}min)")
+        say(f"optimize {e['boat']} ({len(P)} polar pts, start +{round((start - (race['start_epoch'] or start))/60)}min)")
         try:
             result = optimizer.optimize_course(d, course_id, start, wf, polar=P, avoid=True,
                                                resolution=resolution, emit_exploration=False,
@@ -258,10 +273,11 @@ def run_fleet(race_id: str, def_race_id: str = None, course_id: str = None, team
         why = optimizer.incomplete_reason(result, (marks[-1][2], marks[-1][3]))
         if why:
             slim = {k: v for k, v in result.items() if k not in _RESULT_HEAVY}
-            rs.save_run(race_id, e["team_id"], "gun_forecast_partial",
-                        {"def_race_id": def_race_id, "course_id": course_id,
-                         "start_epoch": start, "resolution": resolution,
-                         "finish_gap_nm": round(gap_nm, 1)}, {}, slim)
+            if rs.save_run(race_id, e["team_id"], "gun_forecast_partial",
+                           {"def_race_id": def_race_id, "course_id": course_id,
+                            "start_epoch": start, "resolution": resolution,
+                            "finish_gap_nm": round(gap_nm, 1)}, {}, slim, stamp=stamp) is None:
+                return _stale(race_id, done, failed, fields)
             failed.append({"boat": e["boat"], "note": f"route incomplete — {why}"})
             continue
         slim = {k: v for k, v in result.items() if k not in _RESULT_HEAVY}
@@ -270,18 +286,26 @@ def run_fleet(race_id: str, def_race_id: str = None, course_id: str = None, team
                               "start_epoch": start, "resolution": resolution,
                               "polar_pts": len(P)},
                              {"models": [m for m in (result.get("wind_field") or {}).get("models", [])]},
-                             slim)
+                             slim, stamp=stamp)
+        if run_id is None:
+            return _stale(race_id, done, failed, fields)
         fixes = rs.get_track(race_id, e["team_id"])
         try:
             metrics = track_mod.score_track({"fixes": fixes}, result, marks, start, wf=wf, polars=P)
         except Exception as exc:
             metrics = {"available": False, "note": f"scoring error: {exc}"}
-        rs.save_score(race_id, e["team_id"], run_id, metrics)
+        if not rs.save_score(race_id, e["team_id"], run_id, metrics, stamp=stamp):
+            return _stale(race_id, done, failed, fields)
         done.append({"boat": e["boat"], "run_id": run_id,
                      "opt_hours": result.get("total_hours"),
                      "scored": bool(metrics.get("available"))})
     return {"ok": True, "race_id": race_id, "ran": len(done), "failed": failed[:20],
             "wind_fields": len(fields), "boats": done}
+
+
+def _stale(race_id, done, failed, fields):
+    return {"ok": False, "stale": True, "note": STALE, "race_id": race_id, "ran": len(done),
+            "failed": failed[:20], "wind_fields": len(fields), "boats": done}
 
 
 def _spearman(xs, ys):
@@ -425,6 +449,9 @@ def match_polars(race_id: str, country=None, def_race_id: str = None) -> dict:
     (its scoring list, else venue country + entrants' sail prefixes), else the entrants' sail
     prefixes alone. A sail-number match in any country's dump beats a name match; country order
     only breaks ties within the same kind of match."""
+    # the import these entries belong to (#345): a re-import while the ORC dumps load must not
+    # get the old entries' polars written onto its boat ids
+    stamp = (rs.get_race(race_id) or {}).get("ingested_at")
     entries = rs.get_entries(race_id)
     if not entries:
         return {"ok": False, "note": "race not ingested yet — run ingest first"}
@@ -466,7 +493,9 @@ def match_polars(race_id: str, country=None, def_race_id: str = None) -> dict:
         refno = next((rec.get(k) for k in ("RefNo", "CertNo", "FileId", "BIN") if rec.get(k)),
                      f"{rec.get('SailNo')}|{rec.get('YachtName')}")
         cert_id = rs.save_cert(country, refno, rec.get("YachtName"), rec.get("SailNo"), rec)
-        rs.save_polar(race_id, e["team_id"], cert_id, polar, by, conf)
+        if not rs.save_polar(race_id, e["team_id"], cert_id, polar, by, conf, stamp=stamp):
+            return {"ok": False, "stale": True, "note": STALE_POLARS, "race_id": race_id,
+                    "matched": matched}
         matched += 1
     return {"ok": True, "race_id": race_id, "entries": len(entries), "matched": matched,
             "countries": [cc for cc, _ in idxs],
