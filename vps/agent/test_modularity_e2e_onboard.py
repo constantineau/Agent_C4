@@ -490,6 +490,7 @@ def test_practice_on_bravo_with_sr33s_playbook_no_sr33_plays_or_copilot(tmp_path
         p = client.get("/plays").json()
         assert p.get("available") is False and p.get("plays_off") is True, p
         assert p["note"] == "Playbook is for C4. Plays off." and "plays" not in p, p
+        assert "sail_state" in p, p           # the copilot brief reads what is flying from here
         cp = client.get("/playbook/copilot").json()
         assert cp["hash"] is None and cp["playbook_off"] is True, cp
         assert cp["boat"]["boat_id"] == "bravo" and cp["boat"]["profile"]["name"] == "Bravo", cp

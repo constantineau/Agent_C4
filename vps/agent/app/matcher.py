@@ -513,7 +513,8 @@ def get_plays(route=None):
         off = None
     if off:
         clear_state()                   # nothing half-sustained carries over when the boat comes back
-        return {"available": False, "plays_off": True, "note": off}
+        # sail state still flows: the copilot brief reads what is flying from here (ceilings)
+        return {"available": False, "plays_off": True, "note": off, "sail_state": get_sail_state()}
     plays = bundle.get("plays") or []
     if not plays:
         return {"available": False,
