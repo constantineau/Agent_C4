@@ -1507,8 +1507,8 @@ async function optSetChart(src) {
 async function optSaveDraft() {
   const v = parseFloat(document.getElementById("optDraft").value);
   if (isNaN(v) || v <= 0) return;
+  const m = depthUnit() === "m" ? v : v * 0.3048;                  // entered in the Lab's unit, read before any await
   const full = (await (await apiGet("/api/boats/" + encodeURIComponent(Opt.activeBoat))).json()).boat || {};
-  const m = depthUnit() === "m" ? v : v * 0.3048;                  // entered in the Lab's unit
   full.draft_m = Math.round(m * 10000) / 10000;                    // stored in metres
   await apiPost("/api/boats", full);
   await reloadBoats(); renderGameplan();
