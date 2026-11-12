@@ -11,6 +11,7 @@ One function decides it (`resolve`), used by the optimizer, the playbook synth/f
 """
 import time
 
+from shared import race_def
 from shared.race_def import _gun_epoch
 
 
@@ -43,6 +44,10 @@ def resolve(definition, start_epoch=None, now=None):
     if start_epoch not in (None, "", 0):
         return {"epoch": float(start_epoch), "source": "picked", "race_start": rs,
                 "note": "Routed from the start you picked."}
+    if rs is None and race_def.timezone_issues(definition or {})[0]:
+        return {"epoch": now, "source": "now_no_gun", "race_start": None,
+                "note": "Gun times need the race's time zone, so it routed from now. "
+                        "Set the time zone in race review, or pick a Start."}
     if rs is None:
         return {"epoch": now, "source": "now_no_gun", "race_start": None,
                 "note": "No gun time is set for this race, so it routed from now. "

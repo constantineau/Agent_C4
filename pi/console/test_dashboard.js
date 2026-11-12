@@ -618,6 +618,25 @@ test("#295 no Orin / no copilot (any boat): no line, no error", async () => {
   }
 });
 
+/* ---------------- #312 ---------------- */
+test("#312 auto day/night follows the live fix, else the course's first mark — no fixed venue", () => {
+  const T = load();
+  T.set(Date.UTC(2027, 5, 21, 12, 0));              // 12:00 UTC: London noon, Sydney 22:00
+  const A = T.D.App;
+  A.theme = "auto";
+  ok(T.D.sunElevation(51.5, -0.1, new Date(T.now())) > 55, "London noon sun too low");
+  A.nav = { position: { lat: -33.86, lon: 151.2 } };
+  ok(T.D.resolveTheme() === "night", "Sydney at 22:00 was day");
+  A.nav = { position: { lat: 51.5, lon: -0.1 } };
+  ok(T.D.resolveTheme() === "day", "London at noon was night");
+  A.nav = { position: { lat: null, lon: null } };    // no fix
+  A.courseFirst = { lat: -33.86, lon: 151.2 };
+  ok(T.D.resolveTheme() === "night", "fallback to the first mark not used");
+  A.courseFirst = null;
+  const r = T.D.resolveTheme();
+  ok(r === "day" || r === "night", "no position at all: " + r);
+});
+
 (async () => {
   let fails = 0;
   for (const [name, fn] of cases) {

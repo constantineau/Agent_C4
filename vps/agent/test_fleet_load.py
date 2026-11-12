@@ -230,7 +230,7 @@ try:
     from app import tracker
     tracker._reset_cache()
     _orig_fetch = tracker._fetch
-    tracker._fetch = lambda cfg: ([{"name": "Defiance", "lat": 45.20, "lon": -83.00, "sog": 6.0,
+    tracker._fetch = lambda cfg, centre=None: ([{"name": "Defiance", "lat": 45.20, "lon": -83.00, "sog": 6.0,
                                     "cog": 0, "time": None}], None)
     tk = tracker.positions({"provider": "x", "url": "u"}, now=1_000_000.0)
     fx = tk["positions"][0]
