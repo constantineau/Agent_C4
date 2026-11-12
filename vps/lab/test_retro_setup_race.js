@@ -43,7 +43,7 @@ const ctx = vm.createContext({
     pending[id] = () => resolve({ ok: true, json: async () => SETUP[id] });
   }),
 });
-vm.runInContext(fnSource("retroSetup") + "\nthis.retroSetup = retroSetup;", ctx);
+vm.runInContext(fnSource("retroReadYb") + "\n" + fnSource("retroSetup") + "\nthis.retroSetup = retroSetup;", ctx);
 
 (async () => {
   console.log("A slow answer for an earlier pick is dropped");

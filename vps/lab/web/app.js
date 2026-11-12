@@ -4175,11 +4175,16 @@ function retroReportHtml() {
 async function retroRefresh() {
   try { Retro.races = (await (await apiGet("/api/retro/races")).json()).races || []; } catch (e) { Retro.races = []; }
 }
+// The typed YB id, when the box is on the page; else keep what we have (the card may not be drawn yet)
+function retroReadYb() {
+  const box = document.getElementById("retroYb");
+  if (box && typeof box.value === "string") Retro.ybId = box.value.trim();
+  return Retro.ybId;
+}
 // Pick the race whose course the fleet is routed on: fills its YB id (if the box is empty), course
 // and ORC countries from the race definition.
 async function retroSetup(defRace) {
-  const box = document.getElementById("retroYb");
-  if (box) Retro.ybId = box.value.trim();
+  retroReadYb();
   Retro.defRace = defRace || ""; Retro.setup = null; Retro.courseId = null;
   if (defRace) {
     let setup = null;
@@ -4207,7 +4212,7 @@ async function retroPick(raceId) {
   await retroReport();
 }
 async function retroIngest() {
-  Retro.ybId = document.getElementById("retroYb").value.trim();
+  retroReadYb();
   Retro.busy = true; Retro.msg = "getting tracks and results…"; paintDebrief();
   try {
     const r = await (await api("/api/retro/ingest", { method: "POST", headers: { "Content-Type": "application/json" }, body: retroBody() })).json();
@@ -4216,7 +4221,7 @@ async function retroIngest() {
   Retro.busy = false; await retroRefresh(); paintDebrief();
 }
 async function retroPolars() {
-  Retro.ybId = document.getElementById("retroYb").value.trim();
+  retroReadYb();
   Retro.busy = true; Retro.msg = "finding ORC polars…"; paintDebrief();
   try {
     // Countries come from the picked race (its list, else venue + sail numbers), else sail numbers
@@ -4226,7 +4231,7 @@ async function retroPolars() {
   Retro.busy = false; await retroRefresh(); paintDebrief();
 }
 async function retroRun() {
-  Retro.ybId = document.getElementById("retroYb").value.trim();
+  retroReadYb();
   Retro.msg = "";
   if (!Retro.defRace) { Retro.msg = "Pick a race to route on."; paintDebrief(); return; }
   try {
@@ -4244,7 +4249,7 @@ async function retroPoll() {
   if (location.hash.replace("#", "") === "debrief") paintDebrief();
 }
 async function retroReport() {
-  Retro.ybId = document.getElementById("retroYb").value.trim();
+  retroReadYb();
   Retro.busy = true; Retro.msg = "building report…"; paintDebrief();
   try { Retro.report = await (await apiGet("/api/retro/report?race_id=" + encodeURIComponent(Retro.ybId))).json(); Retro.msg = ""; }
   catch (e) { Retro.msg = "report failed"; }
