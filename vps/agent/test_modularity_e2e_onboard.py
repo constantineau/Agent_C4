@@ -200,6 +200,151 @@ def test_coach_prompt_is_bravos():
     assert "sr33" not in text.lower()
 
 
+# ==== #313: Bravo's own kit (sensor priority, house bank, Orin, plotter) ==========================
+def _push_profile(profile):
+    """Bravo's profile as the Lab's Deploy push carries it (POST /reroute/assets)."""
+    from app import hardware
+    a = client.post("/reroute/assets", json={
+        "schema": "c4.orin-assets/v1", "race_id": "channel-offshore-test", "course_id": "c",
+        "boat_id": "bravo", "boat": profile, "boat_version": boat_profile.version(profile),
+        "chart": None, "polar": boat_polar.resolve(profile)})
+    assert a.status_code == 200 and a.json().get("loaded"), a.text
+    hardware.clear_cache()
+
+
+BRAVO_KIT = {"source_priority": {"heel": ["h5000", "zg100"], "tws": ["h5000", "derived"]},
+             "battery": {"nominal_v": 24, "chemistry": "lithium"}, "orin": False, "plotter": False}
+
+
+def test_kit_is_bravos_own():
+    """Bravo's profile says what it carries: its sensor priority, a 24 V lithium bank, no Orin
+    and no plotter. Each is honoured, and nothing of sr33's kit is left in force."""
+    from app import gpsout, power
+    from shared import boat_hardware, source_policy
+    _push_profile(dict(BRAVO, hardware=BRAVO_KIT))
+    try:
+        assert source_policy.matchers_for("heel") == ["h5000", "zg100"]
+        assert source_policy.matchers_for("navigation.speedOverGround") == []   # none of sr33's
+        lines = power._boat_lines()
+        assert lines["floor_v"] == 24.0 and lines["chemistry"] == "lithium" and not lines["assumed"]
+        r = client.post("/playbook/load", json={"bundle": bravo_bundle()}).json()
+        assert r["loaded"] and r["copilot"] == {"loaded": False, "absent": True,
+                                                 "detail": boat_hardware.NO_ORIN}, r
+        assert gpsout.show()["note"] == boat_hardware.NO_PLOTTER
+    finally:
+        _push_profile(BRAVO)
+
+
+def test_kit_unset_is_said_never_sr33s():
+    """Bravo's profile says nothing of its kit: no priority (freshest source, said), a 12 V
+    lead-acid bank that the tile calls assumed, an Orin. Never sr33's devices."""
+    from app import power, sensor_health
+    from shared import boat_hardware, source_policy
+    _push_profile(BRAVO)
+    assert source_policy.active_priority() == {}
+    ch = {"heel": {"preferred": {"source": "can0.7", "value": 3.0, "age_s": 1},
+                   "readings": [{"source": "can0.7", "value": 3.0, "age_s": 1}]}}
+    pb = sensor_health.assess_provenance(ch)["checks"]["policy_binds"]
+    assert pb["no_policy"] and pb["reason"] == boat_hardware.NO_PRIORITY, pb
+    lines = power._boat_lines()
+    assert lines["floor_v"] == 11.0 and lines["assumed"] is True
+
+
+def test_kit_is_the_newest_copy_not_the_one_with_a_polar():
+    """Codex on #338: an older library copy WITH a polar and a newer Deploy push with no polar,
+    no Orin and no plotter. The polar comes from the library (boat_for); the kit from the newest
+    copy, so the engine never calls the absent Orin or pushes to a missing plotter."""
+    from app import boatlib, gpsout, hardware
+    from shared import boat_hardware
+    old = dict(BRAVO, hardware={"orin": True, "plotter": {"max_route_waypoints": 250}})
+    lib = {"schema": boatlib.SCHEMA, "built_at": 1, "boats": [
+        {"boat_id": "bravo", "name": BRAVO["name"], "profile": old,
+         "boat_version": boat_profile.version(old), "polar": boat_polar.resolve(old)}]}
+    assert boatlib.store(lib, now=1)["stored"]
+    new = dict(BRAVO, hardware={"orin": False, "plotter": False})
+    a = client.post("/reroute/assets", json={
+        "schema": "c4.orin-assets/v1", "race_id": "channel-offshore-test", "course_id": "c",
+        "boat_id": "bravo", "boat": new, "boat_version": boat_profile.version(new),
+        "chart": None, "polar": None})
+    assert a.status_code == 200 and a.json().get("loaded"), a.text
+    hardware.clear_cache()
+    try:
+        assert boatlib.boat_for("bravo")["from"] == "library"      # the polar: the library's
+        assert not hardware.has_orin("bravo") and not hardware.has_orin()
+        assert client.get("/reroute/assets").json()["orin"] is False   # what the Lab's check reads
+        r = client.post("/playbook/load", json={"bundle": bravo_bundle()}).json()
+        assert r["copilot"].get("absent") is True, r
+        assert gpsout.show()["note"] == boat_hardware.NO_PLOTTER
+    finally:
+        boatlib.store({"schema": boatlib.SCHEMA, "built_at": 2, "boats": []})
+        _push_profile(BRAVO)
+
+
+def test_legacy_profile_takes_its_own_boats_seed(tmp_path):
+    """Codex on #338: a Pi whose stored profile predates the hardware block keeps that boat's
+    sensor priority from the seed baked into the engine image (boat-id scoped), never another
+    boat's, and with no seed for the boat there is none."""
+    from app import hardware
+    from shared import boat_hardware, source_policy
+    seed = tmp_path / "seed"
+    boats = tmp_path / "boats"
+    boats.mkdir()
+    (boats / "bravo.json").write_text(json.dumps(dict(BRAVO, hardware=BRAVO_KIT)))
+    (boats / "other.json").write_text(json.dumps({"boat_id": "other", "name": "Other",
+                                                  "draft_m": 2.0, "hardware": {"orin": False}}))
+    (boats / "liar.json").write_text(json.dumps({"boat_id": "../x", "hardware": {}}))
+    assert boat_hardware.seed_files(str(boats), str(seed)) == ["bravo", "other"]
+    assert json.loads((seed / "bravo.json").read_text()) == {"boat_id": "bravo",
+                                                              "hardware": BRAVO_KIT}
+    _push_profile(BRAVO)                         # stored aboard with no hardware block
+    saved = list(hardware.SEED_DIRS)
+    hardware.SEED_DIRS[:] = [str(seed)]
+    hardware.clear_cache()
+    try:
+        assert source_policy.matchers_for("heel") == ["h5000", "zg100"]
+        # a seed file that names another boat is never taken
+        (seed / "bravo.json").write_text(json.dumps({"boat_id": "other", "hardware": BRAVO_KIT}))
+        hardware.clear_cache()
+        assert source_policy.active_priority() == {}
+        (seed / "bravo.json").unlink()
+        hardware.clear_cache()
+        assert source_policy.active_priority() == {} and hardware.has_orin()
+        # an explicit empty block on the older copy stands: it is not "no block" (Codex on #338)
+        (seed / "bravo.json").write_text(json.dumps({"boat_id": "bravo", "hardware": BRAVO_KIT}))
+        from app import boatlib
+        lib = {"schema": boatlib.SCHEMA, "built_at": 1, "boats": [
+            {"boat_id": "bravo", "name": BRAVO["name"], "profile": dict(BRAVO, hardware={}),
+             "boat_version": boat_profile.version(dict(BRAVO, hardware={})),
+             "polar": boat_polar.resolve(BRAVO)}]}
+        assert boatlib.store(lib, now=1)["stored"]          # older than the push
+        hardware.clear_cache()
+        try:
+            assert source_policy.active_priority() == {} and hardware.has_orin()
+            assert hardware.profile()["hardware"] == {}
+        finally:
+            boatlib.store({"schema": boatlib.SCHEMA, "built_at": 2, "boats": []})
+    finally:
+        hardware.SEED_DIRS[:] = saved
+        hardware.clear_cache()
+
+
+def test_engine_image_seed_is_hardware_only():
+    """The Pi engine image's seed, built as its Dockerfile builds it: the bundled boats' hardware
+    blocks only (no polar, no other profile field), sr33's equal to its profile's."""
+    with open(os.path.join(ENGINE_DIR, "Dockerfile")) as f:
+        assert "shared.boat_hardware /tmp/boats ./knowledge/boat_hardware" in f.read()
+    from shared import boat_hardware
+    out = tempfile.mkdtemp()
+    bdir = os.path.join(REPO, "vps", "lab", "boats")
+    ids = boat_hardware.seed_files(bdir, out)
+    assert "sr33" in ids
+    for bid in ids:
+        with open(os.path.join(out, f"{bid}.json")) as f:
+            s = json.load(f)
+        with open(os.path.join(bdir, f"{bid}.json")) as f:
+            assert set(s) == {"boat_id", "hardware"} and s["hardware"] == json.load(f)["hardware"]
+
+
 # ==== boat id: never "sr33" by default ===========================================================
 ENGINE_MODULES = ["app.datasource", "app.datasource_onboard", "app.onboard_conditions", "app.ais",
                   "app.fatigue", "app.navigator", "app.sensor_health", "engine_app"]

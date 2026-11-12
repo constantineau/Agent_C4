@@ -33,11 +33,12 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from shared import archiver_status, n2k_sources
+from shared import archiver_status, boat_hardware, n2k_sources
 from app import (navigator, tactics, routing, weather, sails, fatigue, onboard_conditions,
                  datasource, ais, fleet, deviation, drift, selector, reoptimize, strategy,
                  matcher, buoys, racelog, watches, trend, plangap, gpsout, checklist,
-                 power, sensor_health, plume, orinroute, orinassets, racegate, boatlib)
+                 power, sensor_health, plume, orinroute, orinassets, racegate, boatlib,
+                 hardware)
 
 app = FastAPI(title="Agent_C4 Onboard Engine", version="0.1.0")
 # The iPad reaches the Pi directly over boat-local Wi-Fi in race mode; allow cross-origin so a
@@ -460,8 +461,16 @@ def reroute_assets_load(body: dict):
 
 @app.get("/reroute/assets")
 def reroute_assets_get():
-    """Which chart and boat profile the Orin's re-route gets (no geometry)."""
-    return orinassets.get()
+    """Which chart and boat profile the Orin's re-route gets (no geometry), and whether that boat
+    has an Orin by the profile THIS Pi holds (#313): the Lab's live check takes it from here,
+    never from an unpushed Lab edit."""
+    out = orinassets.get()
+    if isinstance(out, dict):
+        try:
+            out = dict(out, orin=hardware.has_orin(out.get("boat_id")))
+        except Exception:  # noqa: BLE001 — unknown: the Lab then assumes an Orin
+            pass
+    return out
 
 
 @app.get("/tactics")
@@ -578,7 +587,11 @@ def playbook_load(body: dict):
         plangap.reset_state()            # the plan-gap read measures against the NEW promise
         matcher.clear_state()            # forget play arm/sustain memory too
         selector.reset_state()           # and the card's held verdict + downwind clock (#40)
-        cop = copilot_load(bundle)       # still under the lock: the Orin writes before a race can start
+        # a boat whose profile says it has no Orin (#313): nothing to send, said plainly
+        if hardware.has_orin((bundle.get("boat_model") or {}).get("boat_id")):
+            cop = copilot_load(bundle)   # still under the lock: the Orin writes before a race can start
+        else:
+            cop = {"loaded": False, "absent": True, "detail": boat_hardware.NO_ORIN}
     return {"loaded": True, "race_id": bundle.get("race_id"),
             "variants": len(bundle.get("variants") or []),
             "plays": len(bundle.get("plays") or []),

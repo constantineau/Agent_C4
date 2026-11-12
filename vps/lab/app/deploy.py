@@ -17,7 +17,7 @@ import os
 import threading
 import time
 
-from shared import race_def
+from shared import boat_hardware, race_def
 
 from . import store, pbstore, labstate, orinassets
 
@@ -231,23 +231,34 @@ def _push(race_id):
         step("pi-engine", "checklist", f"{eng}/checklist/load", pkg["checklist_load"], check=taken)
     if pkg.get("watch_load"):
         step("pi-engine", "watch", f"{eng}/watch", pkg["watch_load"], check=taken)
+    # a boat with no Orin (#313): no copilot step, said plainly, so a Pi-only boat's push can be
+    # all green and a real failure still shows. Only the Pi's word counts (its `copilot` answer
+    # says `absent`, by the profile IT holds): the Lab's own profile never hides an Orin result.
+    orin = True
     if bundle:
         step("pi-engine", "playbook", f"{eng}/playbook/load", bundle,
              check=lambda r: r.get("loaded"))
         # the engine forwarded it to the Orin under its race-log lock; its answer is `copilot`
         pb = steps[-1]
         cop = (pb["detail"] or {}).get("copilot") if pb["ok"] else None
-        if not isinstance(cop, dict):
+        if isinstance(cop, dict) and cop.get("absent"):
+            orin = False                 # the Pi skipped it: the profile it holds says no Orin
+        if not orin:
+            pass
+        elif not isinstance(cop, dict):
             cop = {"loaded": False, "error": (pb["detail"] or {}).get("error")
                    or ("Not sent: the Pi didn't load it." if not pb["ok"]
                        else "The Pi didn't send it to the Orin. Update the Pi.")}
         elif not cop.get("loaded") and not cop.get("error"):
             cop = dict(cop, error=str(cop.get("detail") or "Not loaded.")[:200])
-        steps.append({"target": "orin-copilot", "step": "playbook", "ok": bool(cop.get("loaded")),
-                      "detail": cop})
+        if orin:
+            steps.append({"target": "orin-copilot", "step": "playbook",
+                          "ok": bool(cop.get("loaded")), "detail": cop})
     res = {"race_id": race_id, "playbook_id": lock.get("playbook_id"),
            "pushed_playbook": bool(bundle), "ok": bool(steps) and all(s["ok"] for s in steps),
            "steps": steps}
+    if not orin:
+        res["notes"] = [boat_hardware.NO_ORIN]
     if stopped:
         res["detail"] = RACE_STARTED
     # the signature of the bundle actually sent — a re-freeze under the same id changes it
@@ -285,6 +296,7 @@ def record_push(res, race_name=None, signature=None, now=None):
            "playbook_id": res.get("playbook_id") if res.get("pushed_playbook") else None,
            "signature": (signature or "") if res.get("pushed_playbook") else "",
            "ok": bool(res.get("ok")),
+           "notes": [str(n)[:120] for n in (res.get("notes") or [])][:4],
            "steps": [{"target": s.get("target"), "step": s.get("step"), "ok": bool(s.get("ok")),
                       "detail": _trim_detail(s.get("detail"))} for s in res.get("steps") or []]}
     labstate.update({_PUSH_LAST: rec, _PUSH_LAST_OK: rec} if rec["ok"] else {_PUSH_LAST: rec})
@@ -364,6 +376,8 @@ def boat_status(get=None):
     if assets_ok:            # an engine from before #139 answers 404: nothing shown
         engine["orin_assets"] = {k: assets.get(k) for k in (
             "available", "race_id", "course_id", "chart", "boat_id", "boat_version", "received_at")}
+        if "orin" in assets:             # the Pi's word on its boat's Orin (#313); older: unsaid
+            engine["orin_assets"]["orin"] = assets["orin"]
 
     copilot = {"reachable": bool(cop_ok), "error": None if cop_ok else health.get("error"),
                "playbook": None}
@@ -373,6 +387,12 @@ def boat_status(get=None):
                                "variants": p.get("variants"), "signed": p.get("signed"),
                                "signature_ok": p.get("signature_ok")}
         copilot["mode"] = health.get("mode")
+    # the Pi says its boat has no Orin (#313), by the profile it holds: not "unreachable". Only
+    # the Pi's word counts (an unpushed Lab edit must never hide a real Orin failure); an older
+    # engine that doesn't say → an Orin.
+    if assets_ok and assets.get("orin") is False:
+        copilot = {"reachable": False, "absent": True, "error": None, "playbook": None,
+                   "note": boat_hardware.NO_ORIN}
     return {"checked_at": int(time.time()), "engine": engine, "copilot": copilot,
             "reachable": engine["reachable"] or copilot["reachable"]}
 

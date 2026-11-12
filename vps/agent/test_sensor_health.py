@@ -35,6 +35,13 @@ os.environ.setdefault("DATA_SOURCE", "onboard")
 os.environ.setdefault("ONBOARD_LIVE_WS", "false")
 
 from app import sensor_health as sh   # noqa: E402
+# the reference boat's own sensor priority, from its profile (#313): these checks are about its bus
+import json as _json   # noqa: E402
+from shared import boat_hardware as _BH, source_policy as _SP   # noqa: E402
+with open(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                       "vps", "lab", "boats", "sr33.json")) as _f:
+    SR33_PRIORITY = _BH.source_priority(_json.load(_f))
+_SP.set_priority(SR33_PRIORITY)
 
 ok = True
 
@@ -348,16 +355,15 @@ print("provenance — a policy that cannot bind (the defect shape, six times ove
 # `orca`/`24xd`/`reactor` matched NOTHING for most of this project's life, because `$source` is
 # an N2K address. An unmatched matcher and a satisfied one look identical unless asserted.
 import shared.source_policy as sp   # noqa: E402
-_orig = sp.DEFAULT_PRIORITY
 try:
-    sp.DEFAULT_PRIORITY = dict(_orig, tws=["garmin-gwind", "orca"])
+    sp.set_priority(dict(SR33_PRIORITY, tws=["garmin-gwind", "orca"]))
     p = sh.assess_provenance(HEALTHY, ais_excluded={AIS})
     check("a matcher naming no device on the bus is a warn, not silence",
           p["status"] == "warn" and "garmin-gwind" in p["checks"]["policy_binds"]["unresolvable"])
     check("...and says what it means: those channels are unranked in practice",
           "using any source" in p["checks"]["policy_binds"]["reason"])
 finally:
-    sp.DEFAULT_PRIORITY = _orig
+    sp.set_priority(SR33_PRIORITY)
 
 print("provenance — guards:")
 check("no channels at all is 'unknown', never a false all-clear",

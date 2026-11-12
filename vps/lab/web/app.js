@@ -2658,7 +2658,9 @@ function boatPanelInner() {
     if (eng.course) rows.push(`<div class="dep-row"><span class="pill" style="visibility:hidden">● Pi engine</span><span>course: ${eng.course.available ? `${esc(eng.course.route || "?")} · ${eng.course.marks} marks${eng.course.mark_names && eng.course.mark_names.length ? ` <span class="muted">(${eng.course.mark_names.map(esc).join(" → ")})</span>` : ""}` : "none loaded"}</span></div>`);
     const oa = eng.orin_assets;
     if (oa) rows.push(`<div class="dep-row"><span class="pill" style="visibility:hidden">● Pi engine</span><span>re-route: ${!oa.available ? "no chart or boat profile" : `${oa.chart ? `chart for ${esc(oa.course_id || "?")}` : "no chart"} · ${oa.boat_id ? `boat ${esc(oa.boat_id)} <code>${esc(oa.boat_version || "")}</code>` : "no boat profile"}`}</span></div>`);
-    rows.push(`<div class="dep-row">${okPill(cop.reachable, "Orin copilot")}<span>${cop.reachable ? "playbook: " + pbText(cpb) : "unreachable" + (cop.error ? " — " + esc(cop.error) : "")}</span></div>`);
+    // a boat with no Orin (#313): said, not shown as a failure
+    if (cop.absent) rows.push(`<div class="dep-row"><span class="pill">– Orin copilot</span><span class="muted">${esc(cop.note || "No Orin on this boat.")}</span></div>`);
+    else rows.push(`<div class="dep-row">${okPill(cop.reachable, "Orin copilot")}<span>${cop.reachable ? "playbook: " + pbText(cpb) : "unreachable" + (cop.error ? " — " + esc(cop.error) : "")}</span></div>`);
     live = `<div class="muted" style="font-size:12px">Checked · ${esc(depStamp(b.checked_at))}</div><div class="dep-grid">${rows.join("")}</div>`;
 
     // live mismatches
@@ -2695,7 +2697,7 @@ function boatPanelInner() {
   // push-record mismatches: the only signal when the boat is unreachable, and the fallback when an
   // older engine can't say exactly which playbook it holds (no bundle id in its answer), or the
   // copilot can't be read at all
-  if (!(b && b.reachable && epb && epb.id && cop.reachable)) {
+  if (!(b && b.reachable && epb && epb.id && (cop.reachable || cop.absent))) {
     const ref = (last && last.ok) ? last : lastOk;
     if (ref && ref.race_id !== rid) { if (!liveRace) warns.push(`The last complete push was for <b>${esc(ref.race_name || ref.race_id)}</b>, not this race. This race's prep hasn't gone to the boat.`); }
     else if (lock && ref && ref.playbook_id === lock.playbook_id && (ref.signature || "") !== (lock.signature || ""))
@@ -2735,7 +2737,7 @@ function deployPanel(lock, t) {
   const resHtml = !res ? "" : res.pushing ? `<div class="banner" style="margin-top:10px">Pushing to the boat…</div>`
     : res.refused ? `<div class="banner warn" style="margin-top:10px">⚠ ${esc(res.detail || "Race started. Not sent.")}</div>`
     : `<div class="banner ${res.ok ? "ok" : "warn"}" style="margin-top:10px">${res.ok ? "✓ Boat loaded. The iPad updates by itself." : "⚠ Push didn't finish. Fix it and push again."}</div>
-       <div class="dep-grid" style="margin-top:8px">${(res.steps || []).map(stepRow).join("")}</div>`;
+       <div class="dep-grid" style="margin-top:8px">${(res.steps || []).map(stepRow).join("")}</div>${(res.notes || []).map((n) => `<div class="muted" style="margin-top:6px">${esc(n)}</div>`).join("")}`;
   return `<div class="card">
     <h3>Send to the boat</h3>
     <div class="muted" style="font-size:12px;margin-bottom:8px">Sends course, fleet, checklist, watch plan and playbook to the boat. Replaces what's there. If the boat is offline, use the downloads below.</div>

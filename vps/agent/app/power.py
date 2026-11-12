@@ -30,9 +30,12 @@ Design notes, mostly inherited from mistakes made elsewhere in this repo:
     read as "the bank is dying". Quantising a continuous quantity to fire a discrete alarm is
     the failure shape this codebase has now hit **four** times, and `_tripped` was the fourth.
   - **Chemistry-independent trend rule.** Absolute thresholds depend on chemistry and bank
-    size, which are not recorded anywhere in this repo — the defaults below are conservative
-    12 V lead-acid figures and MUST be confirmed against the real bank. The drain rule (V/h
-    plus a projection to the floor) needs no such knowledge and is the part to trust first.
+    voltage, which come from the boat's profile (`hardware.battery`, #313): the lines below are
+    the 12 V lead-acid set and scale from the bank's nominal voltage and chemistry
+    (shared/boat_hardware.battery_lines). A profile that says nothing gets 12 V lead-acid, and
+    the tile says it was assumed. A `POWER_*` env line, when set, still wins (one kit's
+    override). The drain rule (V/h plus a projection to the floor) needs no such knowledge and
+    is the part to trust first.
   - **Charging is not an alarm, but it does not clear a floor-level either.** A rising slope
     means the alternator or shore power is on; Jul 18's recovery to 13.30 V by 05:00Z was the
     motor home. A bank sustained near the floor still reports `danger` while charging — charging
@@ -43,7 +46,7 @@ import os
 import statistics
 import time as _time
 
-from shared import staleness
+from shared import boat_hardware, staleness
 
 from . import datasource
 
@@ -60,18 +63,54 @@ SUSTAIN_MIN = float(os.environ.get("POWER_SUSTAIN_MIN", "10"))  # raise-slow dwe
 # (20:40:30Z) the bank read 11.65 V / min 11.41 — unremarkable against the preceding hour — so
 # "the flat bank killed the archiver" is a guess the record does not back. Absolute lines now
 # exist only at the bottom of everything this boat has ever recorded; the rest is trend.
-FLOOR_V = float(os.environ.get("POWER_FLOOR_V", "11.0"))
+# These module lines are the 12 V lead-acid set (or the env's); a boat's own bank scales them
+# (`lines_for`, #313). The figures and their history are the 12 V set in shared/boat_hardware.py.
+_12V = boat_hardware.battery_lines(None)
+_ENV_LINES = {"floor_v": "POWER_FLOOR_V", "danger_margin_v": "POWER_DANGER_MARGIN_V",
+              "drain_level_v": "POWER_DRAIN_LEVEL_V", "drain_warn_v_per_h": "POWER_DRAIN_WARN_V_PER_H",
+              "charge_v_per_h": "POWER_CHARGE_V_PER_H"}
+
+
+def _env_line(key):
+    v = (os.environ.get(_ENV_LINES[key]) or "").strip()
+    return float(v) if v else None
+
+
+def _line(key):
+    v = _env_line(key)
+    return _12V[key] if v is None else v
+
+
+FLOOR_V = _line("floor_v")
 # danger = the dwell median within this margin of the floor: sustained ≤ 11.3 V, rarer than the
 # 1st percentile of the whole record. Momentary winch sags to 11.1 are normal and never trip it.
-DANGER_MARGIN_V = float(os.environ.get("POWER_DANGER_MARGIN_V", "0.3"))
+DANGER_MARGIN_V = _line("danger_margin_v")
 # The drain warn only arms below this level — under the loaded plateau both race days sat on.
-DRAIN_LEVEL_V = float(os.environ.get("POWER_DRAIN_LEVEL_V", "11.5"))
-DRAIN_WARN_V_PER_H = float(os.environ.get("POWER_DRAIN_WARN_V_PER_H", "0.15"))
+DRAIN_LEVEL_V = _line("drain_level_v")
+DRAIN_WARN_V_PER_H = _line("drain_warn_v_per_h")
 DRAIN_WARN_HOURS = float(os.environ.get("POWER_DRAIN_WARN_HOURS", "6"))
-CHARGE_V_PER_H = float(os.environ.get("POWER_CHARGE_V_PER_H", "0.10"))
+CHARGE_V_PER_H = _line("charge_v_per_h")
 # `POWER_CLEAR_MARGIN_V` was a Schmitt release band here until 2026-09-08. It is gone rather
 # than left reading 0.15 and doing nothing: the dwell median is the release band now (see
 # `_tripped`), and an env knob with no effect is the failure this repo has hit six times.
+ASSUMED = "Bank type not set: 12 V lead-acid assumed."
+
+
+def lines_for(bank=None):
+    """The lines one assessment runs on. `bank` is shared/boat_hardware.battery_lines(profile)
+    (the boat's bank, #313); None → the module lines (12 V lead-acid, or the env's), as before.
+    An env line that is set wins over the boat's: it is this kit's explicit override."""
+    if bank is None:
+        return {"floor_v": FLOOR_V, "danger_margin_v": DANGER_MARGIN_V,
+                "drain_level_v": DRAIN_LEVEL_V, "drain_warn_v_per_h": DRAIN_WARN_V_PER_H,
+                "charge_v_per_h": CHARGE_V_PER_H, "nominal_v": 12.0, "chemistry": "lead_acid",
+                "assumed": None}
+    out = dict(bank)
+    for k in _ENV_LINES:
+        v = _env_line(k)
+        if v is not None:
+            out[k] = v
+    return out
 
 
 def _slope_v_per_h(rows):
@@ -179,9 +218,12 @@ def _tripped(rows, threshold, now):
     return statistics.median(dwell) <= threshold
 
 
-def assess_series(rows, now=None):
+def assess_series(rows, now=None, lines=None):
     """Bank state from [(epoch_s, volts)], newest last. Pure — the replay rig and the test feed
-    it recorded data and get exactly what the boat would have said at that moment."""
+    it recorded data and get exactly what the boat would have said at that moment. `lines` is
+    `lines_for(...)`; None → the module lines (12 V lead-acid, or the env's)."""
+    L = lines if lines is not None else lines_for(None)
+    floor_v, danger_v = L["floor_v"], L["floor_v"] + L["danger_margin_v"]
     if not rows:
         return {"available": False, "status": "unknown",
                 "note": f"no {PATH} in the last {WINDOW_MIN:g} min"}
@@ -200,11 +242,11 @@ def assess_series(rows, now=None):
     dwell = [v for t, v in window if t >= now - SUSTAIN_MIN * 60.0] or [window[-1][1]]
     decided = statistics.median(dwell)
     slope = _slope_v_per_h(window)
-    charging = slope is not None and slope >= CHARGE_V_PER_H
+    charging = slope is not None and slope >= L["charge_v_per_h"]
 
     hours_to_floor = None
-    if slope is not None and slope < 0 and level > FLOOR_V:
-        hours_to_floor = (level - FLOOR_V) / -slope
+    if slope is not None and slope < 0 and level > floor_v:
+        hours_to_floor = (level - floor_v) / -slope
 
     # The drain WARN is gated on being below the plateau band, because the linear projection has
     # been wrong on every race in the record: both Jul 15 and Jul 18 opened with steep falls
@@ -212,8 +254,8 @@ def assess_series(rows, now=None):
     # plateau instead — voltage under load is not linear. Above DRAIN_LEVEL_V the projection is
     # still computed and displayed (`hours_to_floor`, `dark_at_epoch`); it just is not an alarm
     # until the bank is somewhere the plateau cannot explain.
-    draining = (slope is not None and slope <= -DRAIN_WARN_V_PER_H
-                and decided <= DRAIN_LEVEL_V
+    draining = (slope is not None and slope <= -L["drain_warn_v_per_h"]
+                and decided <= L["drain_level_v"]
                 and hours_to_floor is not None and hours_to_floor <= DRAIN_WARN_HOURS)
 
     # Danger keeps level-first precedence ("charging explains a low level, it does not clear
@@ -221,9 +263,9 @@ def assess_series(rows, now=None):
     # line inside its normal band. Everything above that is TREND: a bank sitting steady at
     # 11.65 V is this boat racing, and the crew gets the number, not an alarm. What earns `warn`
     # is a projection — draining fast enough to reach the floor within the watch.
-    if _tripped(window, FLOOR_V + DANGER_MARGIN_V, now):
+    if _tripped(window, danger_v, now):
         status = "danger"
-        reason = (f"bank {level:.2f} V, lowest ever, near the {FLOOR_V:.1f} V floor")
+        reason = (f"bank {level:.2f} V, lowest ever, near the {floor_v:.1f} V floor")
         if charging:
             reason += ", charging"
     elif charging:
@@ -232,7 +274,7 @@ def assess_series(rows, now=None):
     elif draining:
         status = "warn"
         reason = (f"bank {level:.2f} V, draining {slope:+.2f} V/h, "
-                  f"~{hours_to_floor:.1f} h to {FLOOR_V:.1f} V")
+                  f"~{hours_to_floor:.1f} h to {floor_v:.1f} V")
     else:
         status = "ok"
         reason = f"bank {level:.2f} V" + (f", {slope:+.2f} V/h" if slope is not None else "")
@@ -255,20 +297,35 @@ def assess_series(rows, now=None):
         "window_min": WINDOW_MIN,
         "sustain_min": SUSTAIN_MIN,           # the dwell `volts_decided` is taken over
         "path": PATH,
-        "thresholds": {"danger_v": FLOOR_V + DANGER_MARGIN_V, "floor_v": FLOOR_V,
-                       "drain_warn_v_per_h": DRAIN_WARN_V_PER_H},
+        "thresholds": {"danger_v": danger_v, "floor_v": floor_v,
+                       "drain_warn_v_per_h": L["drain_warn_v_per_h"]},
+        # the bank the lines are for (#313); `assumed` True: the profile doesn't say, 12 V
+        # lead-acid used (None: lines given by the caller, not from a profile)
+        "bank": {"nominal_v": L.get("nominal_v"), "chemistry": L.get("chemistry"),
+                 "assumed": L.get("assumed")},
         # Status is trend-first: this bank ordinarily races at 11.5–12.4 V, so absolute alarms
         # exist only near the floor of its own record. The floor is an equipment-risk estimate,
         # not a measured failure point — at the minute the Jul 18 archiver died the bank read
         # 11.65 V and kept publishing.
-        "note": (f"Danger below {FLOOR_V + DANGER_MARGIN_V:.1f} V. "
-                 "A fast drain warns earlier."),
+        "note": (f"Danger below {danger_v:.1f} V. "
+                 "A fast drain warns earlier." + (" " + ASSUMED if L.get("assumed") else "")),
     }
 
 
-def assess(source=None, now=None):
-    """Bank state read through the active datasource (onboard archive + live cache, or cloud)."""
+def _boat_lines():
+    """The current boat's bank lines (its profile, #313); the module lines when it can't be read."""
+    try:
+        from . import hardware
+        return lines_for(hardware.battery_lines())
+    except Exception:  # noqa: BLE001 — a profile read must never take the bank tile down
+        return lines_for(None)
+
+
+def assess(source=None, now=None, lines=None):
+    """Bank state read through the active datasource (onboard archive + live cache, or cloud),
+    on the current boat's bank lines unless `lines` is given."""
     src = source or datasource.active()
+    lines = _boat_lines() if lines is None else lines
     live = now is None
     try:
         rows = src.series(PATH, WINDOW_MIN)
@@ -294,7 +351,7 @@ def assess(source=None, now=None):
                                 f"(last {float(latest[0]):.2f} V, {age / 60.0:.0f} min ago)"}
             rows = [(float(latest[1]), float(latest[0]))]
             now = t_now
-    out = assess_series(rows, now=now)
+    out = assess_series(rows, now=now, lines=lines)
     if now is None and rows and out.get("available"):
         # assess_series without `now` takes the newest sample as now (replay semantics), so its
         # age would always read 0; the live read reports age against the wall clock.

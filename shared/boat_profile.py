@@ -101,6 +101,9 @@ class BoatProfile:
     # human-APPROVED; empty → the optimizer uses the ROUTE_WAVE_* env defaults. Keeps helm_factor a
     # FLAT-WATER number (the wave model carries the sea-state loss, so the two don't double-count).
     wave_coeffs: dict = field(default_factory=dict)
+    # The boat's kit (#313): sensor priority, house bank, Orin yes/no, plotter. See
+    # shared/boat_hardware.py; empty → generic defaults that are said, never another boat's kit.
+    hardware: dict = field(default_factory=dict)
     note: str = ""
     provenance: dict = field(default_factory=dict)
     schema_version: str = SCHEMA_VERSION
@@ -198,6 +201,8 @@ def shape_errors(d) -> list:
         isinstance(k, str) and x in sail_vocab.FAMILIES for k, x in v.items()))
     from shared import boat_polar
     errs += boat_polar.files_errors(d.get("polar_files"))
+    from shared import boat_hardware
+    errs += boat_hardware.errors(d)
     return errs
 
 
@@ -238,6 +243,8 @@ def validate(d: dict):
     ht = d.get("hull_type", "mono")
     if ht and ht not in HULL_TYPES:
         warnings.append(f"hull_type '{ht}' not in {sorted(HULL_TYPES)}")
+    from shared import boat_hardware
+    errors += boat_hardware.errors(d)
     return errors, warnings
 
 

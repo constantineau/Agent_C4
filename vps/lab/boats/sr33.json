@@ -58,6 +58,99 @@
     "r1_tws_kn": 20,
     "r1_a3_slot_tws_kn": 16
   },
+  "hardware": {
+    "source_priority": {
+      "heel": [
+        "orca",
+        "24xd",
+        "reactor"
+      ],
+      "pitch": [
+        "orca",
+        "reactor",
+        "24xd"
+      ],
+      "rate_of_turn": [
+        "orca",
+        "reactor"
+      ],
+      "heading_true": [
+        "orca",
+        "24xd",
+        "943"
+      ],
+      "heading_mag": [
+        "orca",
+        "24xd",
+        "943"
+      ],
+      "aws": [
+        "gnd",
+        "orca"
+      ],
+      "awa": [
+        "gnd",
+        "orca"
+      ],
+      "tws": [
+        "orca",
+        "derived"
+      ],
+      "twa": [
+        "orca",
+        "derived"
+      ],
+      "twd": [
+        "orca",
+        "derived"
+      ],
+      "sog": [
+        "24xd",
+        "orca",
+        "943"
+      ],
+      "cog": [
+        "24xd",
+        "orca",
+        "943"
+      ],
+      "lat": [
+        "24xd",
+        "orca",
+        "943"
+      ],
+      "lon": [
+        "24xd",
+        "orca",
+        "943"
+      ],
+      "stw": [
+        "gst"
+      ],
+      "depth": [
+        "intelliducer"
+      ],
+      "water_temp": [
+        "intelliducer",
+        "gst"
+      ],
+      "rudder_angle": [
+        "reactor"
+      ],
+      "bank_voltage": [
+        "orca"
+      ]
+    },
+    "battery": {
+      "nominal_v": 12,
+      "chemistry": "lead_acid"
+    },
+    "orin": true,
+    "plotter": {
+      "model": "GPSMAP 943",
+      "max_route_waypoints": 250
+    }
+  },
   "note": "Reference boat. Draft 7 ft = 2.1336 m (user-supplied). Jib change-downs J1<14 / J2 14-20 / J3>20 kn TWS (user-supplied; the ORC cert rates only the J1, so these are crew thresholds, not from the polar). Code 0 band + reef points are FIRST-CUT defaults \u2014 edit in Learnings. ORC/beam/displacement TBD. Cert-rated A2 is NOT aboard (excluded from all artifacts); the symmetric kite is S1 (cert id S2-A).",
   "provenance": {
     "source": "bundled seed",

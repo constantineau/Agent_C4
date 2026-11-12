@@ -6,9 +6,10 @@ onboard engine reads a SQLite archive and the Signal K live cache. Before this m
 onboard read path (`datasource_onboard.latest_value`) ignored priority completely and simply
 took whichever source wrote last.
 
-So the policy lives here as the committed default, `vps/db/seed/source_priority.sql` seeds the
-same content into the cloud DB, and `vps/agent/test_source_priority.py` parses the SQL and
-asserts the two agree — they cannot silently drift.
+So the policy is the boat's (its profile's `hardware.source_priority`, #313), the onboard reads
+take it from the current boat's profile, `vps/db/seed/source_priority.sql` seeds the same content
+into the cloud DB, and `vps/agent/test_source_priority.py` parses the SQL and asserts it matches
+the profile — they cannot silently drift.
 
 Matchers are device names, resolved against `$source` labels by `shared/n2k_sources.py`.
 Read that module first: for most of this project's life these matchers matched *nothing*,
@@ -39,37 +40,42 @@ FAILOVER_AGE_S = 45
 def _failover(path_or_channel, failover_s):
     return staleness.failover_s(path_or_channel) if failover_s is None else failover_s
 
-# channel -> device matchers, best first. Keep in lockstep with source_priority.sql.
-DEFAULT_PRIORITY = {
-    "heel": ["orca", "24xd", "reactor"],
-    # pitch: the 24xd is mounted ~11 deg nose-up and uncalibrated — measured, see the seed
-    "pitch": ["orca", "reactor", "24xd"],
-    "rate_of_turn": ["orca", "reactor"],
-    "heading_true": ["orca", "24xd", "943"],
-    "heading_mag": ["orca", "24xd", "943"],
-    "aws": ["gnd", "orca"],
-    "awa": ["gnd", "orca"],
-    "tws": ["orca", "derived"],
-    "twa": ["orca", "derived"],
-    "twd": ["orca", "derived"],
-    # `b951` — the em-trak AIS transceiver's own-ship GPS — was rank 4 on all four of these until
-    # 2026-09-08. The argument for it was sound in isolation (its own-ship fix is a real fix, and
-    # its foreign traffic is filtered upstream) and it is removed anyway, because it is the one
-    # ranking whose *only* protection is a filter elsewhere in the stack. Reading another
-    # vessel's position as own-ship already cost this project a race; a policy that says "use the
-    # AIS box for lat/lon" is that bug written down as an intention, waiting for the filter to
-    # regress. `sensor_health.choose_source()` refuses AIS-bearing sources outright for the same
-    # reason. The 943 chartplotter is the third GPS and stays.
-    "sog": ["24xd", "orca", "943"],
-    "cog": ["24xd", "orca", "943"],
-    "lat": ["24xd", "orca", "943"],
-    "lon": ["24xd", "orca", "943"],
-    "stw": ["gst"],
-    "depth": ["intelliducer"],
-    "water_temp": ["intelliducer", "gst"],
-    "rudder_angle": ["reactor"],
-    "bank_voltage": ["orca"],
-}
+# channel -> device matchers, best first: the BOAT's, from its profile (`hardware.source_priority`,
+# shared/boat_hardware.py, #313). Each boat has its own instruments, so no device name lives here.
+# The engine installs where the current boat's priority comes from (`set_provider`, app/hardware.py);
+# a test pins one (`set_priority`). Neither → {}: no priority, freshest wins, and
+# sensor health says so. The cloud reads the same policy from Postgres (`source_priority`, seeded
+# from the boat's profile by vps/db/seed/source_priority.sql; test_source_priority asserts the two
+# agree). Never rank an AIS transceiver for position: its own-ship fix shares a source with other
+# vessels' (see sensor_health.choose_source, which refuses AIS-bearing sources outright).
+_POLICY = {"pinned": None, "provider": None}
+
+
+def set_provider(fn):
+    """Install `fn() -> {channel: [matchers]} | None`, the current boat's priority (None clears)."""
+    _POLICY["provider"] = fn
+
+
+def set_priority(priority):
+    """Pin one priority for every read (tests); None unpins."""
+    _POLICY["pinned"] = None if priority is None else {
+        ch: [m.lower() for m in ms] for ch, ms in priority.items()}
+
+
+def active_priority():
+    """The priority in force: the pinned one, else the provider's, else {} (no priority). A
+    provider that fails gives {}: a priority read must never take the engine down."""
+    if _POLICY["pinned"] is not None:
+        return _POLICY["pinned"]
+    fn = _POLICY["provider"]
+    if fn is None:
+        return {}
+    try:
+        p = fn()
+    except Exception:  # noqa: BLE001
+        return {}
+    return p if isinstance(p, dict) else {}
+
 
 # Signal K path -> channel. Mirrors the keys of tools.PRESENT (which also carries display units
 # and converters the boat does not need); the test asserts the two agree.
@@ -98,7 +104,7 @@ CHANNEL_FOR_PATH = {
 
 def matchers_for(path_or_channel, priority=None):
     """Ranked matchers for a channel (or a Signal K path), best first; [] when unranked."""
-    prio = DEFAULT_PRIORITY if priority is None else priority
+    prio = active_priority() if priority is None else priority
     channel = CHANNEL_FOR_PATH.get(path_or_channel, path_or_channel)
     return list(prio.get(channel, ()))
 
@@ -176,5 +182,5 @@ def one_publisher(path, rows, devices, priority=None):
 def all_matchers(priority=None):
     """Every matcher named anywhere in the policy, de-duplicated — feed to
     `n2k_sources.unresolved()` to assert the policy can bind."""
-    prio = DEFAULT_PRIORITY if priority is None else priority
+    prio = active_priority() if priority is None else priority
     return sorted({m for ms in prio.values() for m in ms})
