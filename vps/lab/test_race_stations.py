@@ -237,6 +237,11 @@ many = [{"id": f"K{i:03d}", "kind": "metar", "lat": 26.0, "lon": -80.0, "name": 
 r = client.post("/api/races/fll-race/stations", headers=TEAM, json={"picked": many})
 check("21 picks refused, not trimmed; nothing saved", r.status_code == 422
       and "20" in r.json()["detail"] and disk().get("stations") == before, r.text)
+two_kinds = many[:20] + [dict(many[0], kind="ndbc")]            # 20 ids, 21 (kind, id) picks
+r = client.post("/api/races/fll-race/stations", headers=TEAM, json={"picked": two_kinds})
+check("21 picks across two kinds refused too", r.status_code == 422 and disk().get("stations") == before, r.text)
+r = client.post("/api/races/fll-race/stations", headers=TEAM, json={"picked": {}})
+check("a non-list is refused, picks kept", r.status_code == 422 and disk().get("stations") == before, r.text)
 r = client.post("/api/races/fll-race/stations", headers=TEAM, json={"picked": many[:20]})
 check("20 picks saved", r.status_code == 200 and len(r.json()["stations"]["picked"]) == 20, r.text)
 r = client.post("/api/races/fll-race/stations", headers=TEAM, json={"picked": None})

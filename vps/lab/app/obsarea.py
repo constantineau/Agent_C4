@@ -333,7 +333,7 @@ def clean_pick(row):
     return out
 
 
-def clean_picks(rows):
+def clean_picks(rows, limit=MAX_PICKS):
     """The race's `stations` block from a list of picked rows (bad rows dropped, one per id, at
     most MAX_PICKS). None = automatic."""
     if rows is None:
@@ -344,7 +344,7 @@ def clean_picks(rows):
         if c and _key(c) not in seen:
             seen.add(_key(c))
             out.append(c)
-    return {"picked": out[:MAX_PICKS]}
+    return {"picked": out if limit is None else out[:limit]}
 
 
 def picks(definition):

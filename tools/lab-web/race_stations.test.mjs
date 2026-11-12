@@ -219,3 +219,21 @@ test("unsaved ticks are a dirty source on Races: in the Save bar, the leave prom
   ctx.St.changed = true;
   assert.equal(ctx.stDirty(), false, "only the open race's ticks count");
 });
+
+test("a reload of the same race takes picks saved elsewhere; unsaved ticks say they'd replace them", () => {
+  const def = RACE();
+  def.stations = { picked: [{ id: "KFLL", kind: "metar", lat: 26.08, lon: -80.16, name: "FLL" }] };
+  const { ctx } = harness(def);
+  ctx.detailStationsCard(def);
+  assert.deepEqual(Object.keys(ctx.St.ticked), ["metar:KFLL"]);
+  const fresh = RACE();     // another browser saved different picks; the race is opened again
+  fresh.stations = { picked: [{ id: "KPBI", kind: "metar", lat: 26.68, lon: -80.1, name: "PBI" }] };
+  ctx.detailStationsCard(fresh);
+  assert.deepEqual(Object.keys(ctx.St.ticked), ["metar:KPBI"], "the newer picks, not the stale ticks");
+  ctx.stTick(0, false);     // an unsaved edit, then the picks change elsewhere again
+  const third = RACE();
+  third.stations = { picked: [] };
+  ctx.detailStationsCard(third);
+  assert.equal(ctx.St.changed, true, "unsaved ticks kept");
+  assert.match(ctx.St.msg, /Picks changed elsewhere\. Saving replaces them\./);
+});

@@ -788,12 +788,18 @@ const stationPicks = (d) => (d && d.stations && Array.isArray(d.stations.picked)
 function stKind(k) { return k === "metar" ? "Airport" : k === "ndbc" ? "Buoy / coast" : String(k || ""); }
 function stReset(d) {
   const p = stationPicks(d);
-  Object.assign(St, { rid: d.race_id, notes: [], live: {}, changed: false, busy: "", msg: "",
-    rows: p ? p.map((s) => Object.assign({}, s)) : null, ticked: {} });
+  Object.assign(St, { rid: d.race_id, base: JSON.stringify(p), notes: [], live: {}, changed: false,
+    busy: "", msg: "", rows: p ? p.map((s) => Object.assign({}, s)) : null, ticked: {} });
   (p || []).forEach((s) => { St.ticked[stKey(s)] = true; });
 }
 function detailStationsCard(d) {
+  // a reload of the same race can carry picks saved elsewhere (another browser): take them unless
+  // this card has unsaved ticks, which then say so (Codex on #346)
   if (St.rid !== d.race_id) stReset(d);
+  else if (JSON.stringify(stationPicks(d)) !== St.base) {
+    if (!St.changed) stReset(d);
+    else { St.base = JSON.stringify(stationPicks(d)); St.msg = "Picks changed elsewhere. Saving replaces them."; }
+  }
   return `<div class="card" id="stCard">${stCardHtml(d)}</div>`;
 }
 function stCardHtml(d) {
@@ -935,6 +941,7 @@ async function stSave(auto) {
   }
   syncStations(rid, r.stations);
   if (St.rid !== rid) return true;
+  St.base = JSON.stringify(stationPicks({ stations: r.stations }));   // what's saved now
   St.busy = "";
   if (auto) {
     St.changed = false; St.ticked = {};
