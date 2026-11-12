@@ -132,7 +132,22 @@ def read_handler(sql, params):
 
 
 datasource.pool = FakePool(read_handler)
-datasource._priority_cache = ({}, time.monotonic() + 1e9)   # no table: freshest wins
+
+
+def _seeded_priority():
+    """sr33's `source_priority` rows as the live table holds them (vps/db/seed/source_priority.sql,
+    the same parse test_source_priority checks against the boat's profile): channel -> matchers."""
+    seed = os.path.join(os.path.dirname(os.path.dirname(_here)), "vps", "db", "seed",
+                        "source_priority.sql")
+    prio = {}
+    for c, r, m in re.findall(r"\('sr33','([a-z_]+)',(\d+),'([a-z0-9_]+)'", open(seed).read()):
+        prio.setdefault(c, []).append((int(r), m))
+    return {c: [m for _, m in sorted(v)] for c, v in prio.items()}
+
+
+# the cloud's priority is the table as it answers (#341): pin the seeded one, as the live DB has
+datasource._priority_cache = (_seeded_priority(), time.monotonic() + 1e9)
+check("the seeded priority loaded", len(datasource._priority_cache[0]) > 5)
 cs = datasource.CloudSource()
 v = cs.latest_sample("navigation.position.latitude")
 check(f"latest_sample takes the own GPS, not the fresher AIS row ({v})", v and v[0] == 0.7)
