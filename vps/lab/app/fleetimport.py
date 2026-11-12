@@ -210,8 +210,8 @@ def _rating_keys(rec):
 
 def enrich_from_orc(entries, country=None, definition=None, course_id=None):
     """Fill orc_gph + rating (and tidy class) on each entry by matching to the ORC cert DB. Match by
-    sail number, then yacht name, trying EACH listed country's dump in order. `rating` is the race
-    definition's column only (see `_tot_col`); with none named, ratings stay empty and the result
+    sail number across EACH listed country's dump (in order), then yacht name the same way.
+    `rating` is the race definition's column only (see `_tot_col`); with none named, ratings stay empty and the result
     carries `note` = COLUMN_UNKNOWN plus `orc_columns` to pick from. Returns the enriched entries +
     match stats; unmatched keep their identity (the human can fill the handicap by hand)."""
     tot_col = _tot_col(definition, course_id)          # the race default, for the summary
@@ -236,15 +236,14 @@ def enrich_from_orc(entries, country=None, definition=None, course_id=None):
                 "entries": entries, "stale_cleared": stale}
     matched, lacking, seen_cols, lacking_cols = 0, 0, set(), set()
     for e, (e_tot, e_tod) in zip(entries, cols):
+        # a sail number in ANY listed country beats a name match in an earlier one (#341)
         rec, by, cc_hit = None, None, None
-        for cc, idx in idxs:
-            rec = idx["by_sail"].get(_norm_sail(e.get("sail")))
+        for kind, table, key in (("sail", "by_sail", _norm_sail(e.get("sail"))),
+                                 ("name", "by_name", _norm(e.get("boat")))):
+            rec, cc_hit = next(((idx[table][key], cc) for cc, idx in idxs
+                                if idx[table].get(key)), (None, None))
             if rec:
-                by, cc_hit = "sail", cc
-                break
-            rec = idx["by_name"].get(_norm(e.get("boat")))
-            if rec:
-                by, cc_hit = "name", cc
+                by = kind
                 break
         if not rec:
             e["orc_match"] = None

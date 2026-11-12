@@ -280,6 +280,19 @@ try:
         if any("rating column" in g for g in (f.get("gaps") or [])): ISSUE(f"column set but flagged: {sc}")
         elif f["fleet"][0].get("corrected_delta_s") is None: ISSUE(f"column set but not scored: {sc}")
         else: OK(f"column set ({list(sc)[0]}): scored, no note")
+    # ORC ToD: the ToD column is the one that counts (#336)
+    rowd = [{"boat": "Defiance", "mmsi": "111", "orc_gph": 580.0, "tod_allowance": 580.0}]
+    ownd = {"orc_gph": 600.0, "tod_allowance": 600.0}
+    for sc, want in (({"rating_column_tod": "X_TOD"}, False),
+                     ({"course_columns": [{"course": "a", "column": "", "column_tod": "X_TOD"}]}, False),
+                     ({"rating_column": "X_TOT"}, True)):
+        blob = {"scoring": dict({"method": "Time-on-Distance", "rating_system": "ORC"}, **sc),
+                "own": ownd, "fleet": rowd}
+        setup(blob, [tgt("111", 45.10, -83.02, 6.4)])
+        f = fleet.get_fleet()
+        got = "rating column unknown, gaps may be off" in (f.get("gaps") or [])
+        if got != want: ISSUE(f"ToD race {sc}: note={got}, want {want}")
+        else: OK(f"ToD race ({list(sc)[0]}): note={got}")
 except Exception as e:
     ISSUE(f"crash: {type(e).__name__}: {e}")
 

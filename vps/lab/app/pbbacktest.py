@@ -205,10 +205,10 @@ def sample_replay(bundle=None, *, team_ids, retro_race_id, def_race_id, course_i
         if not e or not fixes:
             print(f"[backtest] team {tid}: no entry/track — skipped", flush=True)
             continue
-        gun = e["start_epoch"] or t0
+        boat_gun = e["start_epoch"] or t0       # this boat's start; `gun` stays the race's
         steps = []
-        t = gun
-        end = min(fixes[-1]["t"], e.get("finished_at") or 9e18, gun + hours_cap * 3600)
+        t = boat_gun
+        end = min(fixes[-1]["t"], e.get("finished_at") or 9e18, boat_gun + hours_cap * 3600)
         while t <= end:
             pos = _interp_track(fixes, t)
             if pos:
@@ -222,7 +222,7 @@ def sample_replay(bundle=None, *, team_ids, retro_race_id, def_race_id, course_i
                                   "fp_tws": round(fpx["tws"], 1) if fpx else None,
                                   "fp_twd": round(fpx["twd"], 1) if fpx else None})
             t += step_s
-        boats[str(tid)] = {"boat": e["boat"], "division_gun": gun,
+        boats[str(tid)] = {"boat": e["boat"], "division_gun": boat_gun,
                            "rank_division": (results.get(tid) or {}).get("rank_division"),
                            "steps": steps}
         print(f"[backtest] {e['boat']}: {len(steps)} steps sampled", flush=True)

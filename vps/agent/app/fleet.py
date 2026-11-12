@@ -247,8 +247,10 @@ def get_fleet(max_range_nm: float = 40.0):
         gaps.append("no scoring set, using Time-on-Time")
     rows = [r for r in scoring.get("course_columns") or [] if isinstance(r, dict)]
     has_col = spec["column"] or any(r.get("column") for r in rows)
-    has_tod = scoring.get("rating_column_tod") or any(r.get("column_tod") for r in rows)
-    if kind is not None and system == "ORC" and not has_col:
+    has_tod = (spec["column_tod"] or scoring.get("rating_column_tod")
+               or any(r.get("column_tod") for r in rows))
+    # the column the race scores on: ToD allowance for a ToD race, else the ToT coefficient
+    if kind is not None and system == "ORC" and not (has_tod if is_tod else has_col):
         gaps.append("rating column unknown, gaps may be off")
     # #311: where the boat's course names a column, a boat without that number (e.g. cleared after
     # a column switch) gets no corrected time — never a coefficient made up from GPH. The blob
