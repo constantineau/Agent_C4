@@ -685,11 +685,20 @@ def venue_study_run(body: dict):
 
 
 
+DEPTH_UNITS = ("ft", "m")
+
+
+def depth_unit():
+    """How the Lab shows and takes draft and depths (#312): 'ft' (today's default) or 'm'. Lab-wide."""
+    u = str(labstate.get("depth_unit") or "ft").lower()
+    return u if u in DEPTH_UNITS else "ft"
+
+
 @app.get("/api/boats")
 def list_boats():
     """All boat profiles (summaries with feet conveniences) + the active boat id + chart settings."""
     return {"boats": boats.list_boats(), "active": boats.active_id(),
-            "chart_source": chart_source()}
+            "chart_source": chart_source(), "depth_unit": depth_unit()}
 
 
 @app.post("/api/boats")
@@ -730,7 +739,8 @@ def get_active_boat():
 
 @app.post("/api/boats/active")
 def set_active_boat(body: dict):
-    """Select the active boat and/or the chart source (natural_earth | enc). Both Lab-wide."""
+    """Select the active boat, the chart source (natural_earth | enc) and/or the depth unit
+    (ft | m). All Lab-wide."""
     body = body or {}
     out = {}
     bid = body.get("boat_id") or body.get("active")
@@ -746,6 +756,12 @@ def set_active_boat(body: dict):
             return JSONResponse({"detail": "chart_source must be natural_earth or enc"},
                                 status_code=400)
         out["chart_source"] = labstate.set("coastline_source", src)
+    unit = body.get("depth_unit")
+    if unit is not None:
+        unit = str(unit).strip().lower()
+        if unit not in DEPTH_UNITS:
+            return JSONResponse({"detail": "depth_unit must be ft or m"}, status_code=400)
+        out["depth_unit"] = labstate.set("depth_unit", unit)
     out.setdefault("active", boats.active_id())
     out.setdefault("chart_source", chart_source())
     b = boats.active_boat()

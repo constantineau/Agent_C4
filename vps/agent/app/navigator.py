@@ -709,9 +709,12 @@ def get_navigator(route: str = None):
     """Next mark, ETA, leg type, and laylines from live position + wind."""
     route = route or active_route()
     marks = _marks(route)
-    if not marks:
-        return {"available": False, "note": f"No course loaded for '{route}'."}
     s = _fresh(_latest())
+    if not marks:
+        out = {"available": False, "note": f"No course loaded for '{route}'."}
+        if s["lat"] is not None and s["lon"] is not None:   # the console's day/night still needs where we are (#312)
+            out["position"] = {"lat": round(s["lat"], 5), "lon": round(s["lon"], 5)}
+        return out
     if s["lat"] is None or s["lon"] is None:
         if s.get("fix_age_s") is not None:
             return {"available": False, "position_age_s": round(s["fix_age_s"]),

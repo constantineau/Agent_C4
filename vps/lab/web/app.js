@@ -703,6 +703,7 @@ function detailHead(d) {
   return `<div class="dhead"><h2>${ein("name", d.name, "Race name")}</h2>
       <div class="dmeta">${ein("organizing_authority", d.organizing_authority, "organizer", "wide")}<br>
         Start ${ein("start_date", d.start_date, "YYYY-MM-DD")} ·
+        Time zone ${ein("timezone", d.timezone, "e.g. Europe/London")} ·
         ${ein("start_area", d.start_area, "start area", "wide")} ·
         ${ein("region", d.region, "region", "wide")}</div></div>`;
 }
@@ -1189,7 +1190,7 @@ function drawCourseMap(id, course) {
   };
   map.on("zoomend moveend resize", declutter);
   if (pts.length) map.fitBounds(pts, { padding: [42, 42], maxZoom: 12 });
-  else { map.setView([44.5, -82.5], 6); L.popup().setLatLng([44.5, -82.5]).setContent("No positions yet. Fill in the marks below.").openOn(map); }
+  else { map.setView([20, 0], 2); L.popup().setLatLng([20, 0]).setContent("No positions yet. Fill in the marks below.").openOn(map); }   // no venue default (#312)
   setTimeout(() => { try { map.invalidateSize(); declutter(); } catch (e) {} }, 80);   // settle tiles after the innerHTML layout
 }
 
@@ -1447,29 +1448,46 @@ function updateEnsembleControl() {
   }
 }
 
-/* Boat profile ([B]): active boat + editable draft (feet) + chart source. Draft sets the ENC
-   depth no-go, so it drives the route. */
+/* Boat profile ([B]): active boat + editable draft + chart source. Draft sets the ENC depth no-go,
+   so it drives the route. Draft and depths show in feet or metres per the Lab's depth unit (#312);
+   stored in metres either way. */
 async function reloadBoats() {
   const bd = await (await apiGet("/api/boats")).json();
   Opt.boats = bd.boats || []; Opt.activeBoat = bd.active; Opt.chartSource = bd.chart_source;
+  Opt.depthUnit = bd.depth_unit === "m" ? "m" : "ft";
+}
+const depthUnit = () => (Opt.depthUnit === "m" ? "m" : "ft");
+// metres → a number in the Lab's unit (1 decimal), "" when unknown
+function depthVal(m) {
+  if (m == null || m === "" || isNaN(m)) return "";
+  m = Number(m);                                                   // a profile may hold "2.1"
+  return (depthUnit() === "m" ? m : m / 0.3048).toFixed(1);
+}
+const depthTxt = (m) => (m == null || isNaN(m) ? "?" : depthVal(m) + " " + depthUnit());
+async function optSetDepthUnit(u) {
+  await apiPost("/api/boats/active", { depth_unit: u });
+  await reloadBoats(); renderGameplan();
 }
 function optBoatControls() {
   const ab = (Opt.boats || []).find((b) => b.boat_id === Opt.activeBoat) || {};
-  const draftFt = ab.draft_ft != null ? ab.draft_ft : "";
-  const depthFt = ab.safety_depth_m != null ? (ab.safety_depth_m / 0.3048).toFixed(1) : "";
+  const u = depthUnit();
   const isEnc = Opt.chartSource === "enc";
   return `<label>Boat
       <select id="optBoat" onchange="optPickBoat(this.value)">
-        ${(Opt.boats || []).map((b) => `<option value="${esc(b.boat_id)}" ${b.boat_id === Opt.activeBoat ? "selected" : ""}>${esc(b.name)} (${b.draft_ft != null ? b.draft_ft + " ft" : "?"})</option>`).join("")}
+        ${(Opt.boats || []).map((b) => `<option value="${esc(b.boat_id)}" ${b.boat_id === Opt.activeBoat ? "selected" : ""}>${esc(b.name)} (${depthTxt(b.draft_m)})</option>`).join("")}
       </select></label>
-    <label>Draft (ft) <input type="number" id="optDraft" step="0.1" min="0" value="${draftFt}" style="width:64px" onchange="optSaveDraft()"></label>
+    <label>Draft <input type="number" id="optDraft" step="0.1" min="0" value="${depthVal(ab.draft_m)}" style="width:64px" onchange="optSaveDraft()">
+      <select id="optDepthUnit" onchange="optSetDepthUnit(this.value)" aria-label="Depth unit">
+        <option value="ft" ${u === "ft" ? "selected" : ""}>ft</option>
+        <option value="m" ${u === "m" ? "selected" : ""}>m</option>
+      </select></label>
     <label title="How much of the polar speed this crew sails. 100% = full polar.">Helm % <input type="number" id="optHelm" step="1" min="30" max="100" value="${Math.round((ab.helm_factor ?? 1) * 100)}" style="width:58px" onchange="optSaveHelm()"></label>
     <label>Charts
       <select id="optChart" onchange="optSetChart(this.value)">
         <option value="natural_earth" ${!isEnc ? "selected" : ""}>Basic coastline</option>
         <option value="enc" ${isEnc ? "selected" : ""}>NOAA charts (uses draft)</option>
       </select></label>
-    <span class="muted">${isEnc ? "avoids water under " + depthFt + " ft" : "coastline only, no depths"}</span>`;
+    <span class="muted">${isEnc ? "avoids water under " + depthTxt(ab.safety_depth_m) : "coastline only, no depths"}</span>`;
 }
 async function optPickBoat(id) {
   // the boat-model thresholds save to the ACTIVE boat — settle unsaved ones before it changes
@@ -1488,10 +1506,11 @@ async function optSetChart(src) {
   renderGameplan();
 }
 async function optSaveDraft() {
-  const ft = parseFloat(document.getElementById("optDraft").value);
-  if (isNaN(ft) || ft <= 0) return;
+  const v = parseFloat(document.getElementById("optDraft").value);
+  if (isNaN(v) || v <= 0) return;
+  const m = depthUnit() === "m" ? v : v * 0.3048;                  // entered in the Lab's unit, read before any await
   const full = (await (await apiGet("/api/boats/" + encodeURIComponent(Opt.activeBoat))).json()).boat || {};
-  full.draft_m = Math.round(ft * 0.3048 * 10000) / 10000;          // store metres, enter feet
+  full.draft_m = Math.round(m * 10000) / 10000;                    // stored in metres
   await apiPost("/api/boats", full);
   await reloadBoats(); renderGameplan();
 }
@@ -2334,7 +2353,7 @@ function pbVariantCard(v, recommended) {
 function pbBoatModelNote(b) {
   const m = b.boat_model; if (!m || !m.sail_inventory) return "";
   const inv = (m.sail_inventory || []).map((s) => `<span class="sail sail-${esc(s)}">${esc(s)}</span>`).join(" ");
-  return `<div class="pb-boatmodel muted" style="font-size:12px;margin-top:6px">⛵ Sails in this plan: ${inv} · draft ${m.draft_ft ?? "?"} ft.</div>`;
+  return `<div class="pb-boatmodel muted" style="font-size:12px;margin-top:6px">⛵ Sails in this plan: ${inv} · draft ${depthTxt(m.draft_m)}.</div>`;
 }
 
 function pbSailPlanRow(v) {
@@ -3435,7 +3454,7 @@ function initMonitorMap() {
   monLegend(map, fixes, own, riv, ownName);
   map.on("zoomend moveend", monPlaceLabels);
   if (fit.pts.length) map.fitBounds(fit.pts, { padding: [30, 30], maxZoom: 11 });
-  else map.setView([44.2, -82.5], 7);   // Lake Huron default
+  else { map.setView([20, 0], 2); L.popup().setLatLng([20, 0]).setContent("No course or boat position yet.").openOn(map); }   // no venue default (#312)
   monPlaceLabels();
 }
 
@@ -4182,7 +4201,7 @@ function paintLearnings() {
   document.getElementById("view").innerHTML = `<div class="opt">
     <div class="card">
       <h3>Learnings <span class="muted" style="font-weight:400">— what we know about the boat and venue</span></h3>
-      <div class="muted" style="font-size:12px">Boat: <b>${esc(ab.name || Opt.activeBoat || "—")}</b>${ab.draft_ft != null ? " · draft " + ab.draft_ft + " ft" : ""} · change it in <a href="#gameplan">Gameplan</a>. The route uses the speeds and sails below.</div>
+      <div class="muted" style="font-size:12px">Boat: <b>${esc(ab.name || Opt.activeBoat || "—")}</b>${ab.draft_m != null ? " · draft " + depthTxt(ab.draft_m) : ""} · change it in <a href="#gameplan">Gameplan</a>. The route uses the speeds and sails below.</div>
     </div>
     ${card}
     <div class="card">
