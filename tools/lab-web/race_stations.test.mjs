@@ -56,7 +56,9 @@ function harness(def, opts = {}) {
     "stCheck", "stSave", "syncStations", "stDirty", "stDiscard", "stTickSig"];
   const code = names.map(grab).join("\n").replace(/^(const|let) /gm, "var ");
   vm.runInContext(code, ctx);
-  ctx.Opt = { def };
+  // a top-level const, as in app.js: NOT a property of window (Codex on #346)
+  ctx.__def = def;
+  vm.runInContext("const Opt = { def: JSON.parse(JSON.stringify(__def)) };", ctx);
   return { ctx, els, posts, maps };
 }
 
@@ -105,7 +107,7 @@ test("tick, save: only the ticked rows go up, and the saved picks don't read as 
   assert.deepEqual(Object.keys(sent.body.picked[0]).sort(), ["id", "kind", "lat", "lon", "name", "source"]);
   assert.deepEqual(def.stations.picked.map((s) => s.id), ["KFXE", "KPBI"]);
   assert.equal(JSON.parse(ctx.Lab.cleanDef).stations.picked.length, 2, "clean baseline has them too");
-  assert.equal(ctx.Opt.def.stations.picked.length, 2);
+  assert.equal(vm.runInContext("Opt.def", ctx).stations.picked.length, 2);
   assert.match(els.stCard.innerHTML, /Saved\. Build the playbook again/);
   assert.match(els.stCard.innerHTML, /Your picks \(2\)\./);
   assert.match(els.stCard.innerHTML, /Use automatic/);

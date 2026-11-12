@@ -963,7 +963,7 @@ function syncStations(rid, block) {
       try { const b = JSON.parse(Lab.cleanDef); apply(b); Lab.cleanDef = JSON.stringify(b); } catch (e) {}
     }
   }
-  if (window.Opt) apply(Opt.def);
+  if (typeof Opt !== "undefined") apply(Opt.def);   // top-level const: not on window (Codex on #346)
 }
 
 /* WATCH PLAN (crew rotation) — authored here, delivered aboard with the homework (seeds the
