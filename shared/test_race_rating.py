@@ -183,6 +183,11 @@ by_course = {c["id"]: R.rating_spec(shipped, c["id"])["column"] for c in shipped
 check("every course has a column", all(by_course.values()) and len(by_course) == 2)
 check("countries come from the file", R.rating_countries(shipped) == ["USA", "CAN"])
 check("no rating warning", not any("Rating" in x for x in R.validate(shipped)[1]))
+sb = R.fleet_blob(shipped)
+check("the shipped roster sends every rating it has (legacy imports tagged, Codex round 9)",
+      "stale_ratings" not in sb
+      and sum(1 for e in sb.get("roster") or sb.get("fleet") or [] if e.get("rating") is not None)
+      == sum(1 for e in shipped.get("fleet") or [] if e.get("rating") is not None) > 0)
 
 print("a ToD-only course row (Codex round 8):")
 dt = race(rating_system="ORC", course_columns=[{"course": "long", "column": "", "column_tod": "LONG_TOD"}])

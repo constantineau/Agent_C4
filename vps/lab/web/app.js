@@ -3260,7 +3260,8 @@ function rulesCourseCol(cid, v) {
   const sc = Lab.editDef.rules_profile.scoring;
   const old = (sc.course_columns || []).find((r) => r && r.course === cid) || {};
   const rows = (sc.course_columns || []).filter((r) => r && r.course !== cid);
-  if ((v || "").trim()) rows.push({ course: cid, column: v.trim(), column_tod: old.column_tod || "" });
+  // a blank ToT keeps the row while it still names a ToD column (typing over a column passes through "")
+  if ((v || "").trim() || old.column_tod) rows.push({ course: cid, column: (v || "").trim(), column_tod: old.column_tod || "" });
   sc.course_columns = rows;
 }
 function rulesCourseCols(d, sc) {
