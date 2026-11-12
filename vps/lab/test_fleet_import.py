@@ -1,7 +1,8 @@
 """Automated fleet-roster ingestion — YB entry-list parse + ORC handicap match.
 
 Deterministic + offline: monkeypatches the network with fixture RaceSetup + ORC-dump bytes and asserts
-the entry-list parse, the sail-then-name ORC match, and race-specific ToT column selection (BAYMAC).
+the entry-list parse, the sail-then-name ORC match, and that the ToT column comes from the race
+definition (#311): per course, race-wide, or unknown → no rating and a plain note, never a guess.
 A separate LIVE check (network) hits the real YB + ORC endpoints — see __main__ --live.
 Run in-container: docker cp ... && docker compose ... exec ... python test_fleet_import.py
 """
@@ -19,10 +20,24 @@ _SETUP = json.dumps({"teams": [
 # ORC dump (note: real ORC serves a UTF-8 BOM → _orc_dump decodes utf-8-sig)
 _ORC = json.dumps({"rms": [
     {"SailNo": "USA 60", "YachtName": "Il Mostro", "Class": "VOR70", "GPH": 500.0,
-     "TMF_Offshore": 1.10, "US_BAYMAC_CV_TOT": 0.95},
+     "TMF_Offshore": 1.10, "TMF_Inshore": 1.20, "XX_RACE_A_TOT": 0.95, "XX_RACE_B_TOT": 0.97},
     {"SailNo": "USA 99", "YachtName": "Windquest", "Class": "Santa Cruz 52", "GPH": 560.0,
-     "TMF_Offshore": 1.05, "US_BAYMAC_CV_TOT": 1.02},
+     "TMF_Offshore": 1.05, "TMF_Inshore": 1.15, "XX_RACE_A_TOT": 1.02},
 ]}).encode("utf-8-sig")
+
+
+def _race(**scoring):
+    """A synthetic ORC race whose scoring block carries the given rating fields."""
+    sc = {"system": "ORC", "method": "Time-on-Time", "rating_system": "ORC"}
+    sc.update(scoring)
+    return {"race_id": "synthetic-race-2027", "rules_profile": {"scoring": sc},
+            "divisions": [{"id": "A", "course_ref": "long"}, {"id": "B", "course_ref": "short"}],
+            "courses": [{"id": "long"}, {"id": "short"}],
+            "tracker": {"provider": "yb", "race": "demo2026"}}
+
+
+_PER_COURSE = [{"course": "long", "column": "XX_RACE_A_TOT", "column_tod": ""},
+               {"course": "short", "column": "XX_RACE_B_TOT", "column_tod": ""}]
 
 
 def _fake_net():
@@ -44,36 +59,152 @@ def test_roster_from_yb():
 
 def test_orc_match_and_race_col():
     _fake_net()
-    d = {"race_id": "bayview-mackinac-2026", "name": "Bayview Mackinac"}
+    d = _race(course_columns=_PER_COURSE)
     entries = fleetimport.roster_from_yb({"tracker": {"provider": "yb", "race": "demo2026"}})["entries"]
-    en = fleetimport.enrich_from_orc(entries, country="USA", definition=d, course_id="cove_island")
+    en = fleetimport.enrich_from_orc(entries, country="USA", definition=d, course_id="long")
     assert en["ok"] and en["matched"] == 2, en          # Il Mostro by sail, Windquest by name
     bysail = next(e for e in entries if e["boat"] == "Il Mostro")
     byname = next(e for e in entries if e["boat"] == "Windquest")
     unmatched = next(e for e in entries if e["boat"] == "Unrated Joe")
-    # race-specific column used (US_BAYMAC_CV_TOT), NOT the generic TMF_Offshore
+    # the course's column from the definition, NOT the generic TMF_Offshore
+    assert en["tot_col"] == "XX_RACE_A_TOT" and "note" not in en, en
     assert bysail["rating"] == 0.95 and bysail["orc_gph"] == 500.0, bysail
     assert byname["rating"] == 1.02 and byname["cls"] == "Sy 52", byname  # name match; YB class kept (not clobbered)
     assert byname["orc_match"]["by"] == "name", byname
     assert unmatched.get("rating") is None and unmatched.get("orc_match") is None, unmatched
-    print(f"PASS orc_match: 2/3 matched (sail+name), BAYMAC column used (rating {bysail['rating']}), "
+    print(f"PASS orc_match: 2/3 matched (sail+name), course column used (rating {bysail['rating']}), "
           "1 unmatched left for hand entry")
 
 
-def test_generic_col_fallback():
+def test_course_column_follows_course():
     _fake_net()
     entries = fleetimport.roster_from_yb({"tracker": {"provider": "yb", "race": "demo2026"}})["entries"]
-    # a non-BAYMAC race → falls back to the generic offshore ToT (TMF_Offshore)
-    en = fleetimport.enrich_from_orc(entries, country="USA", definition={"race_id": "some-other-race"})
+    en = fleetimport.enrich_from_orc(entries, country="USA", definition=_race(course_columns=_PER_COURSE),
+                                     course_id="short")
+    assert en["tot_col"] == "XX_RACE_B_TOT", en
+    windquest = next(e for e in entries if e["boat"] == "Windquest")
+    assert windquest.get("rating") is None and windquest["orc_gph"] == 560.0, windquest   # cert lacks it
+    assert en["note"] == "1 boat lacks XX_RACE_B_TOT on the cert.", en
+    # no course asked → our division's course
+    d = dict(_race(course_columns=_PER_COURSE), own={"division": "B"})
+    en = fleetimport.enrich_from_orc([{"boat": "Il Mostro", "sail": "USA 60"}], country="USA", definition=d)
+    assert en["tot_col"] == "XX_RACE_B_TOT" and en["entries"][0]["rating"] == 0.97, en
+    print("PASS course_column: per-course column follows the course / our division; a cert without it "
+          "gets no rating and a note")
+
+
+def test_missing_column_no_guess():
+    _fake_net()
+    entries = fleetimport.roster_from_yb({"tracker": {"provider": "yb", "race": "demo2026"}})["entries"]
+    # an ORC race whose definition names no column → no rating at all, and the roster says so
+    en = fleetimport.enrich_from_orc(entries, country="USA", definition=_race())
     bysail = next(e for e in entries if e["boat"] == "Il Mostro")
-    assert bysail["rating"] == 1.10, bysail             # TMF_Offshore, not the BAYMAC column
-    print(f"PASS generic_col: non-BAYMAC race uses TMF_Offshore ({bysail['rating']})")
+    assert bysail.get("rating") is None and bysail["orc_gph"] == 500.0, bysail   # NOT TMF_Offshore
+    assert en["tot_col"] is None and en["note"] == "Rating column unknown: pick one", en
+    assert "TMF_Offshore" in en["orc_columns"] and "GPH" not in en["orc_columns"], en
+    # the same through the import (what the Fleet tab shows)
+    out = fleetimport.import_fleet(_race(), source="both", country="USA")
+    assert out["rating_note"] == "Rating column unknown: pick one", out
+    assert all(e.get("rating") is None for e in out["entries"]), out
+    # a race with no definition at all is no different
+    en = fleetimport.enrich_from_orc([{"boat": "Il Mostro", "sail": "USA 60"}], country="USA")
+    assert en["entries"][0].get("rating") is None and en["note"] == "Rating column unknown: pick one"
+    print("PASS missing_column: no column named → ratings empty, 'Rating column unknown: pick one'")
+
+
+def test_non_us_orc_race():
+    # an inshore ORC race outside North America: race-wide column, countries from the definition
+    # (venue country + entrants' sail prefixes), no USA/CAN anywhere
+    certs = {
+        "FRA": {"rms": [{"SailNo": "FRA 4242", "YachtName": "Bleu", "Class": "JPK 1080", "GPH": 640.0,
+                         "TMF_Offshore": 0.71, "TMF_Inshore": 0.69}]},
+        "GBR": {"rms": [{"SailNo": "GBR 1234", "YachtName": "Red Kite", "Class": "J/109", "GPH": 650.0,
+                         "TMF_Offshore": 0.70, "TMF_Inshore": 0.68}]},
+        "IRL": {"rms": [{"SailNo": "IRL 7", "YachtName": "Green", "Class": "X-35", "GPH": 660.0,
+                         "TMF_Offshore": 0.67, "TMF_Inshore": 0.66}]},
+    }
+    asked = []
+
+    def _get(url):
+        cc = url.split("CountryId=")[1].split("&")[0]
+        asked.append(cc)
+        if cc not in certs:
+            raise OSError("no such authority")
+        return json.dumps(certs[cc]).encode("utf-8-sig")
+    fleetimport._get = _get
+    fleetimport._orc_cache.clear()
+    d = {"race_id": "synthetic-inshore-2027", "venue_country": "GBR",
+         "rules_profile": {"scoring": {"system": "ORC", "method": "Time-on-Time",
+                                       "rating_system": "ORC", "rating_column": "TMF_Inshore"}}}
+    entries = [{"boat": "Red Kite", "sail": "GBR 1234"}, {"boat": "Bleu", "sail": "FRA-4242"},
+               {"boat": "Bleu Deux", "sail": "FRA 99"}, {"boat": "Green", "sail": "IRL 7"}]
+    out = fleetimport.pack_with_orc(entries, "website", None, d, None)
+    assert asked == ["GBR", "FRA", "IRL"], asked          # venue first, then prefixes by count
+    assert out["matched"] == 3 and out["tot_col"] == "TMF_Inshore", out
+    assert out["orc_country"] == "GBR,FRA,IRL" and "rating_note" not in out, out
+    assert next(e for e in entries if e["boat"] == "Bleu")["rating"] == 0.69
+    # a list typed in the Fleet tab still wins
+    asked.clear()
+    fleetimport._orc_cache.clear()
+    fleetimport.enrich_from_orc([dict(entries[0])], country="IRL", definition=d)
+    assert asked == ["IRL"], asked
+    # nothing known anywhere → say so, fetch nothing
+    asked.clear()
+    en = fleetimport.enrich_from_orc([{"boat": "X", "sail": "12"}], definition=_race())
+    assert not en["ok"] and en["note"] == "No ORC country known. Enter one." and asked == [], en
+    print("PASS non_us_orc: inshore column from the definition, countries GBR,FRA,IRL from venue + sails")
+
+
+def test_other_rating_system_has_no_feed():
+    _fake_net()
+    d = {"race_id": "synthetic-phrf", "rules_profile": {"scoring": {"system": "PHRF",
+                                                                    "method": "Time-on-Distance"}}}
+    out = fleetimport.pack_with_orc([{"boat": "Il Mostro", "sail": "USA 60"}], "website", "USA", d, None)
+    assert out["rating_note"] == "No PHRF ratings feed yet. Enter ratings by hand.", out
+    assert "matched" not in out and out["entries"][0].get("rating") is None, out
+    c = fleetimport.candidates("Il Mostro", "USA 60", "USA", d)
+    assert c["candidates"] == [] and "PHRF" in c["note"], c
+    od = {"rules_profile": {"scoring": {"rating_system": "one-design"}}}
+    assert fleetimport.pack_with_orc([], "website", "USA", od, None)["rating_note"] == \
+        "One-design: no ratings needed."
+    print("PASS other_system: PHRF / one-design get a plain note, never ORC numbers")
+
+
+def test_candidates_use_race_column():
+    _fake_net()
+    r = fleetimport.candidates("Il Mostro", "USA 60", "USA", _race(rating_column="TMF_Inshore"))
+    assert r["candidates"][0]["rating"] == 1.20 and r["tot_col"] == "TMF_Inshore", r
+    r = fleetimport.candidates("Il Mostro", "USA 60", "USA", _race())
+    assert r["candidates"][0]["rating"] is None and r["note"] == "Rating column unknown: pick one", r
+    print("PASS candidates: the find button reads the race's column too")
+
+
+def test_set_fields_cli():
+    import os
+    import tempfile
+    from app import ratings
+    with tempfile.TemporaryDirectory() as td:
+        p = os.path.join(td, "race.json")
+        with open(p, "w") as f:
+            json.dump({"race_id": "r", "rules_profile": {"scoring": {"system": "ORC"}}}, f)
+        assert ratings._main(["set", p, "--system", "orc", "--course", "long=XX_RACE_A_TOT/XX_A_TOD",
+                              "--countries", "gbr, fra", "--dry-run"]) == 0
+        with open(p) as f:
+            assert "rating_system" not in json.load(f)["rules_profile"]["scoring"]   # dry run
+        ratings._main(["set", p, "--system", "orc", "--course", "long=XX_RACE_A_TOT/XX_A_TOD",
+                       "--countries", "gbr, fra"])
+        with open(p) as f:
+            sc = json.load(f)["rules_profile"]["scoring"]
+    assert sc == {"system": "ORC", "rating_system": "ORC", "rating_countries": ["GBR", "FRA"],
+                  "course_columns": [{"course": "long", "column": "XX_RACE_A_TOT",
+                                      "column_tod": "XX_A_TOD"}]}, sc
+    print("PASS set_fields: the migration CLI writes the rating fields (and a dry run writes nothing)")
 
 
 def test_import_fleet_both():
     _fake_net()
-    d = {"race_id": "bayview-mackinac-2026", "tracker": {"provider": "yb", "race": "demo2026"}}
-    out = fleetimport.import_fleet(d, source="both", country="USA", course_id="cove_island")
+    d = _race(course_columns=_PER_COURSE)
+    out = fleetimport.import_fleet(d, source="both", country="USA", course_id="long")
     assert out["ok"] and out["count"] == 3 and out["matched"] == 2, out
     assert out["unmatched"] == ["Unrated Joe"], out
     print(f"PASS import_fleet: {out['count']} boats, {out['matched']} ORC-matched, unmatched {out['unmatched']}")
@@ -224,7 +355,9 @@ def _live():
 
 
 if __name__ == "__main__":
-    test_roster_from_yb(); test_orc_match_and_race_col(); test_generic_col_fallback(); test_import_fleet_both()
+    test_roster_from_yb(); test_orc_match_and_race_col(); test_course_column_follows_course()
+    test_missing_column_no_guess(); test_non_us_orc_race(); test_other_rating_system_has_no_feed()
+    test_candidates_use_race_column(); test_set_fields_cli(); test_import_fleet_both()
     test_website_source(); test_yachtscoring_parse(); test_regatta_network_parse()
     test_preserve_seeded_mmsi(); test_website_empty(); test_iframe_follow()
     if "--live" in sys.argv:

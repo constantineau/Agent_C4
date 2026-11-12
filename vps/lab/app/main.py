@@ -1718,23 +1718,24 @@ async def fleet_import(body: dict):
         return JSONResponse({"detail": "unknown race"}, status_code=404)
     d = _with_draft_fleet(d, b.get("fleet"))
     return await run_in_threadpool(fleetimport.import_fleet, d, b.get("source", "both"),
-                                   b.get("country", "USA,CAN"), b.get("course_id"),
+                                   b.get("country") or None, b.get("course_id"),
                                    b.get("url"), b.get("text"))
 
 
 @app.post("/api/fleet/orc-candidates")
 def fleet_orc_candidates(body: dict):
-    """Fuzzy ORC-cert candidates for ONE unrated roster boat: {race_id, boat, sail?, country?}.
-    The human picks a candidate in the Fleet tab; nothing auto-applies."""
+    """Rating candidates for ONE unrated roster boat: {race_id, boat, sail?, country?}, from the
+    race's rating feed (ORC today). No country → the race definition's list. The human picks a
+    candidate in the Fleet tab; nothing auto-applies."""
     body = body or {}
     d = store.get_race(body.get("race_id")) if body.get("race_id") else None
-    return fleetimport.orc_candidates(body.get("boat"), sail=body.get("sail"),
-                                      country=body.get("country") or "USA,CAN",
-                                      definition=d, course_id=body.get("course_id"))
+    return fleetimport.candidates(body.get("boat"), sail=body.get("sail"),
+                                  country=body.get("country") or None,
+                                  definition=d, course_id=body.get("course_id"))
 
 
 @app.post("/api/fleet/import/upload")
-async def fleet_import_upload(race_id: str, country: str = "USA,CAN", course_id: str = None,
+async def fleet_import_upload(race_id: str, country: str = None, course_id: str = None,
                              file: UploadFile = File(...), fleet: str = Form(None)):
     """Extract a fleet roster from an uploaded entry-list PDF → ORC-enrich → DRAFT for review.
     `fleet` (form field, JSON) = the draft roster on screen, for carrying seeded MMSIs over."""

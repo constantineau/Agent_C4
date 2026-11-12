@@ -488,7 +488,24 @@
         "ORC Weather Routing Scoring (WRS)"
       ],
       "decided": "RC decides/announces BayMac custom wind mix vs ORC WRS no later than the 0810 Weather Briefing on race morning; if WRS, the TCF is published \u22653 h before the start (SI 17.1).",
-      "ref": "NOR \u00a713 / SI 17.1"
+      "ref": "NOR \u00a713 / SI 17.1",
+      "rating_system": "ORC",
+      "course_columns": [
+        {
+          "course": "cove_island",
+          "column": "US_BAYMAC_CV_TOT",
+          "column_tod": "US_BAYMAC_CV_TOD"
+        },
+        {
+          "course": "shore",
+          "column": "US_BAYMAC_SH_TOT",
+          "column_tod": "US_BAYMAC_SH_TOD"
+        }
+      ],
+      "rating_countries": [
+        "USA",
+        "CAN"
+      ]
     }
   },
   "provenance": {
@@ -2783,5 +2800,6 @@
       }
     },
     "blocks": []
-  }
+  },
+  "venue_country": "USA"
 }

@@ -254,6 +254,35 @@ try:
 except Exception as e:
     ISSUE(f"crash: {type(e).__name__}: {e}")
 
+print("\n== 13. #311: the race's rating fields reach the in-race model ==")
+try:
+    row = [{"boat": "Defiance", "mmsi": "111", "rating": 1.050, "orc_gph": 580.0}]
+    own = {"rating": 1.0, "orc_gph": 600.0}
+    # a PHRF race (rating_system) is never scored with ORC math, even with a ToT method text
+    blob = {"scoring": {"method": "Time-on-Time", "rating_system": "PHRF"}, "own": own, "fleet": row}
+    setup(blob, [tgt("111", 45.10, -83.02, 6.4)])
+    f = fleet.get_fleet()
+    if f["fleet"][0].get("corrected_delta_s") is not None: ISSUE("PHRF race scored with ORC math")
+    elif "PHRF scoring not supported, no corrected gaps" not in (f.get("gaps") or []): ISSUE(f"PHRF gap: {f.get('gaps')}")
+    else: OK("PHRF race: no corrected gaps, plain note")
+    # ORC with no column: still scores, but says the numbers may not be the race's
+    blob = {"scoring": {"method": "Time-on-Time", "rating_system": "ORC"}, "own": own, "fleet": row}
+    setup(blob, [tgt("111", 45.10, -83.02, 6.4)])
+    f = fleet.get_fleet()
+    if "rating column unknown, gaps may be off" not in (f.get("gaps") or []): ISSUE(f"no column gap: {f.get('gaps')}")
+    else: OK("ORC, no column: gap note")
+    # ORC with a race-wide or per-course column: no such note
+    for sc in ({"rating_column": "TMF_Inshore"},
+               {"course_columns": [{"course": "a", "column": "X_A"}, {"course": "b", "column": "X_B"}]}):
+        blob = {"scoring": dict({"method": "Time-on-Time", "rating_system": "ORC"}, **sc), "own": own, "fleet": row}
+        setup(blob, [tgt("111", 45.10, -83.02, 6.4)])
+        f = fleet.get_fleet()
+        if any("rating column" in g for g in (f.get("gaps") or [])): ISSUE(f"column set but flagged: {sc}")
+        elif f["fleet"][0].get("corrected_delta_s") is None: ISSUE(f"column set but not scored: {sc}")
+        else: OK(f"column set ({list(sc)[0]}): scored, no note")
+except Exception as e:
+    ISSUE(f"crash: {type(e).__name__}: {e}")
+
 print("\n" + ("ALL CLEAN — no issues found" if not issues else f"{len(issues)} ISSUE(S) FOUND:"))
 for i in issues: print("  -", i)
 sys.exit(1 if issues else 0)

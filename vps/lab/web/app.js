@@ -2765,7 +2765,7 @@ async function renderFleet() {
 
 async function fleetPickRace(id) {
   if (!(await confirmLeave())) return paintFleet();   // Stay → repaint puts the picker back
-  Lab.sel = id; Lab.editDef = null; Lab.fleetMsg = ""; renderFleet(); }
+  Lab.sel = id; Lab.editDef = null; Lab.fleetMsg = ""; Lab.fleetCols = []; renderFleet(); }
 function fleetSet(i, f, v) { if (Lab.editDef && Lab.editDef.fleet[i]) { Lab.editDef.fleet[i][f] = v; } }
 function fleetOwnSet(f, v) { if (!Lab.editDef) return; if (!Lab.editDef.own) Lab.editDef.own = {}; Lab.editDef.own[f] = v; }
 function fleetAddRow() { Lab.editDef.fleet.push({ boat: "", division: "", cls: "", owner: "", sail: "", orc_gph: null, rating: null, mmsi: "", source: "manual" }); Lab.fleetEdit = true; paintFleet(); }
@@ -2774,7 +2774,16 @@ function fleetRemove(i) { Lab.editDef.fleet.splice(i, 1); paintFleet(); }
 // Auto-import the roster from public data. source: 'yb' = the tracker entry list, 'both' = YB → ORC,
 // 'website' = a regatta-site URL/pasted text → ORC, 'orc' = enrich the current roster. extra = {url|text}
 // for the website source. Replaces the draft roster for review (nothing is saved until Save).
-function _fleetCC() { return (document.getElementById("fleetOrcCC") || {}).value || "USA"; }
+// blank = let the Lab use the race's list (its scoring block, else venue country + sail prefixes)
+function _fleetCC() { return ((document.getElementById("fleetOrcCC") || {}).value || "").trim(); }
+function _fleetScoring() {
+  const rp = (Lab.editDef.rules_profile = Lab.editDef.rules_profile || {});
+  return (rp.scoring = rp.scoring || {});
+}
+function fleetColSet(v) { _fleetScoring().rating_column = (v || "").trim(); }
+function fleetCCSet(v) {
+  _fleetScoring().rating_countries = (v || "").split(",").map((c) => c.trim().toUpperCase()).filter(Boolean);
+}
 function _fleetApplyResult(r, ed) {
   if (Lab.editDef !== ed) return;   // switched race / discarded while the import ran — don't land on it
   if (!r.ok) { Lab.fleetMsg = r.note || r.detail || "import failed. No boats found."; Lab.fleetMsgErr = true; return; }
@@ -2785,6 +2794,9 @@ function _fleetApplyResult(r, ed) {
   if (r.unmatched && r.unmatched.length) bits.push(`${r.unmatched.length} need a handicap by hand`);
   if (r.seeded_mmsi) bits.push(`${r.seeded_mmsi} kept their MMSI`);
   if (r.orc_error) bits.push("ORC lookup failed: " + r.orc_error);
+  if (r.rating_note) bits.push(r.rating_note);
+  Lab.fleetCols = r.orc_columns || Lab.fleetCols || [];
+  Lab.fleetMsgErr = !!(r.orc_error || r.rating_note);
   Lab.fleetMsg = "Imported " + bits.join(" · ") + ". Check below, then Save.";
 }
 // An import REPLACES the draft roster. With boats already in it, ask first and say how many go.
@@ -2890,13 +2902,13 @@ async function fleetFindOrc(i) {
   if (!e) return;
   Lab.fleetMsg = `Searching ORC for "${e.boat}"…`; Lab.fleetMsgErr = false; paintFleet();
   try {
-    const cc = (document.getElementById("fleetOrcCC") || {}).value || "USA,CAN";
     const r = await (await apiPost("/api/fleet/orc-candidates",
-      { race_id: Lab.sel, boat: e.boat, sail: e.sail, country: cc })).json();
+      { race_id: Lab.sel, boat: e.boat, sail: e.sail, country: _fleetCC() })).json();
     Lab.fleetCand = { i, list: r.candidates || [] };
     Lab.fleetMsg = (r.candidates || []).length
       ? `${r.candidates.length} ORC match(es) for "${e.boat}". Pick one below the row.`
-      : `No ORC match for "${e.boat}". Enter the handicap by hand.`;
+      : (r.note || `No ORC match for "${e.boat}". Enter the handicap by hand.`);
+    if (r.note && (r.candidates || []).length) Lab.fleetMsg += " " + r.note + ".";
   } catch (err) { Lab.fleetMsg = "ORC search failed: " + (err.message || err); Lab.fleetMsgErr = true; }
   paintFleet();
 }
@@ -2935,6 +2947,30 @@ async function fleetSave() {
   } catch (e) { Lab.fleetMsg = "Save failed: " + e.message; Lab.fleetMsgErr = true; }
   paintFleet();
   return ok;
+}
+
+// Which certificate number the race scores on (#311). Comes from the NOR/SI via Rules; set here when
+// the import says it's unknown. Per-course columns are edited in Rules.
+function fleetRatingCard(sc) {
+  const sys = sc.rating_system || "";
+  const perCourse = (sc.course_columns || []).filter((r) => r && r.column);
+  if (sys && sys !== "ORC") {
+    return `<div class="card"><h3>Ratings</h3><div class="muted" style="font-size:12px">${esc(sys)} race. ${sys === "ONE_DESIGN" ? "No ratings needed." : "No feed yet. Enter ratings by hand."}</div></div>`;
+  }
+  const cols = Lab.fleetCols || [];
+  const known = sc.rating_column || perCourse.length;
+  const per = perCourse.length
+    ? `<div class="muted" style="font-size:12px;margin-top:6px">By course: ${perCourse.map((r) => `${esc(r.course)} ${esc(r.column)}`).join(" · ")}. Edit in <a href="#rules">Rules</a>.</div>` : "";
+  return `<div class="card">
+    <h3>Rating column ${known ? "" : '<span class="pill warn" style="margin-left:6px">unknown</span>'}</h3>
+    ${known ? "" : '<div class="banner warn" style="margin-bottom:6px">Rating column unknown: pick one.</div>'}
+    <div class="opt-controls">
+      <label>ORC column <input class="ein" list="fleetColList" style="width:170px" value="${esc(sc.rating_column || "")}" placeholder="e.g. TMF_Inshore" oninput="fleetColSet(this.value)"></label>
+      <datalist id="fleetColList">${cols.map((c) => `<option value="${esc(c)}">`).join("")}</datalist>
+      <button class="mini" onclick="fleetAutoImport('orc')" ${Lab.fleetBusy ? "disabled" : ""}>Re-read ratings</button>
+      ${qhelp("The certificate number the race scores on. It's in the NOR or SI. Pick it, re-read, then Save.")}
+    </div>${per}
+  </div>`;
 }
 
 function fleetSrcBadge(e) {
@@ -3021,6 +3057,8 @@ function paintFleet() {
 
     ${fleetGunsCard(roster, own)}
 
+    ${fleetRatingCard(sc)}
+
     ${Lab.fleetMsg ? `<div class="banner ${Lab.fleetMsgErr ? "warn" : "ok"}" style="margin-bottom:8px">${esc(Lab.fleetMsg)}</div>` : ""}
     ${roster.length
       ? `<details class="card" ${Lab.fleetImportOpen ? "open" : ""} ontoggle="Lab.fleetImportOpen=this.open">
@@ -3035,7 +3073,7 @@ function paintFleet() {
         <span class="muted" style="font-size:12px">From the <b>YB tracker</b>:</span>
         <button class="${roster.length ? "mini" : ""}" onclick="fleetAutoImport('both')" ${Lab.fleetBusy || !ybCfg ? "disabled" : ""} title="${ybCfg ? "" : "No YB tracker set for this race"}">${Lab.fleetBusy ? "Importing…" : "Boats + handicaps"}</button>
         <button class="mini" onclick="fleetAutoImport('yb')" ${Lab.fleetBusy || !ybCfg ? "disabled" : ""}>Boats only</button>
-        <label>ORC countries <input id="fleetOrcCC" class="ein" style="width:84px" value="USA,CAN" title="Countries to search, comma separated. Great Lakes = USA,CAN."></label>
+        <label>ORC countries <input id="fleetOrcCC" class="ein" style="width:84px" value="${esc((sc.rating_countries || []).join(","))}" placeholder="from race" oninput="fleetCCSet(this.value)" title="Comma separated. Blank: the venue's country and the sail numbers."></label>
         <button class="mini" onclick="fleetAutoImport('orc')" ${Lab.fleetBusy ? "disabled" : ""}>Add ORC handicaps to list</button>
       </div>
       <div style="margin-top:10px;border-top:1px solid var(--line);padding-top:10px">
@@ -3106,6 +3144,25 @@ async function renderRules() {
 async function rulesPickRace(id) {
   if (!(await confirmLeave())) return paintRules();   // Stay → repaint puts the picker back
   Lab.sel = id; Lab.editDef = null; renderRules();
+}
+function rulesCCSet(v) {
+  Lab.editDef.rules_profile.scoring.rating_countries =
+    (v || "").split(",").map((c) => c.trim().toUpperCase()).filter(Boolean);
+}
+// Per-course ORC columns, for a race whose courses score on different numbers. Blank = race-wide column.
+function rulesCourseCol(cid, v) {
+  const sc = Lab.editDef.rules_profile.scoring;
+  const old = (sc.course_columns || []).find((r) => r && r.course === cid) || {};
+  const rows = (sc.course_columns || []).filter((r) => r && r.course !== cid);
+  if ((v || "").trim()) rows.push({ course: cid, column: v.trim(), column_tod: old.column_tod || "" });
+  sc.course_columns = rows;
+}
+function rulesCourseCols(d, sc) {
+  const courses = d.courses || [];
+  if (courses.length < 2) return "";
+  const colOf = (cid) => ((sc.course_columns || []).find((r) => r && r.course === cid) || {}).column || "";
+  return `<div class="opt-controls" style="margin-top:6px"><span class="muted" style="font-size:12px">Column by course:</span>
+    ${courses.map((c) => `<label>${esc(c.name || c.id)} <input class="ein" value="${attr(colOf(c.id))}" placeholder="same" oninput="rulesCourseCol('${attr(c.id)}', this.value)"></label>`).join("")}</div>`;
 }
 function modAdd() { Lab.editDef.rules_profile.modifications.push({ ref: "", rule: "", summary: "" }); paintRules(); }
 function modRemove(i) { rulesRemove(Lab.editDef.rules_profile.modifications, i, "rule change"); }
@@ -3230,6 +3287,13 @@ function paintRules() {
         <label>Method ${ein("rules_profile.scoring.method", sc.method, "Single-Number ToT", "wide")}</label>
         <label>Ref ${ein("rules_profile.scoring.ref", sc.ref, "NOR §13")}</label>
       </div>
+      <div class="opt-controls" style="margin-top:8px">
+        <label>Rating ${esel("rules_profile.scoring.rating_system", sc.rating_system || "", ["", "ORC", "PHRF", "IRC", "ONE_DESIGN"])}</label>
+        <label>ORC column ${ein("rules_profile.scoring.rating_column", sc.rating_column, "e.g. TMF_Inshore")}</label>
+        <label>ToD column ${ein("rules_profile.scoring.rating_column_tod", sc.rating_column_tod, "optional")}</label>
+        <label>ORC countries <input class="ein" value="${attr((sc.rating_countries || []).join(","))}" placeholder="from venue + sail numbers" oninput="rulesCCSet(this.value)"></label>
+      </div>
+      ${rulesCourseCols(d, sc)}
       <div style="margin-top:10px"><b style="font-size:12px">Rule changes</b>
         <div class="muted" style="font-size:11px;margin:2px 0 6px">Reference and rule on top, full text below.</div>
         ${mods.length ? mods.map((m, i) => `<div class="req-block">

@@ -21,6 +21,8 @@ import time
 import os
 import re
 
+from shared import race_def
+
 from . import datasource, ais, tracker
 
 # corrected-time tags
@@ -210,17 +212,28 @@ def get_fleet(max_range_nm: float = 40.0):
     if not method.strip() and _scoring_kind(scoring.get("system")) in ("tot", "tod"):
         method = (scoring.get("system") or "").lower()     # a system field that names the method
     kind = _scoring_kind(method)
+    # which rating the race scores on (#311): the same race-definition field the Lab import reads
+    spec = race_def.rating_spec({"rules_profile": {"scoring": scoring}, "own": own_cfg})
+    system = spec["system"]
+    if system and system != "ORC":
+        kind = None                         # only ORC math here; PHRF/IRC/one-design say so below
     is_tod = kind == "tod"
 
     gaps = []
     if not roster:
         return {"available": False, "note": "No fleet list loaded.", "fleet": [], "traffic": []}
-    if kind is None:
+    if kind is None and system and system != "ORC":
+        gaps.append(f"{system} scoring not supported, no corrected gaps")
+    elif kind is None:
         # an unsupported method (performance curve, one-design, PHRF ToD+ToT mix, ...) must not
         # be scored as ToT behind the crew's back: no corrected gaps at all, and say so.
         gaps.append(f"scoring '{scoring.get('method')}' not supported, no corrected gaps")
     elif not method.strip():
         gaps.append("no scoring set, using Time-on-Time")
+    has_col = spec["column"] or any(isinstance(r, dict) and r.get("column")
+                                    for r in scoring.get("course_columns") or [])
+    if kind is not None and system == "ORC" and not has_col:
+        gaps.append("rating column unknown, gaps may be off")
 
     own = ais._own_ship()
     raw = datasource.active().ais_targets(ais.AIS_WINDOW_MIN)

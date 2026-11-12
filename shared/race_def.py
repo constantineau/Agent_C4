@@ -25,6 +25,7 @@ NORs publish degrees-decimal-minutes; `dm_to_dd` documents the conversion used.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field, asdict
 from typing import Optional
 
@@ -41,6 +42,9 @@ REQ_CATEGORIES = {"safety", "structural", "crew_safety", "navigation", "communic
 REQ_PHASES = {"pre_entry", "pre_start", "start", "in_race", "at_gate", "at_finish", "post_race"}
 # What surfaces a race-time requirement on the onboard console.
 TRIGGER_TYPES = {"none", "time", "event", "location"}
+# Handicap systems a race can score on (rules_profile.scoring.rating_system). Only ORC has a
+# rating feed today; the others are named so a race can say so instead of being read as ORC.
+RATING_SYSTEMS = {"ORC", "PHRF", "IRC", "ONE_DESIGN"}
 
 
 def dm_to_dd(deg: float, minutes: float, hemi: str) -> float:
@@ -100,6 +104,13 @@ class Scoring:
     options: list = field(default_factory=list)
     decided: str = ""              # when/how the option is fixed (e.g. race-morning briefing)
     ref: str = ""
+    # Which handicap number the race scores on (#311). Read by the Lab fleet import and the in-race
+    # fleet model; nothing guesses it from the race's name. See `rating_spec` / `rating_countries`.
+    rating_system: str = ""        # RATING_SYSTEMS, "" = not stated yet
+    rating_column: str = ""        # ORC: certificate column for the ToT number (e.g. "TMF_Inshore")
+    rating_column_tod: str = ""    # ORC: matching ToD column, "" if none
+    course_columns: list = field(default_factory=list)   # [{course, column, column_tod}] per course
+    rating_countries: list = field(default_factory=list)  # ORC national authorities to search
 
 
 @dataclass
@@ -204,6 +215,8 @@ class RaceDefinition:
     tracker: dict = field(default_factory=dict)        # public race tracker source config (see TrackerConfig)
     provenance: dict = field(default_factory=dict)     # Provenance
     schema_version: str = SCHEMA_VERSION
+    venue_country: str = ""        # start venue's country, World Sailing 3-letter code (e.g. "GBR");
+                                   # seeds the ORC country list when the scoring block names none
 
 
 # --- (de)serialize + validate -------------------------------------------------
@@ -290,6 +303,7 @@ def validate(d: dict) -> tuple[list, list]:
             warnings.append(f"requirement {r.get('id')!r} is delivered to the iPad but has no "
                             f"trigger — when should it surface?")
     rp = d.get("rules_profile", {})
+    warnings += rating_warnings(d)
     if rp.get("tracker_permitted") is None:
         warnings.append("rules_profile.tracker_permitted unset — confirm per-race (SI)")
     tr = d.get("tracker", {})
@@ -416,6 +430,99 @@ def marks_with_side(definition: dict, course_id: str = None):
         side = m.get("rounding", "none")
         if side in ("port", "starboard", "gate"):
             out.append({"name": m.get("name", "mark"), "type": m.get("type", "mark"), "side": side})
+    return out
+
+
+# --- which handicap number the race scores on (#311) ----------------------------
+_SAIL_PREFIX = re.compile(r"^\s*([A-Za-z]{3})[\s\-]*\d")
+
+
+def rating_system(scoring: dict) -> str:
+    """The race's rating system ('ORC' | 'PHRF' | 'IRC' | 'ONE_DESIGN') or '' when not stated.
+    The explicit `rating_system` field wins; else a system/method text that names exactly one."""
+    sc = scoring or {}
+    s = re.sub(r"[\s\-]+", "_", str(sc.get("rating_system") or "").strip().upper())
+    if s:
+        return s
+    txt = f"{sc.get('system') or ''} {sc.get('method') or ''}".upper()
+    found = [n for n in ("ORC", "PHRF", "IRC") if re.search(rf"\b{n}\b", txt)]
+    if re.search(r"\bONE[\s\-]?DESIGN\b", txt):
+        found.append("ONE_DESIGN")
+    return found[0] if len(found) == 1 else ""
+
+
+def _course_for(definition: dict, course_id: str = None):
+    """The course a rating is read for: the one asked, else our division's course."""
+    if course_id:
+        return course_id
+    own_div = str(((definition or {}).get("own") or {}).get("division") or "").strip()
+    for dv in (definition or {}).get("divisions") or []:
+        if own_div and str(dv.get("id") or "").strip() == own_div:
+            return dv.get("course_ref")
+    return None
+
+
+def rating_spec(definition: dict, course_id: str = None) -> dict:
+    """Which certificate number the race scores on: {system, column, column_tod, course}.
+    `column` is None when the race does not say: callers must then ask, never guess one.
+    A per-course column (scoring.course_columns) wins over the race-wide `rating_column`; with no
+    course given, our division's course is used, or the only per-course column there is."""
+    sc = (((definition or {}).get("rules_profile") or {}).get("scoring")) or {}
+    rows = [r for r in (sc.get("course_columns") or []) if isinstance(r, dict) and r.get("column")]
+    cid = _course_for(definition, course_id)
+    row = next((r for r in rows if cid and str(r.get("course")) == str(cid)), None)
+    if row is None and not cid and len({(r["column"], r.get("column_tod") or "") for r in rows}) == 1:
+        row = rows[0]
+    col = (row or {}).get("column") or sc.get("rating_column") or None
+    tod = ((row or {}).get("column_tod") if row else sc.get("rating_column_tod")) or None
+    return {"system": rating_system(sc), "column": col, "column_tod": tod,
+            "course": (row or {}).get("course") or cid}
+
+
+def sail_prefix(sail) -> str:
+    """'GBR 1234' / 'usa-60' → 'GBR' / 'USA'; '' when the sail number has no country prefix."""
+    m = _SAIL_PREFIX.match(str(sail or ""))
+    return m.group(1).upper() if m else ""
+
+
+def rating_countries(definition: dict, entries: list = None, limit: int = 6) -> list:
+    """National authorities to search for certificates. The scoring block's list wins; else the
+    start venue's country, then entrants' sail-number prefixes, most common first."""
+    d = definition or {}
+    sc = ((d.get("rules_profile") or {}).get("scoring")) or {}
+    given = sc.get("rating_countries") or []
+    if isinstance(given, str):
+        given = given.split(",")
+    out = [str(c).strip().upper() for c in given if str(c).strip()]
+    if out:
+        return out
+    venue = str(d.get("venue_country") or "").strip().upper()
+    if venue:
+        out.append(venue)
+    counts = {}
+    for e in entries if entries is not None else (d.get("fleet") or []):
+        p = sail_prefix((e or {}).get("sail"))
+        if p:
+            counts[p] = counts.get(p, 0) + 1
+    for p, _n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
+        if p not in out:
+            out.append(p)
+    return out[:limit]
+
+
+def rating_warnings(d: dict) -> list:
+    """Race-review flags for the rating fields: a fleet with no system, or ORC with no column."""
+    sc = ((d.get("rules_profile") or {}).get("scoring")) or {}
+    system = rating_system(sc)
+    out = []
+    if system and system not in RATING_SYSTEMS:
+        out.append(f"scoring.rating_system {system!r} unknown (ORC, PHRF, IRC, ONE_DESIGN)")
+    elif system == "ORC":
+        cols = [r for r in (sc.get("course_columns") or []) if isinstance(r, dict) and r.get("column")]
+        if not sc.get("rating_column") and not cols:
+            out.append("Rating column unknown: pick one (scoring)")
+    elif not system and d.get("fleet"):
+        out.append("Rating system unknown: set it in scoring")
     return out
 
 
