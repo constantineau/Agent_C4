@@ -25,6 +25,41 @@ from . import track as track_mod
 
 _HOST = "https://cf.yb.tl"
 
+# No race is built in (#310): the fleet is routed on the course of a Lab race definition the user
+# picks, and the tracks come from that race's tracker. Retro reads YB only today.
+NO_RACE = "Pick a race to route on."
+NO_COURSE = "This race has no course with marks."
+_YB = ("yb", "ybtracking", "yellowbrick", "bycmack")
+
+
+def setup_for(definition: dict) -> dict:
+    """What the retro card needs from a Lab race definition: the YB race id its tracker names
+    (or a plain note why there is none), the course retro routes on, and the ORC countries to
+    search. Nothing here guesses a race."""
+    d = definition or {}
+    tr = d.get("tracker") or {}
+    prov = str(tr.get("provider") or "").strip().lower()
+    yb_id, note = None, None
+    if prov in _YB and tr.get("race"):
+        yb_id = str(tr["race"]).strip()
+    elif prov and prov not in _YB and prov != "sample":
+        note = f"Retro reads YB tracks only. This race uses {prov}. Type a YB race id if it had one."
+    else:
+        note = "No YB race id in this race. Type one."
+    courses = [{"id": c.get("id"), "name": c.get("name") or c.get("id")}
+               for c in d.get("courses") or [] if c.get("id")]
+    return {"race_id": d.get("race_id"), "yb_id": yb_id, "note": note,
+            "course_id": default_course(d), "courses": courses,
+            "countries": race_def.rating_countries(d)}
+
+
+def default_course(definition: dict):
+    """Our division's course, else the race's first course; None when it has none."""
+    d = definition or {}
+    own = race_def.course_of_division(d, (d.get("own") or {}).get("division"))
+    ids = [c.get("id") for c in d.get("courses") or [] if c.get("id")]
+    return own if own in ids else (ids[0] if ids else None)
+
 
 def _yb(path, raw=False):
     return track_mod._yb_get(f"{_HOST}/{path}", raw=raw)
@@ -128,6 +163,12 @@ _RESULT_HEAVY = ("isochrones", "laylines", "candidate_paths", "wind_grid", "curr
 # so the batch runs via the shared jobs.py machinery and the UI/CLI polls status) ----------------
 
 def start_fleet_job(race_id, def_race_id, course_id, teams, limit, resolution) -> dict:
+    """Refuses up front (no job) when no race definition is picked or it isn't in the library."""
+    if not def_race_id:
+        return {"ok": False, "note": NO_RACE}
+    from . import store
+    if not store.get_race(def_race_id):
+        return {"ok": False, "note": f"Race {def_race_id!r} isn't in the library."}
     return jobs.start(
         "retro_fleet",
         lambda progress: run_fleet(race_id, def_race_id, course_id, teams, limit, resolution,
@@ -139,27 +180,33 @@ def fleet_job_status() -> dict:
     return jobs.status("retro_fleet")
 
 
-def run_fleet(race_id: str, def_race_id: str = "bayview-mackinac-2026",
-              course_id: str = "cove_island", teams=None, limit=None,
-              resolution: str = "auto", on_progress=None) -> dict:
+def run_fleet(race_id: str, def_race_id: str = None, course_id: str = None, teams=None,
+              limit=None, resolution: str = "auto", on_progress=None) -> dict:
     """R4: optimize the course for EVERY archived boat on ITS ORC polar through the forecast that
     was knowable at ITS division's gun, then score its actual track against its own optimal route.
 
     One wind field is built per distinct division-start hour (staggered starts pick different HRRR
     cycles; the pinned GRIBs are shared). Results are slimmed of visualization-only arrays but keep
-    path/legs — the archive is for analysis, not repaint. `teams`/`limit` scope a pilot subset."""
+    path/legs — the archive is for analysis, not repaint. `teams`/`limit` scope a pilot subset.
+
+    `def_race_id` is required: the Lab race definition whose course the fleet is routed on. No
+    course given → our division's course, else the race's first (`default_course`)."""
     from . import optimizer, store
     from .wind import build_windfield
     from .wind.archive import gun_sources
 
     say = on_progress or (lambda *_: None)
+    if not def_race_id:
+        return {"ok": False, "note": NO_RACE}
     d = store.get_race(def_race_id)
     if not d:
-        return {"ok": False, "note": f"unknown lab race definition {def_race_id!r}"}
+        return {"ok": False, "note": f"Race {def_race_id!r} isn't in the library."}
     race = rs.get_race(race_id)
     if not race:
         return {"ok": False, "note": "race not ingested yet"}
-    marks, _skipped, _cid = race_def.course_to_marks(d, course_id)
+    marks, _skipped, course_id = race_def.course_to_marks(d, course_id or default_course(d))
+    if len(marks) < 2:
+        return {"ok": False, "note": NO_COURSE}
 
     tracked = rs.teams_with_tracks(race_id)
     have_polar = {p["team_id"] for p in rs.get_polars(race_id)}
@@ -371,22 +418,42 @@ def venue_stats():
                      "labeled historical prior, never a forecast.")}
 
 
-def match_polars(race_id: str, country: str = "USA") -> dict:
-    """R2: ORC cert + converted polar for every entry that matches the public dump."""
+def match_polars(race_id: str, country=None, def_race_id: str = None) -> dict:
+    """R2: ORC cert + converted polar for every entry that matches the public dump.
+
+    Countries: the ones typed (`country`, 'USA,CAN' or a list), else the picked race definition's
+    (its scoring list, else venue country + entrants' sail prefixes), else the entrants' sail
+    prefixes alone. Each country's dump is tried in order; the first match wins."""
     entries = rs.get_entries(race_id)
     if not entries:
         return {"ok": False, "note": "race not ingested yet — run ingest first"}
-    idx = fi._orc_dump(country)
+    definition = None
+    if def_race_id:
+        from . import store
+        definition = store.get_race(def_race_id)
+    countries = fi._countries(country, definition, entries)
+    if not countries:
+        return {"ok": False, "note": fi.COUNTRY_UNKNOWN}
+    idxs = []
+    for cc in countries:
+        try:
+            idxs.append((cc, fi._orc_dump(cc)))
+        except Exception as exc:
+            print(f"[retro] ORC dump {cc} failed ({type(exc).__name__}) — skipping", flush=True)
+    if not idxs:
+        return {"ok": False, "note": f"ORC database fetch failed ({','.join(countries)})"}
     matched, misses = 0, []
     for e in entries:
-        rec, by, conf = None, None, 0.0
+        rec, by, conf, country = None, None, 0.0, None
         s = fi._norm_sail(e.get("sail"))
-        if s and s in idx["by_sail"]:
-            rec, by, conf = idx["by_sail"][s], "sail", 0.9
-        else:
-            n = fi._norm(e.get("boat"))
-            if n and n in idx["by_name"]:
-                rec, by, conf = idx["by_name"][n], "name", 0.6
+        n = fi._norm(e.get("boat"))
+        for cc, idx in idxs:
+            if s and s in idx["by_sail"]:
+                rec, by, conf, country = idx["by_sail"][s], "sail", 0.9, cc
+            elif n and n in idx["by_name"]:
+                rec, by, conf, country = idx["by_name"][n], "name", 0.6, cc
+            if rec:
+                break
         if not rec:
             misses.append(e.get("boat"))
             continue
@@ -400,5 +467,6 @@ def match_polars(race_id: str, country: str = "USA") -> dict:
         rs.save_polar(race_id, e["team_id"], cert_id, polar, by, conf)
         matched += 1
     return {"ok": True, "race_id": race_id, "entries": len(entries), "matched": matched,
-            "certs_in_dump": idx.get("n"), "unmatched": misses[:30],
+            "countries": [cc for cc, _ in idxs],
+            "certs_in_dump": sum(idx.get("n") or 0 for _, idx in idxs), "unmatched": misses[:30],
             "unmatched_n": len(misses)}

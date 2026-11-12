@@ -443,7 +443,6 @@ def test_boat_library_carries_bravos_own_polar():
 
 
 # ==== 5. Race defaults (wave 2) ==================================================================
-@xfail("#310", "fleet retro defaults to the Bayview course when no definition is given")
 def test_retro_has_no_bayview_default():
     import inspect
     p = inspect.signature(retro.run_fleet).parameters
