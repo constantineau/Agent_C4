@@ -449,7 +449,7 @@ def _merge_tracker(blob, roster, fleet, unmatched, pts, origin, own, own_dtf,
         gaps.append("tracker not allowed this race, distant boats hidden")
         return {"permitted": False, "available": False,
                 "note": "Tracker not allowed this race. Check the SIs."}
-    tk = tracker.positions(tcfg)
+    tk = tracker.positions(tcfg, centre=origin)   # origin = the course's first mark (sample feed)
     status = {"permitted": True, "available": tk["available"], "count": len(tk["positions"]),
               "fetched_at": tk["fetched_at"], "error": tk["error"], "delay_min": tk["delay_min"],
               "note": tk["note"]}

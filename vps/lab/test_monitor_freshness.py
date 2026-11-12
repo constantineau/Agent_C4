@@ -67,7 +67,15 @@ check("no fix carries a time → no verdict (UI says 'unknown', never green)",
 check("no fixes at all → no verdict", M.fleet({})["freshness"] is None)
 
 print("demo fleet (fixes 15 min old) reads fresh")
-check("demo fresh", M.fleet({}, demo=True)["freshness"] == "fresh")
+COURSE = {"courses": [{"id": "c", "start": {"lat": -33.80, "lon": 151.30},
+                       "marks": [{"seq": 1, "name": "M1", "type": "buoy", "lat": -34.0, "lon": 151.5}]}]}
+demo = M.fleet(COURSE, demo=True)
+check("demo fresh", demo["freshness"] == "fresh")
+# #312: the demo fleet sits on the race course, wherever it is, never a fixed venue
+check("demo fleet centres on the course",
+      all(abs(f["lat"] + 33.9) < 0.5 and abs(f["lon"] - 151.4) < 0.5 for f in demo["fixes"]))
+check("demo with no course: no fixes, says why",
+      M.fleet({}, demo=True)["fixes"] == [] and "course" in M.fleet({}, demo=True)["reason"])
 
 print("PASS" if ok else "FAIL")
 raise SystemExit(0 if ok else 1)

@@ -94,8 +94,15 @@ print("--- tracker ---")
 
 # (0) tracker.positions: aged + confidence-reduced fixes from the bench 'sample' provider
 tracker._reset_cache()
-tk = tracker.positions({"provider": "sample", "delay_min": 15})
+tk = tracker.positions({"provider": "sample", "delay_min": 15}, centre=(MARKS[0]["lat"], MARKS[0]["lon"]))
 check("tracker available with positions", tk["available"] and len(tk["positions"]) == 3)
+# #312: the bench feed sits on the loaded course, never a fixed venue; no course → no fixes
+check("sample fixes sit on the course", all(abs(f["lat"] - 44.0) < 0.5 and abs(f["lon"] + 82.0) < 0.5
+                                           for f in tk["positions"]))
+tracker._reset_cache()
+tk0 = tracker.positions({"provider": "sample", "delay_min": 15})
+check("sample feed with no course: no fixes, says why", not tk0["available"] and "course" in (tk0["error"] or ""))
+tracker._reset_cache()
 fix0 = tk["positions"][0]
 check("each fix is aged (age_s ~ delay)", 800 < fix0["age_s"] < 1200)   # 15 min ≈ 900 s
 check("delayed fix confidence is reduced (<1)", 0.1 <= fix0["confidence"] < 1.0)
@@ -132,8 +139,9 @@ check("not-permitted tracker → withheld gap note", any("not allowed" in g.lowe
 check("not-permitted tracker status flags permitted False", rnp["tracker"] and rnp["tracker"]["permitted"] is False)
 
 # (3) identity enrichment: an unmatched AIS target sitting ON a roster boat's tracker fix gets resolved.
-#     Place an MMSI-less, name-less AIS target right at Il Mostro's sample-feed position (45.35,-82.70).
-TARGETS_ID = TARGETS + [{"mmsi": "555555555", "name": None, "lat": 45.35, "lon": -82.70, "sog": 8.3, "cog": 15, "time": 0}]
+#     Place an MMSI-less, name-less AIS target right at Il Mostro's sample-feed position.
+_im = next(f for f in tk["positions"] if f["name"] == "Il Mostro")
+TARGETS_ID = TARGETS + [{"mmsi": "555555555", "name": None, "lat": _im["lat"], "lon": _im["lon"], "sog": 8.3, "cog": 15, "time": 0}]
 fleet.datasource.active = lambda: FakeSource(BLOB_TK, TARGETS_ID, MARKS)
 tracker._reset_cache()
 rid = fleet.get_fleet()

@@ -128,28 +128,34 @@ def _yb_url(cfg):
     return f"https://{host}/API3/Race/{race}/GetPositions?t=0"
 
 
-def _provider_sample(cfg):
-    """Bench fixture — there is no live race. A few roster boats near the Mackinac course, recently
-    timestamped (minus a realistic feed delay) so the age/confidence path is exercised offline."""
+# bench boats as offsets (deg) from the course: never a fixed venue (#312)
+_SAMPLE = [("Windquest", -0.05, -0.05, 7.8, 20, 0), ("Il Mostro", 0.20, 0.10, 8.4, 15, 120),
+           ("Defiance", -0.20, -0.20, 7.1, 25, 60)]
+
+
+def _provider_sample(cfg, centre=None):
+    """Bench fixture — there is no live race. A few roster boats around the loaded course (`centre`
+    = (lat, lon)), recently timestamped (minus a realistic feed delay) so the age/confidence path
+    is exercised offline. No course: no fixes."""
+    if not centre:
+        return []
     now = time.time()
     delay = float(cfg.get("delay_min") or 15) * 60.0
-    return [
-        {"name": "Windquest",  "lat": 45.10, "lon": -82.85, "sog": 7.8, "cog": 20, "time": now - delay},
-        {"name": "Il Mostro",  "lat": 45.35, "lon": -82.70, "sog": 8.4, "cog": 15, "time": now - delay - 120},
-        {"name": "Defiance",   "lat": 44.95, "lon": -83.00, "sog": 7.1, "cog": 25, "time": now - delay - 60},
-    ]
+    return [{"name": n, "lat": round(centre[0] + dla, 4), "lon": round(centre[1] + dlo, 4), "sog": s,
+             "cog": c, "time": now - delay - lag} for (n, dla, dlo, s, c, lag) in _SAMPLE]
 
 
 _PROVIDERS_YB = {"yb", "ybtracking", "yellowbrick", "bycmack"}   # bycmack.com/tracking IS YB
 _PROVIDERS_GENERIC = {"generic_json", "tractrac"}
 
 
-def _fetch(cfg):
+def _fetch(cfg, centre=None):
     """Best-effort PULL of the tracker endpoint → (fixes, error). Never raises — a failed/absent feed
     yields ([], reason), exactly like a not-yet-posted GRIB; the fleet view proceeds without it."""
     provider = (cfg.get("provider") or "").strip().lower()
     if provider == "sample":
-        return _provider_sample(cfg), None
+        fixes = _provider_sample(cfg, centre)
+        return fixes, (None if fixes else "sample feed needs a loaded course")
     if provider in _PROVIDERS_YB:
         url = _yb_url(cfg)
         if not url:
@@ -184,18 +190,20 @@ def _age_conf(age_s):
     return max(_CONF_FLOOR, min(1.0, 1.0 - (age_s / 60.0) / _STALE_MIN))
 
 
-def positions(cfg, now=None):
+def positions(cfg, now=None, centre=None):
     """Cached tracker fixes, AGED + CONFIDENCE-REDUCED. Returns a status dict:
       {available, positions:[{name,lat,lon,sog,cog,time,age_s,confidence}], fetched_at, error,
        delay_min, note}
     Cached for TRACKER_REFRESH_S so the per-poll fleet view never blocks on the network (the feed is
-    delayed by minutes — a 2-min cache costs nothing)."""
+    delayed by minutes — a 2-min cache costs nothing). `centre` (lat, lon) places the bench
+    'sample' feed on the loaded course."""
     now = now or time.time()
     cfg = cfg or {}
-    key = (cfg.get("provider"), cfg.get("url"))
+    key = (cfg.get("provider"), cfg.get("url"),
+           tuple(centre) if centre and cfg.get("provider") == "sample" else None)
     cached = _CACHE.get(key)
     if cached is None or (now - cached["at"]) > _REFRESH_S:
-        fixes, error = _fetch(cfg)
+        fixes, error = _fetch(cfg, centre)
         cached = {"at": now, "fixes": fixes, "error": error}
         _CACHE[key] = cached
     out = []
