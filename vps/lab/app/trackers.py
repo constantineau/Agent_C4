@@ -37,6 +37,7 @@ FILE_NAMES = ("file", "upload", "gpx", "csv")
 
 NO_FILE = "No fleet file for this race yet. Upload one in Debrief, Fleet retro."
 FILE_HINT = "Upload the fleet tracks: GPX or CSV."
+GPX_NO_ZONE = "GPX times have no zone. Set the race's time zone."
 NO_TIMES = "No fixes with a usable time. Times need a zone, or set the race's time zone."
 
 
@@ -256,7 +257,25 @@ def _local(tag):
     return tag.rsplit("}", 1)[-1]
 
 
-def _gpx_tracks(data: bytes, stem: str):
+def _gpx_time(text, tz_name, stem):
+    """A GPX <time> as epoch seconds. GPX times are UTC ('Z') by spec; one with no zone is read
+    in the race's time zone, never the server's, and refused when the race has none. Unreadable
+    text is None (the fix is dropped)."""
+    from datetime import datetime
+    s = (text or "").strip()
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is not None:
+        return dt.timestamp()
+    t = race_def._gun_epoch(s, tz_name)
+    if t is None:
+        raise ValueError(f"{stem}: {GPX_NO_ZONE}")
+    return t
+
+
+def _gpx_tracks(data: bytes, stem: str, tz_name: str = ""):
     """[(boat, fixes)] from a GPX: one per named <trk>; an unnamed lone track takes the file name."""
     try:
         root = ET.fromstring(data)
@@ -278,7 +297,7 @@ def _gpx_tracks(data: bytes, stem: str):
                 lat, lon = float(el.get("lat")), float(el.get("lon"))
             except (TypeError, ValueError):
                 continue
-            t = next((track_mod._parse_iso(c.text) for c in el if _local(c.tag) == "time"), None)
+            t = next((_gpx_time(c.text, tz_name, stem) for c in el if _local(c.tag) == "time"), None)
             pts.append({"lat": lat, "lon": lon, "t": t})
         out.append((name.strip(), pts, {}))
     return out
@@ -329,7 +348,7 @@ def parse_fleet_files(files, definition=None) -> dict:
         stem = os.path.splitext(os.path.basename(fname or "track"))[0] or "track"
         head = (data or b"").lstrip(b"\xef\xbb\xbf \t\r\n")[:1]
         if (fname or "").lower().endswith(".gpx") or head == b"<":
-            got = _gpx_tracks(data, stem)
+            got = _gpx_tracks(data, stem, tz_name)
         else:
             got = _csv_tracks((data or b"").decode("utf-8-sig", "replace"), stem, tz_name)
         for name, pts, meta in got:

@@ -1366,12 +1366,12 @@ async def retro_upload(def_race_id: str, race_id: str = None,
     d = store.get_race(def_race_id)
     if not d:
         return JSONResponse({"detail": "That race isn't in the library."}, status_code=404)
-    got, total = [], 0
+    got, left = [], trackers.MAX_FILE_BYTES
     for f in files:
-        raw = await f.read()
-        total += len(raw)
-        if total > trackers.MAX_FILE_BYTES:
+        raw = await f.read(left + 1)          # never more than the limit + 1 byte into memory
+        if len(raw) > left:
             return JSONResponse({"detail": "File too big."}, status_code=413)
+        left -= len(raw)
         got.append((f.filename or "track", raw))
     try:
         res = await run_in_threadpool(retro.ingest_file, (race_id or "").strip() or def_race_id,

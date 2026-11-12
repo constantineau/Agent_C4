@@ -534,3 +534,52 @@ def test_yb_reingest_stops_a_pending_polar_match(monkeypatch):
     monkeypatch.setattr(fi, "_orc_dump", dump)
     monkeypatch.setattr(retro.orcpolar, "cert_polar", lambda rec: [[1, 2, 3]])
     assert retro.match_polars("demo2026", country="USA")["stale"]
+
+
+# ---- Codex minors on #345 ------------------------------------------------------------------
+def test_sail_matches_are_reserved_before_name_matches():
+    """Archive: Bravo/USA 1 = id 1. New file: Bravo now sails USA 3, and Renamed holds USA 1.
+    Whatever the row order, USA 1 keeps id 1 (by sail) and Bravo/USA 3 is a new boat."""
+    d = _race()
+    retro.ingest_file("orc-na-2027", [("f.csv", _csv(("Bravo", "USA 1", 1)))], d)
+    assert _ids() == {"Bravo": 1}
+    retro.ingest_file("orc-na-2027", [("f.csv", _csv(("Bravo", "USA 3", 1), ("Renamed", "USA 1", 2)))], d)
+    first = _ids()
+    retro.ingest_file("orc-na-2027", [("f.csv", _csv(("Bravo", "USA 1", 1)))], d)       # reset
+    retro.ingest_file("orc-na-2027", [("f.csv", _csv(("Renamed", "USA 1", 2), ("Bravo", "USA 3", 1)))], d)
+    assert first == _ids() and first["Renamed"] == 1 and first["Bravo"] != 1
+
+
+def test_gpx_time_without_a_zone_uses_the_race_zone():
+    naive = GPX.replace(b"Z</time>", b"</time>")
+    f = trackers.parse_fleet_files([("fleet.gpx", naive)], _race())          # America/New_York
+    assert f["tracks"][1][0]["t"] == 1_826_312_400.0                          # 16:00 New York = 21:00Z
+    with pytest.raises(ValueError, match="GPX times have no zone"):
+        trackers.parse_fleet_files([("fleet.gpx", naive)], _race(timezone=""))
+    zoned = GPX.replace(b"Z</time>", b"+01:00</time>")
+    f = trackers.parse_fleet_files([("fleet.gpx", zoned)], _race(timezone=""))
+    assert f["tracks"][1][0]["t"] == 1_826_294_400.0 - 3600
+
+
+def test_upload_over_the_limit_is_refused(monkeypatch, archive):
+    from fastapi.testclient import TestClient
+    from app import auth, main
+    monkeypatch.setattr(store, "get_race", lambda rid: _race() if rid == "orc-na-2027" else None)
+    monkeypatch.setattr(trackers, "MAX_FILE_BYTES", len(GPX) + 10)
+    read = []
+    from starlette.datastructures import UploadFile
+    real = UploadFile.read
+
+    async def spy(self, size=-1):
+        read.append(size)
+        return await real(self, size)
+    monkeypatch.setattr(UploadFile, "read", spy)
+    c = TestClient(main.app)
+    h = {"Authorization": "Bearer " + auth.issue_token()}
+    big = [("files", ("a.gpx", GPX, "application/gpx+xml")), ("files", ("b.gpx", GPX, "application/gpx+xml"))]
+    r = c.post("/api/retro/upload?def_race_id=orc-na-2027", headers=h, files=big)
+    assert r.status_code == 413 and r.json()["detail"] == "File too big."
+    assert read == [len(GPX) + 11, 11]                 # never more than what's left + 1 byte
+    assert rs.get_race("orc-na-2027") is None
+    r = c.post("/api/retro/upload?def_race_id=orc-na-2027", headers=h, files=big[:1])
+    assert r.status_code == 200
