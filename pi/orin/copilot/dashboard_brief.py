@@ -12,7 +12,7 @@ commentary. This keeps the engine as the source of truth and the LLM strictly as
 import json
 import re
 
-from . import config, ground
+from . import boatname, config, ground
 from .llm import LLMClient, LLMUnavailable
 
 _STATUSES = {"ok", "watch", "act"}
@@ -48,7 +48,7 @@ _READING = (
 )
 
 _SYSTEM = (
-    "You are the onboard tactical copilot for the SR33 racing yacht 'C4'. You are shown the crew's "
+    "You are the onboard tactical copilot for {boat}. You are shown the crew's "
     "race dashboard: tiles each with a current value and a deterministic status (ok/watch/act) "
     "already computed by the boat's instruments. You do NOT do the math — you INTERPRET what the "
     "instruments report. " + _READING + "\n\nYour job:\n"
@@ -102,7 +102,7 @@ _EXAMPLE_ASSISTANT = json.dumps({
 })
 
 _DETAIL_SYSTEM = (
-    "You are the onboard tactical copilot for the SR33 racing yacht 'C4'. The crew tapped one "
+    "You are the onboard tactical copilot for {boat}. The crew tapped one "
     "dashboard tile for a closer look. " + _READING + "\n\n"
     "In 1-3 short, plain sentences (about 12 words each; no JSON, no lists), lead with what the crew "
     "should do or watch, then what this tile means RIGHT NOW — specific to its actual values, keeping "
@@ -183,7 +183,7 @@ def make(tiles):
                 "sub": t.get("sub"), "status": t.get("status")} for t in tiles]
     user = "Dashboard tiles right now:\n" + json.dumps(compact, ensure_ascii=False)
     messages = [
-        {"role": "system", "content": _SYSTEM},
+        {"role": "system", "content": _SYSTEM.replace("{boat}", boatname.describe())},
         {"role": "user", "content": _EXAMPLE_USER},        # few-shot: the worked example…
         {"role": "assistant", "content": _EXAMPLE_ASSISTANT},
         {"role": "user", "content": user},                 # …then the real tiles
@@ -220,7 +220,7 @@ def detail_stream(domain, question, tiles):
         user += "\n\nThe crew asks: " + str(question).strip()
     try:
         for delta in LLMClient().chat_stream(
-            [{"role": "system", "content": _DETAIL_SYSTEM}, {"role": "user", "content": user}]):
+            [{"role": "system", "content": _DETAIL_SYSTEM.replace("{boat}", boatname.describe())}, {"role": "user", "content": user}]):
             yield delta
     except LLMUnavailable:
         return

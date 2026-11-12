@@ -789,12 +789,17 @@ async def crossovers():
     xo = sailplan.of(boats.polar_for(b))           # the selected boat's own table (#303)
     m = sailplan.model(xo)
     jibs = b.get("jib_crossovers") or []
-    cfg = {"code0": b.get("code0") or {}, "main_reefs": b.get("main_reefs") or {}}
+    cfg = dict(boats.sail_config(b) or {}, code0=b.get("code0") or {},
+               main_reefs=b.get("main_reefs") or {})       # + the boat's sail words (#305)
     if b.get("sail_inventory"):
         m["inventory"] = b["sail_inventory"]        # the boat's real inventory (incl. J2/J3, C0)
+    # each sail's family, so the screens name and colour the boat's own sails (#305)
+    from shared import sail_vocab
+    m["sail_families"] = {e["name"]: e["family"] for e in sail_vocab.inventory(
+        dict(b, sail_inventory=m.get("inventory") or []))}
     m["jib_crossovers"] = jibs
     m["crossovers"] = sailplan.crossovers_specialized(jibs, cfg, xo=xo)  # real jib per TWS row + C0
-    m["overlaps"] = sailplan.overlaps_specialized(jibs, xo=xo)  # toss-up bands, jib relabelled
+    m["overlaps"] = sailplan.overlaps_specialized(jibs, xo=xo, sail_config=cfg)  # toss-up bands
     if not xo:
         m["note"] = "No sail crossovers for this boat."
     m["code0"] = cfg["code0"]                       # light-air reacher band (crew, not cert)
@@ -842,7 +847,9 @@ async def save_sail_config(body: dict):
                 return JSONResponse({"detail": "code0 band out of range"}, status_code=400)
         b["code0"] = c0
         inv = b.get("sail_inventory") or []
-        if c0.get("enabled", True) and "C0" not in inv:
+        from shared import sail_vocab
+        # a Code 0 band needs a Code 0 aboard: the boat's own (any name), else one called C0
+        if c0.get("enabled", True) and not sail_vocab.of_family("code0", b):
             b["sail_inventory"] = inv + ["C0"]
     if mr is not None:
         if not isinstance(mr, dict):

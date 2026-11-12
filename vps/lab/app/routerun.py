@@ -33,6 +33,7 @@ def boat_inputs(boat, boat_polar=None):
         "helm_factor": boats.helm_factor(boat),
         "polar_adjustments": boats.polar_adjustments(boat),
         "wave_coeffs": boats.wave_coeffs(boat),
+        "tack_cost_s": boats.tack_cost_s(boat),
     }
 
 

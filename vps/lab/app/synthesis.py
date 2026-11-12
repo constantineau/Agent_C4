@@ -33,6 +33,7 @@ import os
 import time
 
 from shared import boat_polar as BPm
+from shared import sail_vocab
 from shared import race_def
 from . import forecast_ref
 from . import jobs
@@ -249,6 +250,14 @@ def _opus_synthesis(playbook: dict, definition, course_id, race_name):
 
 # ---------------------------------------------------------------------------- bundle assembly
 
+def _sail_cfg(b):
+    """Boat `b`'s sail config for the sail plan: Code 0 band, reefs, its sail words (#305)."""
+    from . import boats
+    return dict({"code0": b.get("code0") or {}, "main_reefs": b.get("main_reefs") or {}},
+                **{k: v for k, v in (boats.sail_config(b) or {}).items()
+                   if k in ("sail_families", "code0_sail")})
+
+
 def _boat_model(boat=None, boat_polar=None):
     """The reviewed boat sail/draft model frozen into the bundle — so the polars + sail crossovers
     the homework assumes travel onboard (the copilot/engine can surface the per-leg sail plan and the
@@ -267,13 +276,14 @@ def _boat_model(boat=None, boat_polar=None):
         "polar": BPm.summary(boat_polar),          # which polar the homework was routed on
         # the boat's own inventory (incl. J2/J3) wins over the cert's single-headsail list
         "sail_inventory": b.get("sail_inventory") or sm.get("inventory", []),
+        "sail_families": b.get("sail_families") or {},   # names whose shorthand doesn't say (#305)
         "sail_names": sm.get("sail_names", {}),
         # per-TWS×TWA zones with the upwind jib specialised to J1/J2/J3 by this boat's change-downs
         "crossovers": sailplan.crossovers_specialized(
-            b.get("jib_crossovers") or [],
-            {"code0": b.get("code0") or {}, "main_reefs": b.get("main_reefs") or {}}, xo=xo),
+            b.get("jib_crossovers") or [], _sail_cfg(b), xo=xo),
         # per-TWS toss-up bands (two sails within ~2% of target — the near-ties the zones can't show)
-        "overlaps": sailplan.overlaps_specialized(b.get("jib_crossovers") or [], xo=xo),
+        "overlaps": sailplan.overlaps_specialized(b.get("jib_crossovers") or [], xo=xo,
+                                                  sail_config=_sail_cfg(b)),
         "jib_crossovers": b.get("jib_crossovers", []),  # J1/J2/J3 by TWS (crew/sailmaker, not cert)
         # Code 0 band + main reef points — crew config the cert can't express (label overlays);
         # frozen so the copilot's sail-configuration calls are grounded in the reviewed model
@@ -541,12 +551,13 @@ def _play_synthesis(plays_in, corridor, profile, race_name):
     return {}, f"play narratives fell back to registry seeds ({last})"
 
 
-def _sail_speed(SP, sail, tws, twa):
+def _sail_speed(SP, sail, tws, twa, sail_config=None):
     """Per-sail-polar speed for `sail` at (tws, twa), interpolated on its curve (`shared.polar`), or
-    None when it has no curve or can't be flown there (jib change-downs share the J1 curve, so J2/J3
-    read as J1)."""
+    None when it has no curve or can't be flown there (jib change-downs and the Code 0 read the
+    rated headsail's curve, #305)."""
     from shared import polar as SPOL
-    pts = SP.get(sail) or SP.get({"J2": "J1", "J3": "J1", "C0": "J1"}.get(sail, "")) or []
+    from . import optimizer
+    pts = SP.get(optimizer._sail_polar_key(sail, list(SP), sail_config)) or []
     v = SPOL.lookup(pts, tws, twa) if pts else 0.0
     return v or None
 
@@ -590,8 +601,8 @@ def _sail_guidance_plays(consensus, jib_crossovers, sail_config=None, boat_polar
             if key in seen:
                 continue
             seen.add(key)
-            v_new = _sail_speed(SP, s2, thr + 1, twa)
-            v_old = _sail_speed(SP, sail, thr + 1, twa)
+            v_new = _sail_speed(SP, s2, thr + 1, twa, sail_config)
+            v_old = _sail_speed(SP, sail, thr + 1, twa, sail_config)
             rec = round(v_new - v_old, 2) if (v_new and v_old) else None
             gain = (f" — worth ~{rec} kn while it lasts" if rec and rec > 0.05 else "")
             verb = "builds" if direction == "over" else "drops"
@@ -631,7 +642,8 @@ def _reef_guidance_plays(consensus, sail_config):
             continue
         for kind, thr, cond in (
                 ("depower", mr.get("r1_tws_kn"), True),
-                ("a3_slot", mr.get("r1_a3_slot_tws_kn"), sail == "A3")):
+                ("a3_slot", mr.get("r1_a3_slot_tws_kn"),
+                 sail_vocab.family(sail, sail_config) == "asym")):
             if thr is None or not cond or kind in seen:
                 continue
             if not (w - 2 <= float(thr) <= w + 8):     # threshold within reach of this leg's breeze
@@ -645,17 +657,18 @@ def _reef_guidance_plays(consensus, sail_config):
                             "helm does it for you. Shake it out when the breeze drops back below. "
                             "From the boat's own reef points — confirm against the crew's feel.")
             else:
-                gid, name = "reef_r1_a3_slot", "Reef 1 with the A3 — open the slot"
-                narrative = (f"Running the A3 in ~{thr:g}+ kn — the main is blanketing the kite "
+                # the boat's own asym, by name (#305); the id stays for the copilot's records
+                gid, name = "reef_r1_a3_slot", f"Reef 1 with the {sail} — open the slot"
+                narrative = (f"Running the {sail} in ~{thr:g}+ kn — the main is blanketing the kite "
                              "and the slot between them has closed.")
-                guidance = (f"With the A3 up and ~{thr:g}+ kn, tuck in reef 1 to OPEN the slot "
-                            "between the kite and the main — the A3 breathes and the boat "
+                guidance = (f"With the {sail} up and ~{thr:g}+ kn, tuck in reef 1 to OPEN the slot "
+                            f"between the kite and the main — the {sail} breathes and the boat "
                             "stands up. From the boat's own reef points.")
             out.append({
                 "id": gid, "name": name, "kind": "sail_guidance", "category": "internal",
                 "params": {"reef": "R1", "tws_threshold": float(thr), "direction": "over",
                            "context": kind, "leg": i,
-                           **({"hoisted": "A3"} if kind == "a3_slot" else {})},
+                           **({"hoisted": sail} if kind == "a3_slot" else {})},
                 "narrative_seed": narrative,
                 "divergence": {"delta_eta_min": 0, "xte_mean_nm": None},
                 "guidance": guidance, "favored_side": None,
@@ -775,6 +788,17 @@ def synthesize(definition, course_id, start_epoch, models, ensemble_members=0, t
         from . import boats
         boat_polar = boats.polar_for(boat)
     boat_model = _boat_model(boat, boat_polar)
+    from . import boats as _boats, optimizer as _optm
+    with _optm.boat_tack_cost(_boats.tack_cost_s(boat)):     # the boat's own tack cost (#305)
+        return _synthesize(definition, course_id, start_epoch, models, ensemble_members,
+                           time_budget_s, jib_crossovers, sail_config, helm_factor, use_waves,
+                           polar_adjustments, wave_coeffs, fan_depth, chart, boat_polar, boat,
+                           boat_model, routed_on)
+
+
+def _synthesize(definition, course_id, start_epoch, models, ensemble_members, time_budget_s,
+                jib_crossovers, sail_config, helm_factor, use_waves, polar_adjustments,
+                wave_coeffs, fan_depth, chart, boat_polar, boat, boat_model, routed_on):
     from .geo import obstacles as _obs_mod
     chart = dict(chart or {})          # unset → the defaults the obstacle builder would use
     chart = {"source": (chart.get("source") or _obs_mod.COASTLINE_SOURCE).strip().lower(),

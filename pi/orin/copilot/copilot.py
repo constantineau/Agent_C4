@@ -17,6 +17,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 
 from . import adherence as adherence_mod
+from . import boatname
 from . import brief as brief_mod
 from . import config, ground, narrate as narrate_mod, playbook as playbook_mod, tools
 from .engine_client import EngineClient
@@ -121,7 +122,8 @@ def _shown_facts(snapshot: dict) -> dict:
 
 def _system_prompt(pb: playbook_mod.Playbook) -> str:
     return (
-        "You are the SR33's ONBOARD sailing copilot — bounded decision support during a race.\n"
+        f"You are {boatname.possessive(pb)} ONBOARD sailing copilot — bounded decision support "
+        "during a race.\n"
         "HARD RULES (these are not optional):\n"
         "1. You NEVER do arithmetic or estimate numbers yourself. If you need a number, call a "
         "tool to get it from the engine. The engine is the only source of numbers.\n"
@@ -478,7 +480,8 @@ def _strategy_prompt(pb: playbook_mod.Playbook, status_map=None) -> str:
                "predicates holding):\n" + "\n".join(lib) + "\n") if lib else ""
     return (
         _WIND_VOCAB + "\n"
-        "You are the SR33's ONBOARD strategy NARRATOR and playbook CONDITION-MATCHER. The engine has "
+        f"You are {boatname.possessive(pb)} ONBOARD strategy NARRATOR and playbook "
+        "CONDITION-MATCHER. The engine has "
         "ALREADY computed the strategic picture below — the numbers, the per-signal reads, the "
         "concordance AND the recommendation are FIXED FACTS; reuse them, do not change them or invent "
         "new numbers. You do NOT originate strategy or tactics.\n"

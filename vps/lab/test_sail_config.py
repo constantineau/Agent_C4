@@ -154,5 +154,69 @@ check("legs' beat/reach/run map to real scan angles",
       SYN._POS_TWA["beat"] == 45.0 and SYN._POS_TWA["reach"] == 100.0
       and SYN._POS_TWA["run"] == 150.0)
 
+# ---- 7) another boat's own sail names (#305) -------------------------------------------------------
+print("7) the boat's own sail names, by family")
+check("an A2 opens the slot like the A3 (any asym)",
+      (sailplan.reef_for(17, "run", "A2", mr) or {}).get("why") == "open the slot between the A2 and the main")
+check("a symmetric S2 gets no slot reef", sailplan.reef_for(17, "run", "S2", mr) is None)
+gx = [{"sail": "G1", "tws_max": 12}, {"sail": "G2", "tws_min": 12, "tws_max": 18}, {"sail": "G3", "tws_min": 18}]
+check("genoa change-downs pick by TWS", [sailplan.jib_for_tws(t, gx, "G1") for t in (8, 15, 22)]
+      == ["G1", "G2", "G3"])
+check("no change-downs: the rated headsail itself", sailplan.jib_for_tws(15, [], "G1") == "G1")
+check("a genoa change-down and a Code 0 read the rated headsail's curve",
+      OPT._sail_polar_key("G2", ["G1", "A2"]) == "G1" and OPT._sail_polar_key("C0", ["G1"]) == "G1"
+      and OPT._sail_polar_key("A2", ["G1", "A2"]) == "A2")
+check("sr33 unchanged: J2/J3/C0 read the J1 curve",
+      all(OPT._sail_polar_key(s, ["J1", "A3", "S1"]) == "J1" for s in ("J2", "J3", "C0")))
+from app import playbook as PB   # noqa: E402
+check("gear-loss plays for every kite in the plan, asym first",
+      PB._gear_sails({"G1", "S2", "A2", "C0"}) == ["A2", "S2"]
+      and PB._gear_sails({"J1", "A3", "S1"}) == ["A3", "S1"])
+cons_a2 = {"legs": [{"wind": {"tws": 15}, "sail": "A2", "twa": 140}]}
+a2 = next((p for p in SYN._reef_guidance_plays(cons_a2, {"main_reefs": mr})
+           if p["id"] == "reef_r1_a3_slot"), None)
+check("the slot-reef play names the boat's own asym",
+      a2 is not None and a2["name"] == "Reef 1 with the A2 — open the slot"
+      and a2["params"].get("hoisted") == "A2")
+
+# ---- 8) the boat's own Code 0 name and sail_families reach the sail plan (Codex on #334) ----------
+print("8) a custom Code 0 name and the boat's sail_families")
+from app import boats as BOATS   # noqa: E402
+RB = {"boat_id": "rb", "draft_m": 2.0, "sail_inventory": ["J1", "J2", "J3", "REACHER", "BIGRED", "S1"],
+      "sail_families": {"REACHER": "code0", "BIGRED": "asym"}, "code0": CFG["code0"],
+      "main_reefs": mr}
+RCFG = BOATS.sail_config(RB)
+check("the sail config carries the Code 0's own name and the family map",
+      RCFG.get("code0_sail") == "REACHER" and RCFG.get("sail_families", {}).get("BIGRED") == "asym")
+check("sr33's sail config is unchanged (no extra keys)",
+      set(BOATS.sail_config({"sail_inventory": ["J1", "C0", "A3"], "code0": CFG["code0"],
+                             "main_reefs": mr})) == {"code0", "main_reefs"})
+check("in the band the plan calls REACHER, never a C0 the boat doesn't carry",
+      sailplan.optimal_sail(6, 80, JIBS, RCFG) == "REACHER")
+rrows = sailplan.crossovers_specialized(JIBS, RCFG)
+shorts = {z.get("short") for zs in rrows.values() for z in zs}
+check("the crossover chart carves REACHER, no C0", "REACHER" in shorts and "C0" not in shorts)
+check("the slot reef fires for BIGRED (asym by the family map)",
+      (sailplan.reef_for(17, "run", "BIGRED", mr, RCFG) or {}).get("reef") == "R1"
+      and sailplan.reef_for(17, "run", "BIGRED", mr) is None)
+check("a named headsail is a headsail by the family map",
+      sailplan._is_headsail("HEAVY", {"sail_families": {"HEAVY": "jib"}})
+      and not sailplan._is_headsail("HEAVY"))
+check("REACHER reads the rated headsail's curve, BIGRED its own",
+      OPT._sail_polar_key("REACHER", ["J1", "A3"], RCFG) == "J1"
+      and OPT._sail_polar_key("BIGRED", ["J1", "BIGRED"], RCFG) == "BIGRED")
+check("gear-loss plays use the family map", PB._gear_sails({"J1", "BIGRED", "S1"}, RCFG) == ["BIGRED", "S1"])
+
+# ---- 9) holding speed of a named change-down reads the rated headsail (Codex round 2 on #334) -----
+print("9) a named change-down's holding speed")
+SPG = {"G1": [[10, 40, 5.0], [10, 60, 6.0], [10, 90, 6.5], [14, 40, 5.5], [14, 60, 6.5], [14, 90, 7.0]]}
+DOMG = OPT._sail_domains(SPG)
+HCFG = {"sail_families": {"HEAVY": "jib"}}
+check("HEAVY holds on the G1 curve with the family map",
+      OPT._sail_speed(SPG, DOMG, "HEAVY", 12, 60, HCFG) > 5.5
+      and OPT._sail_speed(SPG, DOMG, "HEAVY", 12, 60) == 0.0)
+check("the synthesis' play pricing reads it too",
+      (SYN._sail_speed(SPG, "HEAVY", 12, 60, HCFG) or 0) > 5.5 and SYN._sail_speed(SPG, "HEAVY", 12, 60) is None)
+
 print("RESULT:", "PASS" if ok else "FAIL")
 raise SystemExit(0 if ok else 1)

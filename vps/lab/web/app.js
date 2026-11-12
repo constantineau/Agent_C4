@@ -1380,7 +1380,7 @@ async function renderGameplan() {
         <span id="optResHint" class="muted" style="font-size:11px"></span>
       </div>
       <div class="muted" style="font-size:12px;margin-top:6px">Routes the course on live weather. First run about 1 min.
-        ${qhelp("Downloads forecasts from NOAA and ECMWF and sails them on the SR33 polar. Later runs reuse the download. Prep only: nothing changes after the start (rule 41).")}</div>
+        ${qhelp("Downloads forecasts from NOAA and ECMWF and sails them on the boat's own polar. Later runs reuse the download. Prep only: nothing changes after the start (rule 41).")}</div>
     </div>
     <div id="optOut"></div>
     <div class="card">
@@ -1576,7 +1576,24 @@ function renderBoatModel() {
 
 // Sail palette (mirrors the .sail-bg-* CSS) — used to hatch the toss-up overlap bands in two colors.
 const SAIL_COLORS = { J1: "#36b3ff", J2: "#66a9e0", J3: "#9b8cff", C0: "#4dd6c9", SS: "#f28cc4", A3: "#f5c451", S1: "#ff8042" };
-const sailColor = (s) => SAIL_COLORS[s] || "#8899a6";
+// A sail's family (#305): the boat model's `sail_families`, else the usual shorthand (the same rules
+// as shared/sail_vocab.py). A sail with no colour of its own wears its family's.
+const SAIL_SHORTHAND = [[/^(C0|CODE ?0)/, "code0"], [/^(SS|STAY)/, "staysail"], [/^J\d/, "jib"],
+  [/^G\d/, "genoa"], [/^A\d/, "asym"], [/^S\d/, "sym"]];
+const FAMILY_COLORS = { jib: "#36b3ff", genoa: "#36b3ff", code0: "#4dd6c9", staysail: "#f28cc4",
+  asym: "#f5c451", sym: "#ff8042" };
+function sailFamily(s, m) {
+  const fams = (m || Opt.boatModel || {}).sail_families || {};
+  const n = String(s || "").toUpperCase();
+  if (fams[n]) return fams[n];
+  const hit = SAIL_SHORTHAND.find(([rx]) => rx.test(n));
+  return hit ? hit[1] : "other";
+}
+// the boat's first sail of a family ("asym" → its A3), or null
+function sailOfFamily(fam, m) {
+  return ((m || {}).inventory || (m || {}).sail_inventory || []).find((s) => sailFamily(s, m) === fam) || null;
+}
+const sailColor = (s) => SAIL_COLORS[s] || FAMILY_COLORS[sailFamily(s)] || "#8899a6";
 function hexRgba(hex, a) {
   const h = String(hex).replace("#", "");
   const n = parseInt(h.length === 3 ? h.replace(/(.)/g, "$1$1") : h, 16);
@@ -1619,18 +1636,19 @@ function boatModelCard(m) {
     </div>
     <h4>Best sail by wind angle and speed</h4>
     <div class="muted" style="font-size:11px;margin-bottom:4px">From the ORC certificate. <b>Striped strip</b> under a band = toss-up, either sail works.
-      ${qhelp("The certificate rates one jib. The J1/J2/J3 split comes from your wind settings above. Striped means two sails are within 1.5% of each other.")}</div>
+      ${qhelp("The certificate rates one jib. The jib split comes from your wind settings above. Striped means two sails are within 1.5% of each other.")}</div>
     <div class="xo-axis"><span>0°</span><span>45°</span><span>90°</span><span>135°</span><span>180°</span></div>
     <div class="xo">${bands}</div>
     ${renderPolarGrid()}
   </div>`;
 }
 
-/* Upwind jib change-downs by TWS (J1/J2/J3) — NOT in the ORC cert (it rates one headsail), so
-   these are editable crew/sailmaker thresholds. Two boundaries: J1→J2 and J2→J3. */
+/* Upwind jib change-downs by TWS (the boat's own names, e.g. J1/J2/J3) — NOT in the ORC cert (it
+   rates one headsail), so these are editable crew/sailmaker thresholds. Three bands, two
+   boundaries; another number of bands shows but is edited in the boat file. */
 function renderJibCrossovers(m) {
   const jc = m.jib_crossovers || [];
-  if (!jc.length) return `<div class="muted" style="font-size:12px">No jib changes set. The route uses the J1 only.</div>`;
+  if (!jc.length) return `<div class="muted" style="font-size:12px">No jib changes set. The route uses the rated jib only.</div>`;
   const max = 35;     // axis ceiling for the TWS bars (kn)
   const bars = jc.map((b) => {
     const lo = b.tws_min != null ? b.tws_min : 0;
@@ -1644,10 +1662,10 @@ function renderJibCrossovers(m) {
     <div class="muted" style="font-size:11px;margin-bottom:6px">Your crew's change points. They set the jib on each upwind leg.</div>
     <div class="xo-axis"><span>0</span><span>~9</span><span>~17</span><span>~26</span><span>35 kts</span></div>
     <div class="xo"><div class="xo-row"><span class="xo-tws">TWS</span><div class="xo-track">${bars}</div></div></div>
-    <div class="jib-edit">
-      <label>J1→J2 at <input type="number" id="jibT1" value="${attr(f.t1)}" min="2" max="34" step="0.5" style="width:58px" oninput="bmSet('t1',this.value)"> kts</label>
-      <label>J2→J3 at <input type="number" id="jibT2" value="${attr(f.t2)}" min="2" max="34" step="0.5" style="width:58px" oninput="bmSet('t2',this.value)"> kts</label>
-    </div>`;
+    ${jc.length === 3 ? `<div class="jib-edit">
+      <label>${esc(jc[0].sail)}→${esc(jc[1].sail)} at <input type="number" id="jibT1" value="${attr(f.t1)}" min="2" max="34" step="0.5" style="width:58px" oninput="bmSet('t1',this.value)"> kts</label>
+      <label>${esc(jc[1].sail)}→${esc(jc[2].sail)} at <input type="number" id="jibT2" value="${attr(f.t2)}" min="2" max="34" step="0.5" style="width:58px" oninput="bmSet('t2',this.value)"> kts</label>
+    </div>` : ""}`;
 }
 
 /* Code 0 band + mainsail reef points — crew sail-config overlays the ORC cert can't express (it
@@ -1656,6 +1674,7 @@ function renderJibCrossovers(m) {
    routing SPEED stays the rated envelope (no invented numbers). */
 function renderSailConfig(m) {
   const f = Opt.bmEdit || bmFormFrom(m);
+  const kite = esc(sailOfFamily("asym", m) || "kite");    // the boat's own asym (#305)
   return `<h4>Code 0 — light-air reaching</h4>
     <div class="muted" style="font-size:11px;margin-bottom:6px">When to fly the Code 0. Sets the sail call, not the boat speed.
       ${qhelp("The certificate doesn't rate the Code 0, so route speed stays the jib speed. The band shows as C0 in the chart below, in the leg sail calls and in the playbook.")}</div>
@@ -1665,10 +1684,10 @@ function renderSailConfig(m) {
       <label>TWA <input type="number" id="c0Alo" value="${attr(f.c0Alo)}" min="30" max="150" step="5" style="width:58px" oninput="bmSet('c0Alo',this.value)">–<input type="number" id="c0Ahi" value="${attr(f.c0Ahi)}" min="40" max="170" step="5" style="width:58px" oninput="bmSet('c0Ahi',this.value)">°</label>
     </div>
     <h4>Mainsail reef points</h4>
-    <div class="muted" style="font-size:11px;margin-bottom:6px">Reef 1 to depower. A lower setting opens the slot when flying the A3.</div>
+    <div class="muted" style="font-size:11px;margin-bottom:6px">Reef 1 to depower. A lower setting opens the slot when flying the ${kite}.</div>
     <div class="jib-edit">
       <label>Reef 1 (depower) at <input type="number" id="r1Tws" value="${attr(f.r1)}" min="4" max="45" step="0.5" style="width:58px" oninput="bmSet('r1',this.value)"> kts</label>
-      <label>Reef 1 with the A3 at <input type="number" id="r1Slot" value="${attr(f.slot)}" min="4" max="45" step="0.5" style="width:58px" oninput="bmSet('slot',this.value)"> kts</label>
+      <label>Reef 1 with the ${kite} at <input type="number" id="r1Slot" value="${attr(f.slot)}" min="4" max="45" step="0.5" style="width:58px" oninput="bmSet('slot',this.value)"> kts</label>
     </div>`;
 }
 
@@ -1718,8 +1737,11 @@ function bmBodies(f, was) {
   let jib = null, sc = null;
   if (changed(BM_JIB)) {
     const t1 = parseFloat(f.t1), t2 = parseFloat(f.t2);
-    if (isNaN(t1) || isNaN(t2) || t1 <= 0 || t1 >= t2) return { err: "J1→J2 must be below J2→J3." };
-    jib = { jib_crossovers: [{ sail: "J1", tws_max: t1 }, { sail: "J2", tws_min: t1, tws_max: t2 }, { sail: "J3", tws_min: t2 }] };
+    // the boat's own three jibs, as its change-downs name them (#305)
+    const n = (((Opt.boatModel || {}).jib_crossovers) || []).map((b) => b.sail);
+    if (n.length !== 3) return { err: "Edit this boat's jib changes in its boat file." };
+    if (isNaN(t1) || isNaN(t2) || t1 <= 0 || t1 >= t2) return { err: `${n[0]}→${n[1]} must be below ${n[1]}→${n[2]}.` };
+    jib = { jib_crossovers: [{ sail: n[0], tws_max: t1 }, { sail: n[1], tws_min: t1, tws_max: t2 }, { sail: n[2], tws_min: t2 }] };
   }
   if (changed(BM_SC)) {
     const tws = parseFloat(f.c0Tws), alo = parseFloat(f.c0Alo), ahi = parseFloat(f.c0Ahi);
@@ -1728,7 +1750,7 @@ function bmBodies(f, was) {
     if (f.c0On && !(tws > 0 && tws <= 30 && alo >= 0 && ahi <= 180)) return { err: "Code 0: wind up to 30 kts, TWA within 0–180°." };
     const r1 = parseFloat(f.r1), slot = parseFloat(f.slot);
     if ([r1, slot].some((v) => !isNaN(v) && (v < 4 || v > 45))) return { err: "Reef points must be 4–45 kts (or blank)." };
-    if (!isNaN(r1) && !isNaN(slot) && slot > r1) return { err: "The A3 reef should be at or below the depower reef." };
+    if (!isNaN(r1) && !isNaN(slot) && slot > r1) return { err: `The ${sailOfFamily("asym", Opt.boatModel) || "kite"} reef should be at or below the depower reef.` };
     sc = { code0: f.c0On ? { enabled: true, tws_max: tws, twa_min: alo, twa_max: ahi } : { enabled: false },
       main_reefs: { r1_tws_kn: isNaN(r1) ? null : r1, r1_a3_slot_tws_kn: isNaN(slot) ? null : slot } };
   }
@@ -4630,9 +4652,15 @@ const Pol = { data: null, tws: null, config: "all", race: "all", split: "config"
 
 // Colour follows the sail, never the filter: each sail wears its SAIL_COLORS colour, the same one
 // as the crossover chart and its legend (#240). A two-sail set is drawn in its first sail's colour
-// with the second sail's colour dashed over it. Older sail logs call the kite "S2" (its cert id);
-// the server pools those under the crew name S1 (app/obspolar.py), so the tab only ever sees S1.
-const POL_ORDER = ["J1", "J1+J3", "A3", "A3+J1", "A3+SS", "S1", "S1+SS"];
+// with the second sail's colour dashed over it. Configs sort like the crossover chart (#305): by the
+// first sail's family (headsail, Code 0, asym, sym, staysail), then single sails before sets.
+const POL_FAMILY_ORDER = ["jib", "genoa", "code0", "asym", "sym", "staysail"];
+function polRank(cfg) {
+  if (!cfg || cfg === "—") return 99;
+  const parts = String(cfg).split("+"), i = POL_FAMILY_ORDER.indexOf(sailFamily(parts[0]));
+  return (i < 0 ? POL_FAMILY_ORDER.length : i) * 10 + Math.min(parts.length, 9);
+}
+const polOrder = (x, y) => polRank(x) - polRank(y) || x.localeCompare(y);
 const POL_SS = "#f28cc4";             // the staysail's colour, until SAIL_COLORS carries SS (#259)
 const POL_SPARE = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9"];
 function polSailHex(t) {
@@ -4663,7 +4691,7 @@ function polSwatch(cfg) {
 }
 // The logged configs in the crossover chart's order.
 function polConfigNames() {
-  return ((Pol.data || {}).configs || []).slice().sort((x, y) => (POL_ORDER.indexOf(x) + 1 || 99) - (POL_ORDER.indexOf(y) + 1 || 99) || x.localeCompare(y));
+  return ((Pol.data || {}).configs || []).slice().sort(polOrder);
 }
 
 // the race instances that carry measured cells, oldest first (the ramp's order)
@@ -4782,7 +4810,7 @@ function polSeries() {
   const by = {};
   cells.forEach((c) => { const k = c.config || "—"; (by[k] = by[k] || []).push(c); });
   return Object.keys(by)
-    .sort((x, y) => (POL_ORDER.indexOf(x) + 1 || 99) - (POL_ORDER.indexOf(y) + 1 || 99) || x.localeCompare(y))
+    .sort(polOrder)
     .map((name) => {
       const [color, color2] = polColors(name === "—" ? null : name);
       const pts = by[name].slice().sort((m, n) => m.twa - n.twa);

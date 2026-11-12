@@ -93,7 +93,7 @@ def clear_state():
 # ---------------------------------------------------------------------------- crew sail state
 
 def get_sail_state():
-    """The crew-set sail state: {'hoisted': 'A3'|None, 'out_of_service': ['S1', ...], 'ts': epoch}.
+    """The crew-set sail state: {'hoisted': <sail>|None, 'out_of_service': [<sail>, ...], 'ts': epoch}.
     Persisted in the engine kv (onboard) / app_state (cloud) so the matcher + copilot read one
     truth. Empty dict when never set."""
     try:
@@ -102,15 +102,33 @@ def get_sail_state():
         return {}
 
 
-# ordered by "which sail is driving" — the legacy single-sail mirror picks the first flying
-_PRIMARY_ORDER = ("A3", "S1", "C0", "J1", "J2", "J3", "SS")
+def _boat_sails():
+    """The boat's sail names + families (`sail_inventory`, `sail_families`): the frozen playbook's
+    boat model when it lists them, else the current boat's profile. {} when neither is known."""
+    try:
+        from . import boatinfo
+        # only the boat being sailed's model: another boat's playbook may still be loaded
+        bm = boatinfo.frozen_for_current((deviation._load_playbook() or {}).get("boat_model")) or {}
+        if bm.get("sail_inventory") or bm.get("sail_families"):
+            return bm
+    except Exception:
+        pass
+    try:
+        from . import boatinfo
+        return boatinfo.profile() or {}
+    except Exception:
+        return {}
 
 
-def _primary(flying):
-    for s in _PRIMARY_ORDER:
-        if s in flying:
-            return s
-    return flying[0] if flying else None
+def _primary(flying, boat=None):
+    """The driving sail of the flying set — the legacy single-sail mirror: by family, the kite
+    over the Code 0 over the headsail over the staysail (#305: the boat's own names, and its own
+    `sail_families` for a name the shorthand doesn't say)."""
+    from shared import sail_vocab
+    if not flying:
+        return None
+    src = _boat_sails() if boat is None else boat
+    return min(flying, key=lambda s: sail_vocab.drive_rank(s, src))
 
 
 def set_sail_state(hoisted=None, flying=None, reef=None, out_of_service=None):
