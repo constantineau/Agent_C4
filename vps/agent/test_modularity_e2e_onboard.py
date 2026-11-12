@@ -419,3 +419,119 @@ def test_practice_log_on_any_boat_no_lab_prep():
     finally:
         client.post("/session/end", json={"id": r["active"]["id"]})
 
+
+
+# ==== #335: practice on Bravo with another boat's playbook still loaded ===========================
+SR33_PLAY = {"id": "c0-ceiling", "name": "Code 0 ceiling", "kind": "sail",
+             "conditions": {"predicates": [{"signal": "tws_kn", "op": ">=", "value": 0}]},
+             "response": {"type": "sail", "guidance": "Drop the C0 above 9 kts."}}
+
+
+def sr33_bundle():
+    """sr33's playbook as the Lab freezes it (the boat model from sr33's seed profile)."""
+    with open(os.path.join(REPO, "vps", "lab", "boats", "sr33.json")) as f:
+        sr33 = json.load(f)
+    bm = {k: sr33.get(k) for k in ("boat_id", "name", "draft_m", "sail_inventory", "jib_crossovers",
+                                    "code0", "main_reefs")}
+    return dict(bravo_bundle(), race_id="sr33-race", boat_model=bm, plays=[SR33_PLAY])
+
+
+def _orin_on(client_get, path):
+    """The Orin copilot, its playbook file at `path`, asking this engine over the 'cable'."""
+    sys.path.append(os.path.join(REPO, "pi", "orin"))
+    from copilot import boatname, briefs, config as ccfg, engine_client, playbook as pbm
+    ccfg.PLAYBOOK_PATH = path
+
+    class Cable:
+        def __init__(self, *a, **k):
+            pass
+
+        def _get(self, p, params=None):
+            assert p == "/playbook/copilot"
+            return client_get(p).json()
+
+    engine_client.EngineClient = Cable
+    pbm._pin.update(at=None, hash=None, boat=None, off=False)
+    return boatname, briefs, pbm
+
+
+def _orin_says(boatname, briefs, pbm):
+    """Everything the copilot builds from the boat: its name, the playbook it uses, the sail clock
+    (Code 0 ceiling, slot reef) with the breeze building through every sr33 threshold."""
+    from copilot import copilot as cop
+    pb = pbm.load()
+    snap = {"plays": {"sail_state": {"flying": ["C0", "A3"]}},
+            "trend": {"tws_trend_kn_per_hr": 4.0}, "conditions": {"tws": 7.0}}
+    sails = briefs._sail_window_lines(snap, pb) or {}
+    return pb, " ".join([boatname.describe(), boatname.possessive(), cop._system_prompt(pb),
+                         json.dumps(sails)])
+
+
+def test_practice_on_bravo_with_sr33s_playbook_no_sr33_plays_or_copilot(tmp_path, monkeypatch):
+    """#335: a LOG session sailing Bravo with sr33's playbook loaded: no sr33 plays, the console
+    note "Playbook is for C4. Plays off.", and the Orin copilot neither names sr33 nor uses its
+    Code 0 ceiling (9 kts) or slot reef (16 kts): it speaks for Bravo. Sailing the playbook's own
+    boat is unchanged. An "Other boat" doesn't get the playbook's plays either."""
+    from app import boatlib, matcher
+    monkeypatch.setattr(matcher, "gather", lambda route=None: {"tws_kn": 12.0})  # no archive here
+    lib = {"schema": boatlib.SCHEMA, "built_at": 2, "boats": [
+        {"boat_id": "bravo", "name": BRAVO["name"], "profile": BRAVO,
+         "boat_version": boat_profile.version(BRAVO), "polar": boat_polar.resolve(BRAVO)}]}
+    assert boatlib.store(lib)["stored"]
+    sr = sr33_bundle()
+    r = client.post("/playbook/load", json={"bundle": sr}).json()
+    assert r["loaded"] and r["plays"] == 1, r
+    engine_app.approve_copilot_playbook(engine_app.bundle_hash(sr))   # as if the Orin confirmed
+    path = tmp_path / "playbook.json"
+    path.write_text(json.dumps(sr))
+    s = client.post("/session/start", json={"kind": "practice", "boat_id": "bravo"}).json()
+    try:
+        assert s["ok"] and s["active"]["boat_id"] == "bravo", s
+        p = client.get("/plays").json()
+        assert p.get("available") is False and p.get("plays_off") is True, p
+        assert p["note"] == "Playbook is for C4. Plays off." and "plays" not in p, p
+        cp = client.get("/playbook/copilot").json()
+        assert cp["hash"] is None and cp["playbook_off"] is True, cp
+        assert cp["boat"]["boat_id"] == "bravo" and cp["boat"]["profile"]["name"] == "Bravo", cp
+        assert not re.search(r"sr33|C4", json.dumps(cp["boat"]), re.I), cp
+        boatname, briefs, pbm = _orin_on(client.get, str(path))
+        pb, said = _orin_says(boatname, briefs, pbm)
+        assert not pb.loaded and pb.note == pbm.OTHER_BOAT, pb.note
+        assert "Bravo" in said, said
+        assert not re.search(r"sr33|\bC4\b", said, re.I), said
+        assert not re.search(r"\b(9|16) kts\b", said), said            # sr33's ceiling / slot reef
+    finally:
+        client.post("/session/end", json={"id": s["active"]["id"]})
+
+    # an "Other boat": no id, no profile, so not the playbook's boat either
+    s = client.post("/session/start", json={"kind": "practice", "boat_name": "Mystery"}).json()
+    try:
+        p = client.get("/plays").json()
+        assert p.get("plays_off") is True and p["note"] == "Playbook is for C4. Plays off.", p
+        cp = client.get("/playbook/copilot").json()
+        assert cp["hash"] is None and cp["boat"] == {"boat_id": None, "name": "Mystery",
+                                                     "profile": None}, cp
+        pbm._pin.update(at=None, hash=None, boat=None, off=False)
+        _pb, said = _orin_says(boatname, briefs, pbm)
+        assert "Mystery" in said and not re.search(r"sr33|\bC4\b|\b(9|16) kts\b", said, re.I), said
+    finally:
+        client.post("/session/end", json={"id": s["active"]["id"]})
+
+    # sailing the playbook's own boat: plays run and the copilot keeps the playbook, as before
+    bb = dict(bravo_bundle(), plays=[dict(SR33_PLAY, name="Bravo play")])
+    deploy(bb)
+    engine_app.approve_copilot_playbook(engine_app.bundle_hash(bb))
+    path.write_text(json.dumps(bb))
+    s = client.post("/session/start", json={"kind": "practice", "boat_id": "bravo"}).json()
+    try:
+        p = client.get("/plays").json()
+        assert p.get("available") is True and [x["id"] for x in p["plays"]] == ["c0-ceiling"], p
+        cp = client.get("/playbook/copilot").json()
+        assert cp["hash"] == engine_app.bundle_hash(bb) and "playbook_off" not in cp, cp
+        pbm._pin.update(at=None, hash=None, boat=None, off=False)
+        pb = pbm.load()
+        assert pb.loaded and pb.note is None and boatname.boat_model(pb) == bb["boat_model"]
+    finally:
+        client.post("/session/end", json={"id": s["active"]["id"]})
+        engine_app.approve_copilot_playbook(None)
+        deploy(bravo_bundle())

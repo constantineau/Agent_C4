@@ -316,7 +316,7 @@ ORIN["commit"] = {"loaded": True, "race_id": "r1"}
 r = client.post("/playbook/load", json=BUNDLE).json()
 h = engine_app.bundle_hash(BUNDLE)
 check("confirmed: approved, no extra wait", r["copilot"]["loaded"] and SLEPT == []
-      and client.get("/playbook/copilot").json() == {"hash": h})
+      and client.get("/playbook/copilot").json()["hash"] == h)
 
 
 def orin_reset(path, body, timeout):
@@ -334,7 +334,7 @@ check("reset: not loaded, plain", r["copilot"] == {"loaded": False, "detail": en
 check("reset: the Pi waited out the Orin's window (TTL 3 s + 1 s) still holding the lock",
       len(SLEPT) == 1 and 3.9 < SLEPT[0][0] <= 4.0 and SLEPT[0][1] is True)
 check("reset: NO playbook approved for the copilot (not the old one, not the new one)",
-      client.get("/playbook/copilot").json() == {"hash": None})
+      client.get("/playbook/copilot").json()["hash"] is None)
 SLEPT.clear()
 ORIN["commit"] = {"loaded": False, "detail": "Too late. Not loaded."}
 client.post("/playbook/load", json=BUNDLE)
@@ -411,7 +411,7 @@ finally:
     os.fsync, os.replace = _fs, _rp
 check("file fsynced, replaced, directory fsynced",
       _calls == [("fsync", False), ("replace", True), ("fsync", True)])
-check("…and readable", client.get("/playbook/copilot").json() == {"hash": "ab" * 32})
+check("…and readable", client.get("/playbook/copilot").json()["hash"] == "ab" * 32)
 
 print("short text:")
 check("the refusal is ≤ 6 words", len(racegate.RACING.split()) <= 6)

@@ -212,8 +212,44 @@ check("loaded", cm.json().get("loaded") is True and on_disk() == "r1")
 check("file fsynced, then replaced, then the directory fsynced",
       SYNCED == [("fsync", False), ("replace", True), ("fsync", True)])
 
+print("#335 the Pi says which boat is sailed; another boat's playbook is withheld, never named:")
+from . import boatname  # noqa: E402
+
+SR = {"race_id": "sr", "variants": [{"id": "a"}], "plays": [],
+      "boat_model": {"boat_id": "sr33", "name": 'SR33 "C4"', "sail_inventory": ["C0", "A3"],
+                     "code0": {"tws_max": 9}, "main_reefs": {"r1_a3_slot_tws_kn": 16}}}
+with open(PATH, "w") as f:
+    json.dump(SR, f)
+h_sr = pbm.bundle_hash(SR)
+PIN["answer"] = {"hash": h_sr}                    # an engine from before #335: no `boat`
+pb = fresh()
+check("older engine: playbook used, its boat named, as before", pb.loaded and pbm.session_boat() is None
+      and boatname.describe() == "the SR33 racing yacht 'C4'"
+      and boatname.boat_model(pb) == SR["boat_model"])
+BRAVO = {"boat_id": "bravo", "name": "Bravo", "profile": {"boat_id": "bravo", "name": "Bravo",
+                                                          "boat_class": "C&C 35", "code0": {}}}
+PIN["answer"] = {"hash": h_sr, "boat": dict(BRAVO, boat_id="sr33", profile=None)}
+pb = fresh()
+check("the playbook's own boat sailed: identical", pb.loaded and pb.note is None
+      and boatname.describe() == "the SR33 racing yacht 'C4'"
+      and boatname.boat_model(pb) == SR["boat_model"])
+PIN["answer"] = {"hash": None, "playbook_off": True, "boat": BRAVO}
+pb = fresh()
+check("Bravo sailed: not used, plain note naming no boat", not pb.loaded
+      and pb.note == "Playbook is for another boat. Running without it.")
+check("…the copilot speaks for Bravo, with Bravo's profile",
+      boatname.describe() == "the C&C 35 racing yacht 'Bravo'"
+      and boatname.possessive(pb) == "the C&C 35's" and boatname.boat_model(pb) == BRAVO["profile"])
+PIN["answer"] = {"hash": None, "playbook_off": True,
+                 "boat": {"boat_id": None, "name": "Mystery", "profile": None}}
+pb = fresh()
+check("an Other boat: its name only, no profile", not pb.loaded
+      and boatname.boat_model(pb) == {"name": "Mystery"} and "SR33" not in boatname.describe())
+with open(PATH, "w") as f:
+    json.dump(B, f)
+
 print("short text:")
-for s in (REFUSED["detail"], TOO_LATE["detail"]):
+for s in (REFUSED["detail"], TOO_LATE["detail"], pbm.OTHER_BOAT):
     check(f"{s!r} ≤ 9 words", len(s.split()) <= 9)
 
 print("ALL OK" if ok else "FAILED")

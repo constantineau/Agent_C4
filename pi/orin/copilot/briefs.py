@@ -126,7 +126,9 @@ def _sail_window_lines(snap, pb):
     rate = tr.get("tws_trend_kn_per_hr")
     tws = cond.get("tws")
     if rate is not None and tws is not None and abs(rate) >= 0.3:
-        bm = pb.boat_model if pb.loaded else {}
+        # no playbook in use (none, or the Pi withholds another boat's, #335): the boat being
+        # sailed's own profile thresholds when the Pi says them, else none
+        bm = pb.boat_model if pb.loaded else boatname.boat_model(pb)
         thresholds = []
         mr = bm.get("main_reefs") or {}
         if mr.get("r1_tws_kn") is not None:
