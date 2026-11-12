@@ -29,7 +29,7 @@ import os
 
 from . import atomicio, retrostore, store, synthesis
 from .wind import archive, grib
-from .wind.windfield import WindField, build_windfield
+from .wind.windfield import WindField, build_windfield, not_here_meta
 from . import optimizer
 
 OUT_DIR = os.path.join(os.path.dirname(retrostore.RETRO_DB), "backtest")
@@ -107,6 +107,9 @@ def build_oracle_field(bbox, t0, t1, retro_race_id=RETRO_RACE):
     """The wind that actually blew: hourly HRRR f00 (analysis) frames chained over the race
     window — the judge-loop's oracle definition, via the same pinned-archive fetch path."""
     src = archive.ArchiveHRRR()
+    if not src.covers_bbox(bbox):             # #309: no HRRR analysis outside the US: say so
+        print(f"[backtest] oracle field: {src.not_here_note()}", flush=True)
+        return WindField({}, [not_here_meta(src)], bbox, t0, t1)
     src.asof = t1 + 7200                      # cycle picks are explicit below; asof just must not veto
     src.pin_context = f"retro:{retro_race_id}-oracle"
     parser = grib.IsolatedGribParser() if getattr(grib, "ISOLATE", False) else None

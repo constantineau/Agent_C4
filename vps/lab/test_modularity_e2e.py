@@ -250,6 +250,30 @@ def test_route_warns_tidal_without_current(route):
     assert (route[0].get("data") or {}).get("current", "").startswith("none:")
 
 
+def test_wind_models_outside_their_area_are_not_asked():
+    """#309: the default blend's HRRR is US only. On the Channel course it is never downloaded
+    (no fetch at all here), and the wind field and the route's data notes say so plainly."""
+    import time
+    from app import optimizer
+    from app.wind import models as M
+    asked = []
+
+    def stub_fetch(self, cycle, fhr, member, bbox, timeout=60):
+        asked.append(self.name)
+        return None
+
+    real = M.ModelSource.fetch
+    M.ModelSource.fetch = stub_fetch
+    try:
+        now = int(time.time()) // 3600 * 3600
+        bbox = optimizer.course_bbox(RACE, "c")
+        wf = windfield.build_windfield(bbox, now, now + 12 * 3600, fallback_tries=0)
+    finally:
+        M.ModelSource.fetch = real
+    assert "hrrr" in M.DEFAULT_MODELS and "hrrr" not in asked and "gfs" in asked, asked
+    assert optimizer.wind_notes(wf) == ["HRRR: not here (US only)."], wf.meta
+
+
 def test_boat_without_polar_refuses_plainly():
     """A profile with no polar must not borrow sr33's: the run says there is no polar."""
     from app import routerun

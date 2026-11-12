@@ -321,10 +321,15 @@ def summarize(status, now, budget, bbox_why, sources=(), requested=()):
                                      and m.get("frames") < m.get("expected_frames")),
                      "until": int(until) if until else None})
     got = {u["model"] for u in used}
+    # #309: a model whose area misses the race (HRRR off the US) is not "missing": it is said in
+    # the route's data notes instead ("HRRR: not here (US only).")
+    not_here = {m.get("model") for m in (status or {}).get("models") or []
+                if m.get("skipped") == M.NOT_HERE}
     api_ok = any(u["model"] not in by_name or not isinstance(by_name[u["model"]], GribSource)
                  for u in used)
     return {"models": used,
-            "missing": [n for n in requested if n not in got and n in by_name],
+            "missing": [n for n in requested
+                        if n not in got and n in by_name and n not in not_here],
             "newest_age_h": min(ages) if ages else None,
             "oldest_age_h": max(ages) if ages else None,
             # past this, every GRIB model holds its last frame; unknown when an API model

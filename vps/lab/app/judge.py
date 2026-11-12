@@ -200,6 +200,9 @@ def run_judge(race_id, playbook_id=None, models=None, on_progress=None, recordin
         "caveat": tac.get("caveat") or "",
         "data": _sea_data(cur, wv, d, tac.get("course_id") or (pb or {}).get("course_id"), t),
     }
+    # #309: the weather models left out because the race is outside their area, said plainly
+    report["data"]["notes"] = ((report["data"].get("notes") or [])
+                               + optimizer.wind_notes(tac.get("wf")))
     log("writing the critique…")
     report["critique"] = _critique(report) or _deterministic_critique(report)
     # `archive_guard()`: a context manager yielding (ok, note), held across the archive write, so
