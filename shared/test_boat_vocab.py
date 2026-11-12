@@ -71,5 +71,11 @@ check("Bravo by its own name", boat_words.describe(BRAVO) == "the C&C 35 Mk I ra
 check("no boat: the boat", boat_words.describe(None) == "the boat"
       and boat_words.possessive({}) == "the boat's" and boat_words.short(None) == "")
 
+check("match needs the whole name: J10 is not J1",
+      SV.match("J10", {"sail_inventory": ["J1"]}) is None
+      and SV.match("J1", {"sail_inventory": ["J1"]}) == "J1"
+      and SV.match("A3-A", {"sail_inventory": ["A3"]}) == "A3"
+      and SV.match("A3 asym", {"sail_inventory": ["A3"]}) == "A3")
+
 print("RESULT:", "PASS" if ok else "FAIL")
 raise SystemExit(0 if ok else 1)

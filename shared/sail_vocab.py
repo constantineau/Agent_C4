@@ -117,7 +117,8 @@ def match(text, src=None, extra=()):
     up = text.strip().upper()
     own = names(src)
     for n in sorted(set(own + [str(x).upper() for x in extra or () if x]), key=len, reverse=True):
-        if up.startswith(n):
+        # whole name only: 'A3', 'A3-A', 'A3 asym' match A3; 'J10' does not match J1
+        if up.startswith(n) and (len(up) == len(n) or not up[len(n)].isalnum()):
             return n
     if own:
         return None
