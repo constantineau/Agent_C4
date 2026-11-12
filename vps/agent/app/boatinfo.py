@@ -49,6 +49,32 @@ def profile():
     return None
 
 
+def _current_boat():
+    """(known, boat_id) of the boat being sailed. Aboard: the session's boat (an "Other boat" is
+    known, with id None), else the last used or the deployed one; unknown only when nothing says.
+    Shore: BOAT_ID."""
+    if _onboard():
+        try:
+            from . import boatlib
+            c = boatlib.current() or {}
+        except Exception:
+            return False, None
+        if c.get("boat_id") is None and c.get("from") == "kit":
+            return False, None                  # nothing aboard says which boat
+        return True, c.get("boat_id")
+    return True, _boat_id()
+
+
+def frozen_for_current(boat_model):
+    """The playbook's frozen boat model only when it is the boat being sailed (Codex on #334): a
+    LOG session switched to Bravo with sr33's playbook still loaded must not get sr33's sails or
+    thresholds. A model with no boat_id, or no known current boat, stands."""
+    if not isinstance(boat_model, dict) or not boat_model.get("boat_id"):
+        return boat_model
+    known, bid = _current_boat()
+    return None if known and bid != boat_model["boat_id"] else boat_model
+
+
 def loa_m():
     """The boat's length overall in metres, or None."""
     try:

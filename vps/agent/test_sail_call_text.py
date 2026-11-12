@@ -155,5 +155,37 @@ check("the crew's BIG-RED is right", r["crew_sail"] == "BIG-RED" and r["wrong_sa
 check("no phantom BIG in the boat's sails", [x["name"] for x in r["sails"]] == ["J1", "BIG-RED"])
 check("the text names BIG-RED", "BIG-RED" in r["recommendation"] and "BIG " not in r["recommendation"])
 
+print("another boat's playbook still loaded: its frozen model is dropped (Codex on #334)")
+SR33_BM = dict(BOAT, boat_id="sr33")
+BRAVO_P = {"boat_id": "bravo", "name": "Bravo", "sail_inventory": ["G1", "G2", "A2", "S2"]}
+_cur, _prof2 = boatinfo._current_boat, boatinfo.profile
+boatinfo._current_boat = lambda: (True, "bravo")
+boatinfo.profile = lambda: BRAVO_P
+try:
+    r = sails.get_sail_advice(14, 60, "G1", SR33_BM)
+    names = [x["name"] for x in r["sails"]]
+    check("Bravo's G1 is the crew's sail, not refused", r["crew_sail"] == "G1")
+    check("the sails are Bravo's, not sr33's", names[:4] == ["G1", "G2", "A2", "S2"] and "J2" not in names)
+    check("sr33's frozen model is dropped", boatinfo.frozen_for_current(SR33_BM) is None)
+    from app import deviation  # noqa: E402
+    _lp = deviation._load_playbook
+    deviation._load_playbook = lambda: {"boat_model": SR33_BM}
+    try:
+        check("the matcher reads Bravo's sails, not the loaded sr33 playbook's",
+              matcher._boat_sails().get("boat_id") == "bravo")
+    finally:
+        deviation._load_playbook = _lp
+    boatinfo._current_boat = lambda: (True, "sr33")
+    check("the same model stands when sr33 is the boat", boatinfo.frozen_for_current(SR33_BM) is SR33_BM)
+    boatinfo._current_boat = lambda: (False, None)
+    check("and when nothing says which boat", boatinfo.frozen_for_current(SR33_BM) is SR33_BM)
+finally:
+    boatinfo._current_boat, boatinfo.profile = _cur, _prof2
+
+print("a Code 0 with its own name shows it")
+check("REACHER reads 'Code 0 (REACHER)', sr33's C0 stays 'Code 0'",
+      sails.label("REACHER", {"sail_families": {"REACHER": "code0"}}, []) == "Code 0 (REACHER)"
+      and sails.label("C0", BOAT, []) == "Code 0")
+
 print("RESULT:", "PASS" if ok else "FAIL")
 raise SystemExit(0 if ok else 1)

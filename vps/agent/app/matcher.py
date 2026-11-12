@@ -106,7 +106,9 @@ def _boat_sails():
     """The boat's sail names + families (`sail_inventory`, `sail_families`): the frozen playbook's
     boat model when it lists them, else the current boat's profile. {} when neither is known."""
     try:
-        bm = (deviation._load_playbook() or {}).get("boat_model") or {}
+        from . import boatinfo
+        # only the boat being sailed's model: another boat's playbook may still be loaded
+        bm = boatinfo.frozen_for_current((deviation._load_playbook() or {}).get("boat_model")) or {}
         if bm.get("sail_inventory") or bm.get("sail_families"):
             return bm
     except Exception:

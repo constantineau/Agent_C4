@@ -55,7 +55,7 @@ def label(sail, boat_model=None, rated=None):
         return sail
     fam = SV.family(sail, boat_model)
     if fam == "code0":
-        return "Code 0"
+        return "Code 0" if sail == "C0" else f"Code 0 ({sail})"
     rated = _guide_sails() if rated is None else rated
     if sail in rated and fam in _FAMILY_LABEL:
         return _FAMILY_LABEL[fam].format(sail)
@@ -299,7 +299,10 @@ def _sail_list(src, rated=()):
 
 def get_sail_advice(tws: float = None, twa: float = None, hoisted: str = None, boat_model: dict = None):
     """Sail-range advice for the dial + agent (see `_advice`), on one snapshot of the guide, its
-    sails named in the boat's own words (resolved once for this answer)."""
+    sails named in the boat's own words (resolved once for this answer). A frozen boat model from
+    another boat's playbook is dropped first: names AND fit thresholds are the boat being sailed."""
+    from . import boatinfo
+    boat_model = boatinfo.frozen_for_current(boat_model)
     src = _names_src(boat_model)
     sections, overlaps = _guide()
     tok = _PINNED.set((_resolved(sections, src), overlaps))
