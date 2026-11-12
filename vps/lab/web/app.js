@@ -4199,6 +4199,7 @@ async function retroSetup(defRace) {
     Retro.setup = setup;
     if (setup) {
       Retro.courseId = setup.course_id;
+      retroReadYb();     // an id typed while the request was out wins over the race's own
       if (!Retro.ybId && setup.yb_id) Retro.ybId = setup.yb_id;
     }
   }

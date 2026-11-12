@@ -113,6 +113,13 @@ check("tag_legacy tags only untagged ORC imports", R.tag_legacy(d, "COL_B") == 1
       and d["fleet"][0]["rating_col"] == "COL_B" and "rating_col" not in d["fleet"][1])
 check("a tagged legacy import on the current column is kept",
       R.clear_stale_ratings(d)["boats"] == [] and d["fleet"][0]["rating"] == 1.1)
+d = race(rating_system="ORC", rating_column="COL_B")
+d["fleet"] = []
+d["own"] = {"boat": "Us", "source": "orc", "rating": 1.05}
+check("tag_legacy tags our own untagged ORC import too",
+      R.tag_legacy(d, "COL_B") == 1 and d["own"].get("rating_col") == "COL_B")
+check("so the migration keeps our rating",
+      R.clear_stale_ratings(d)["own"] is False and d["own"]["rating"] == 1.05)
 
 print("boats whose division the race doesn't list:")
 d = race(rating_system="ORC", course_columns=PER)

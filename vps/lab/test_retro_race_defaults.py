@@ -129,6 +129,22 @@ def test_polars_sail_match_beats_country_order(monkeypatch):
     assert saved == ["CAN", "USA"]     # Bravo by its CAN sail; Solo by name, first country wins
 
 
+def test_fleet_import_sail_match_beats_country_order(monkeypatch):
+    """#341: the Gameplan fleet import (enrich_from_orc) as the retro above: CAN 12 "Bravo" must
+    not take a USA "Bravo"'s cert; a sail number in any country beats a name in an earlier one."""
+    _stub_polars(monkeypatch, [], {
+        "USA": [{"SailNo": "USA 99", "YachtName": "Bravo", "RefNo": "u1"},
+                {"SailNo": "USA 7", "YachtName": "Solo", "RefNo": "u2"}],
+        "CAN": [{"SailNo": "CAN 12", "YachtName": "Bravo", "RefNo": "c1"},
+                {"SailNo": "CAN 8", "YachtName": "Solo", "RefNo": "c2"}]})
+    entries = [{"boat": "Bravo", "sail": "CAN 12"}, {"boat": "Solo", "sail": "XYZ 1"}]
+    r = fi.enrich_from_orc(entries, country="USA,CAN")
+    assert r["matched"] == 2
+    got = [(e["orc_match"]["by"], e["orc_match"]["country"], e["orc_match"]["sail"])
+           for e in r["entries"]]
+    assert got == [("sail", "CAN", "CAN 12"), ("name", "USA", "USA 7")], got
+
+
 def test_polars_without_a_race_use_sail_numbers(monkeypatch):
     asked, _ = _stub_polars(monkeypatch, [{"team_id": 1, "boat": "B", "sail": "AUS 9"}], {})
     r = retro.match_polars("x")

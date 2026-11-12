@@ -274,6 +274,37 @@ def test_wind_models_outside_their_area_are_not_asked():
     assert optimizer.wind_notes(wf) == ["HRRR: not here (US only)."], wf.meta
 
 
+class _SynthModel:
+    """A model source that hands back the synthetic Channel series (the API-grid path, no GRIB)."""
+    def __init__(self, name):
+        self.name = name
+
+    def load_series(self, bbox, t_start, t_end, on_progress=None):
+        return ({(self.name, "det"): _SERIES[(self.name, "det")]},
+                {"model": self.name, "cycle": "2027-05-25 00Z", "members": 1, "frames": 18,
+                 "expected_frames": 18, "cycle_fallbacks": 0, "priority": 1.0,
+                 "kind": "deterministic"})
+
+
+def test_route_result_says_hrrr_not_here():
+    """#309/#341: the note reaches a real route result's `data.notes`, not just the helper. The
+    real wind-field build runs with the real HRRR source (skipped: off the US) and synthetic
+    GFS/ECMWF in place of the downloads."""
+    from app.wind import models as M
+
+    def build(bbox, t_start, t_end, models=(), **kw):
+        srcs = [M.MODELS[n] if n == "hrrr" else _SynthModel(n) for n in models]
+        return windfield.build_windfield(bbox, t_start, t_end, models=srcs, **kw)
+
+    WIND.build_windfield = build
+    try:
+        r = main._run_optimize(RACE, "c", T0, ["hrrr", "gfs", "ecmwf"], 0)
+    finally:
+        WIND.build_windfield = fake_windfield
+    assert r.get("available") is not False, r.get("note")
+    assert "HRRR: not here (US only)." in ((r.get("data") or {}).get("notes") or []), r.get("data")
+
+
 def test_boat_without_polar_refuses_plainly():
     """A profile with no polar must not borrow sr33's: the run says there is no polar."""
     from app import routerun

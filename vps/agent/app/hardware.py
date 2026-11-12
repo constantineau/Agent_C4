@@ -127,13 +127,12 @@ def profile():
 
 def source_priority():
     """The current boat's sensor priority {channel: [matchers]}, or None (none set).
-    On the shore: the cloud's `source_priority` table when it answers, else the profile's."""
+    On the shore: the cloud's `source_priority` table when it answers, even empty (as `/conditions`
+    reads it, so instrument reads and sensor health rank alike), else the profile's."""
     if not _onboard():
         try:
             from . import datasource
-            prio = datasource.load_priority()
-            if prio:
-                return prio
+            return datasource.load_priority()
         except Exception:  # noqa: BLE001 — no database (a test, a bench): the profile's
             pass
     return BH.source_priority(profile())
