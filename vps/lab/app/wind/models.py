@@ -87,6 +87,28 @@ class ModelSource:
     dense_to = None                   # hours that are available hourly before fhr_step kicks in
     members = ("det",)
     priority = 1.0                    # blend weight (higher = trusted more)
+    # Where the model has data (#309): a (south, north, west, east) box, or None for a global
+    # model. Approximate is enough: a race inside the box but off the real grid just gets no frames.
+    coverage = None
+    coverage_label = None             # the plain words for that area, e.g. "US only"
+
+    def covers_point(self, lat, lon) -> bool:
+        if self.coverage is None:
+            return True
+        s, n, w, e = self.coverage
+        return s <= lat <= n and w <= lon <= e
+
+    def covers_bbox(self, bbox) -> bool:
+        """Does any of the race box bbox=(n, s, w, e) fall inside this model's area?"""
+        if self.coverage is None or not bbox:
+            return True
+        n, s, w, e = bbox
+        cs, cn, cw, ce = self.coverage
+        return not (n < cs or s > cn or e < cw or w > ce)
+
+    def not_here_note(self) -> str:
+        where = f" ({self.coverage_label})" if self.coverage_label else ""
+        return f"{self.name.upper()}: not here{where}"
 
     def fhrs(self, horizon_h: int):
         h = min(horizon_h, self.horizon_h)
@@ -186,6 +208,8 @@ class HRRR(ModelSource):
     fhr_step = 1
     dense_to = 48
     priority = 1.2                    # 3 km, freshest → trust most for near-term
+    coverage = (21.1, 52.7, -134.1, -60.9)   # the CONUS grid's lat/lon extent
+    coverage_label = "US only"
 
     def horizon_for(self, cycle):
         return 48 if cycle.hour in (0, 6, 12, 18) else 18
@@ -480,7 +504,34 @@ MODELS = {m.name: m for m in (GFS(), NAM(), HRRR(), GEFS(), ECMWF(), ECMWF_ENS()
 DEFAULT_MODELS = ("gfs", "hrrr")   # NAM retired 2026-11-03; RRFS to follow
 
 
+NOT_HERE = "not here"      # the `skipped` reason a model outside its area carries in the windfield meta
+
+
+def _source(model):
+    return MODELS.get(model) if isinstance(model, str) else model
+
+
+def covers(model, lat, lon) -> bool:
+    """True if `model` (a name or a source) has forecasts at (lat, lon). Unknown names count as
+    global: the caller drops them anyway."""
+    src = _source(model)
+    return src is None or src.covers_point(lat, lon)
+
+
+def covers_bbox(model, bbox) -> bool:
+    src = _source(model)
+    return src is None or src.covers_bbox(bbox)
+
+
+def coverage_note(model) -> str:
+    """"HRRR: not here (US only)": what a result says for a model outside its area."""
+    src = _source(model)
+    if src is None:
+        return f"{str(model).upper()}: not here"
+    return src.not_here_note()
+
+
 def available_models():
     return {name: {"kind": m.kind, "horizon_h": m.horizon_h, "members": len(m.members),
-                   "priority": m.priority} for name, m in MODELS.items()
-            if not getattr(m, "retired", False)}
+                   "priority": m.priority, "coverage": m.coverage_label or "global"}
+            for name, m in MODELS.items() if not getattr(m, "retired", False)}

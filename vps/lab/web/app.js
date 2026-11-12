@@ -1922,7 +1922,7 @@ function renderOptResult(r) {
       <details class="rail-sec"><summary>Weather data &amp; land</summary>
         ${optObstacleNote(r)}
         ${(r.skipped_marks || []).length ? `<div class="muted" style="font-size:12px;margin-top:6px">Marks skipped (no position, fix in Course &amp; Marks): ${r.skipped_marks.map(esc).join(", ")}</div>` : ""}
-        <div class="muted" style="font-size:12px;margin-top:6px">${(r.windfield.models || []).map((m) =>
+        <div class="muted" style="font-size:12px;margin-top:6px">${(r.windfield.models || []).map((m) => m.note ? esc(m.note) :
           `${esc(m.model.toUpperCase())} ${esc(m.cycle)} — ${m.frames}${m.expected_frames ? "/" + m.expected_frames : ""} frames` +
           (m.cycle_fallbacks ? ` <span class="conf warn">(−${m.cycle_fallbacks} cycle)</span>` : "")).join(" · ")} · ${r.windfield.total_frames} frames total</div>
       </details>

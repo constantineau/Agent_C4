@@ -41,26 +41,8 @@ _NDBC_RT = "https://www.ndbc.noaa.gov/data/realtime2/{station}.txt"
 
 MATCH_TOL_S = 1800          # match a forecast hour to an obs within ±30 min
 
-# Where each model has data. A model missing here is global. Approximate boxes are enough: a point
-# inside the box but off the real grid just comes back empty and is skipped like any other gap.
-# (A step toward the per-area source registry, #309.)
-MODEL_COVERAGE = {
-    "hrrr": {"box": (21.1, 52.7, -134.1, -60.9), "label": "US only"},   # (s, n, w, e)
-}
-
-
-def covers(model, lat, lon):
-    """True if `model` has forecasts at (lat, lon). Global models always do."""
-    c = MODEL_COVERAGE.get(model)
-    if not c:
-        return True
-    s, n, w, e = c["box"]
-    return s <= lat <= n and w <= lon <= e
-
-
-def coverage_note(model):
-    c = MODEL_COVERAGE.get(model)
-    return f"{model.upper()}: not here ({c['label']})" if c else f"{model.upper()}: not here"
+# Where each model has data: each wind source declares its own area (wind/models.py, #309).
+from .wind.models import coverage_note, covers  # noqa: E402,F401
 
 
 # Open-Meteo's free tier allows ~600 calls/min and 5,000/hour; a long study makes a few hundred.
