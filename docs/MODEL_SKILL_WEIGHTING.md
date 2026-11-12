@@ -223,3 +223,31 @@ backfill (heavy, synchronous — minutes) then returns the refreshed payload.
 unit-checked; live scoring gave HRRR 2.85 kn (5 July seasons, n=4123) → ×1.71 vs globals ~×0.8–0.9;
 deep HRRR parsed to 2015 / GEFS to 2008; a bounded backfill merged deep years with the Open-Meteo era.
 Deployed to lab.racertracer.net; a full 2005→2026 Bayview-Mackinac backfill (buoy 45008) followed.
+
+## Venue study (Lab page, #329)
+
+A venue no longer has to wait for a race to be routed there. The Lab's **Venue study** tab takes a
+place anywhere (tap the map or type lat/lon), a radius, and the race dates (±21 days each year) or
+a month, and:
+
+- **finds observation stations** with `app/obsstations.py`: airports from the Iowa State Mesonet
+  network list (each network's bounding box picks which station lists to open) and NDBC stations
+  from NDBC's station table, nearest first, each checked for wind data in the last whole past
+  window. The curated `venue.STATIONS` stay preferred (ticked by default). Each catalogue is a
+  small source object, a first step toward the per-area registry in #309. Iowa State is probed one
+  station at a time (it errors on parallel requests).
+- **runs the study** as a background job (`app/venuestudy.py`, `POST /api/venue-study/run`, poll
+  `/api/venue-study/status`): `modelskill.score_stations` over each year's window, Open-Meteo
+  calls spaced by `OPENMETEO_MIN_GAP_S` (0.5 s). Optional older years (pre-2021 GRIB, slow).
+- **skips models that don't cover the place** (`modelskill.MODEL_COVERAGE`: HRRR is US only) with a
+  plain note; the race-time path skips them the same way.
+- **saves** the per-model scores, a one-line verdict, and the usual wind from the observations
+  (direction × speed share of hours, by time of day in the station's own clock) in `venue_study`
+  (learning.db), and the model scores in `model_skill` as `study=1` rows: they stand until the
+  study is run again (like deep rows).
+- **a race there uses it by itself**: `venue.resolve` gives a race whose course centroid is within
+  `VENUE_STUDY_MATCH_NM` (30) of a study the study's key and stations; a race can also name a study
+  with `venue_tag`. The key is the study location's 0.5° cell, the same key a race there would get.
+
+One study per venue key: running another study at the same place replaces it. The Lab's study
+data lives on the learning volume; deleting a study removes its `model_skill` rows too.

@@ -13,7 +13,8 @@ What it asserts, for every surface:
     result, never silently dropped.
 
 No network: the forecast is a synthetic two-model wind field, the shoreline is a fixture box for
-the Isle of Wight, the current/wave builders run for real (they reject the area without fetching).
+the Isle of Wight, the current/wave builders run for real (the Channel is open-sea water,
+but no forecast reaches a race this far ahead, so they say none without fetching).
 
 Parts that fail on today's dev are strict expected failures, each naming the ticket that fixes it.
 When a fix lands, its xfail turns into an unexpected pass and this file FAILS: the fixer removes
@@ -234,14 +235,19 @@ def test_route_opens_no_sr33_file(route):
     assert route[1] == []
 
 
-@xfail("#308", "route outside LMHOFS says nothing about the missing current")
 def test_route_says_no_current(route):
     assert says_missing(route[0], "current")
 
 
-@xfail("#308", "route outside GLWU says nothing about the missing sea state")
 def test_route_says_no_waves(route):
     assert says_missing(route[0], "wave", "sea state")
+
+
+def test_route_warns_tidal_without_current(route):
+    """Tidal water and no current: the loud warning comes first in the route's warnings (#308)."""
+    from app import seasource
+    assert (route[0].get("warnings") or [None])[0] == seasource.TIDAL_WARNING
+    assert (route[0].get("data") or {}).get("current", "").startswith("none:")
 
 
 def test_boat_without_polar_refuses_plainly():
@@ -284,7 +290,6 @@ def test_playbook_text_has_no_sr33_or_bayview(bundle):
     assert not no_sr33_text(bundle[0])
 
 
-@xfail("#308", "playbook outside LMHOFS/GLWU says nothing about the missing current and sea state")
 def test_playbook_says_no_current_or_waves(bundle):
     assert says_missing(bundle[0], "current") and says_missing(bundle[0], "wave", "sea state")
 
@@ -384,7 +389,6 @@ def test_orin_opens_no_sr33_file(orin_bravo):
     assert orin_bravo[1] == []
 
 
-@xfail("#308", "Orin re-route in tidal water says nothing about the missing current")
 def test_orin_says_no_current(orin_bravo):
     assert says_missing(orin_bravo[0], "current")
 

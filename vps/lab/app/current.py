@@ -12,12 +12,18 @@ from the CO-OPS THREDDS OPeNDAP server, slicing only the course bbox + surface l
 is ~140 MB; the bbox-surface slice is tiny). Best-effort like the GRIB layer: out of the Great-Lakes
 domain, no forecast yet (future race), or any fetch error → ZeroCurrent (route unchanged). Validated
 deterministically with ConstantCurrent (test_routing_currents.py).
+
+Sources (#308): LMHOFS is one `seasource.SeaSource`, chosen by its water mask (Lake Erie and Lake
+St Clair are inside its old box but not its water); HYCOM ESPC (hycom.py) covers the open sea.
+The course area picks the source (seasource.pick); an empty field says why in `why`.
 """
 import bisect
 import math
 import os
 import threading
 from concurrent.futures import TimeoutError as FTimeout
+
+from . import seasource
 
 ENABLED = os.environ.get("CURRENTS_ENABLED", "1").strip().lower() in ("1", "true", "yes", "on")
 STEP_H = float(os.environ.get("CURRENTS_STEP_H", "6"))         # sample cadence across the race window
@@ -27,8 +33,6 @@ CYCLE_LAG_H = float(os.environ.get("CURRENTS_CYCLE_LAG_H", "5"))        # availa
 CYCLE_FALLBACKS = int(os.environ.get("CURRENTS_CYCLE_FALLBACKS", "2"))  # step back if a cycle isn't posted
 THREDDS = os.environ.get("CURRENTS_THREDDS",
                          "https://opendap.co-ops.nos.noaa.gov/thredds/dodsC/NOAA/LMHOFS/MODELS")
-# LMHOFS regular-grid domain (deg) — quick reject for non-Great-Lakes races.
-_DOMAIN = (41.6, 46.37, -88.06, -79.70)   # s, n, w, e
 FILL = -9000.0                            # GLOFS land/missing sentinel is -99999
 
 # Built fields, reused only for the same dataset cycle, area, full time span and processing (#44.2).
@@ -44,6 +48,8 @@ _fetch_lock = threading.Lock()   # check/start/join/update of `_stuck` as one st
 class CurrentField:
     loaded = False
     source = None
+    label = None           # the source's name for people (the data block)
+    why = None             # an empty field: why (seasource.OUTSIDE, NO_DATA, OFF, OFFLINE)
 
     def current_at(self, lat, lon, epoch):
         return (0.0, 0.0)
@@ -71,7 +77,8 @@ class CurrentField:
 
 
 class ZeroCurrent(CurrentField):
-    pass
+    def __init__(self, why=None):
+        self.why = why
 
 
 class ConstantCurrent(CurrentField):
@@ -95,8 +102,13 @@ class GLOFSCurrent(CurrentField):
     linearly in time. Each slice = (epoch, u2d, v2d) on shared 1-D axes (lons, lats), m/s."""
     loaded = True
     source = "glofs-lmhofs"
+    label = "NOAA LMHOFS"
 
-    def __init__(self, lons, lats, slices, meta):
+    def __init__(self, lons, lats, slices, meta, source=None, label=None):
+        if source:
+            self.source = source
+        if label:
+            self.label = label
         self.lons = lons          # ascending 1-D longitude axis (bbox subset)
         self.lats = lats          # ascending 1-D latitude axis
         self.slices = slices      # [(epoch, u2d, v2d)] sorted by epoch
@@ -105,6 +117,10 @@ class GLOFSCurrent(CurrentField):
 
     def _bilin(self, u2d, v2d, lat, lon):
         lons, lats = self.lons, self.lats
+        if lon < lons[0] and lon + 360.0 <= lons[-1]:      # a grid in 0..360 (or across 180°)
+            lon += 360.0
+        elif lon > lons[-1] and lon - 360.0 >= lons[0]:
+            lon -= 360.0
         if lon < lons[0] or lon > lons[-1] or lat < lats[0] or lat > lats[-1]:
             return None
         i = min(max(bisect.bisect_right(lons, lon) - 1, 0), len(lons) - 2)
@@ -147,7 +163,8 @@ class GLOFSCurrent(CurrentField):
         return ((math.degrees(math.atan2(u, v)) % 360.0), drift)
 
     def status(self):
-        return {"loaded": True, "source": self.source, "slices": len(self.slices), **self.meta}
+        return {"loaded": True, "source": self.source, "label": self.label,
+                "slices": len(self.slices), **self.meta}
 
 
 def _cycle_for(epoch, now=None):
@@ -249,18 +266,11 @@ def _cache_put(key, field, exact, now):
     _cache[key] = (field, now, exact)
 
 
-def build_currentfield(bbox, t_start, t_end, on_progress=None):
-    """Best-effort LMHOFS surface-current field over the course bbox + window. ZeroCurrent on any miss."""
-    log = on_progress or (lambda *_: None)
-    if not ENABLED:
-        return ZeroCurrent()
+def _build_lmhofs(bbox, t_start, t_end, log):
+    """LMHOFS surface-current field over the course bbox + window, or None on any miss."""
     n, s, w, e = bbox[0], bbox[1], bbox[2], bbox[3]
     if n < s:                                   # course_bbox is (north, south, west, east)
         n, s = s, n
-    dom_s, dom_n, dom_w, dom_e = _DOMAIN
-    if n < dom_s or s > dom_n or e < dom_w or w > dom_e:
-        log("currents: course outside the Great Lakes (LMHOFS) domain — no current")
-        return ZeroCurrent()
     sub_bbox = (s - 0.05, n + 0.05, w - 0.05, e + 0.05)
 
     # build the list of target times across the window (capped)
@@ -320,5 +330,37 @@ def build_currentfield(bbox, t_start, t_end, on_progress=None):
         if hung:
             break
         log(f"currents: cycle {cyc.strftime('%Y-%m-%d %HZ')} not available — stepping back")
-    log("currents: no LMHOFS data for the window — routing without current")
-    return ZeroCurrent()
+    log("currents: no LMHOFS data for the window")
+    return None
+
+
+class LMHOFSSource(seasource.SeaSource):
+    """NOAA LMHOFS: Lakes Michigan and Huron (with Georgian Bay and the North Channel)."""
+    kind, id, name, resolution_km, sea, mask = \
+        "current", "glofs-lmhofs", "NOAA LMHOFS", 1.0, False, "lmhofs"
+
+    def fetch(self, bbox, t_start, t_end, log):
+        return _build_lmhofs(bbox, t_start, t_end, log)
+
+
+class HYCOMSource(seasource.SeaSource):
+    """HYCOM ESPC-D-V02: the global ocean (hycom.py). No Great Lakes."""
+    kind, id, name, resolution_km, sea, mask = \
+        "current", "hycom-espc", "HYCOM ESPC (global)", 8.0, True, "hycom-espc"
+
+    def fetch(self, bbox, t_start, t_end, log):
+        from . import hycom
+        return hycom.fetch(bbox, t_start, t_end, log)
+
+
+# Every current source; the course area picks one (finest covering first).
+SOURCES = [LMHOFSSource(), HYCOMSource()]
+
+
+def build_currentfield(bbox, t_start, t_end, on_progress=None):
+    """Best-effort surface-current field over the course bbox + window, from the source that
+    covers the area (seasource.pick). ZeroCurrent(why) on any miss, saying why."""
+    log = on_progress or (lambda *_: None)
+    if not ENABLED:
+        return ZeroCurrent(seasource.OFF)
+    return seasource.build(SOURCES, bbox, t_start, t_end, log, ZeroCurrent, "currents")
