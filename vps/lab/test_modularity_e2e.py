@@ -174,6 +174,29 @@ judge._oracle_windfield = lambda bbox, start, t_end, models, race_id, log: (
     fake_windfield(bbox, start, t_end), "forecast")
 boats.set_active("bravo")
 
+# observation station lists (#309), offline: a small fake of aviationweather.gov's station list
+# (answering for the asked box) and NDBC's active table. The live probes say every station reports.
+from app import obsarea  # noqa: E402
+_AWC = [("EGHI", 50.95, -1.357, "Southampton"), ("EGHH", 50.78, -1.842, "Bournemouth"),
+        ("KFLL", 26.079, -80.162, "Ft Lauderdale-Hollywood Intl"), ("KAPN", 45.07, -83.56, "Alpena")]
+_NDBC = ('<stations><station id="LKWF1" lat="26.612" lon="-80.034" name="Lake Worth" met="y"/>'
+         '<station id="62103" lat="49.9" lon="-2.9" name="Channel Lightship" met="y"/></stations>')
+STATION_FETCHES = []
+
+
+def _station_list(url, timeout=20):
+    STATION_FETCHES.append(url)
+    if "aviationweather" in url:
+        s, w, n, e = (float(x) for x in re.search(r"bbox=([^&]+)", url).group(1).split(","))
+        return json.dumps([{"icaoId": i, "lat": la, "lon": lo, "site": nm, "siteType": ["METAR"]}
+                           for i, la, lo, nm in _AWC if s <= la <= n and w <= lo <= e])
+    return _NDBC
+
+
+obsarea._get = _station_list
+synthesis._probe_metars = lambda ids, timeout=12: set(ids)
+synthesis._probe_ndbc = lambda sid, timeout=8: True
+
 
 def bravo_track():
     """Bravo's recording of the race: the rhumb line start → South → finish at ~6 kn."""
@@ -316,6 +339,24 @@ def test_playbook_text_has_no_sr33_or_bayview(bundle):
 
 def test_playbook_says_no_current_or_waves(bundle):
     assert says_missing(bundle[0], "current") and says_missing(bundle[0], "wave", "sea state")
+
+
+def test_playbook_freezes_stations_for_the_channel(bundle):
+    """#309: the boat's station list comes from the race's area. On the Channel that is the local
+    airports, never a Great Lakes station, and the bundle says plainly there are no buoys."""
+    from app import venue
+    ids = [s["id"] for s in bundle[0].get("buoys") or []]
+    assert ids == ["EGHI", "EGHH"], ids
+    assert not set(ids) & {s["id"] for s in venue.STATIONS}
+    assert "NDBC buoys: not here (US and Caribbean only)." in (bundle[0].get("data") or {}).get("notes", [])
+
+
+def test_stations_found_for_fort_lauderdale():
+    """#309: a Fort Lauderdale box gets local METARs and NDBC buoys from the public lists."""
+    from app import venue
+    got = obsarea.find((26.6, 25.6, -80.6, -79.6))
+    assert [s["id"] for s in got["stations"]] == ["KFLL", "LKWF1"] and got["notes"] == [], got
+    assert [s["id"] for s in venue.stations_for(26.1, -80.1)] == ["KFLL", "LKWF1"]
 
 
 # ==== 3. Lab debrief (performance half + tactics half) ============================================

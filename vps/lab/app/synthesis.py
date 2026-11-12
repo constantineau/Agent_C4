@@ -342,22 +342,22 @@ def _probe_metars(ids, timeout=12):
 
 def _buoy_stations(definition, course_id, promises=None, pad_deg=0.6):
     """Freeze the race's observed-wind station list into the bundle (the homework pattern):
-    every curated station — NDBC-feed buoys/lights AND shore METARs — within the course bbox
-    (+ a pad) that a LIVE PROBE confirms is actually reporting (seasonal buoys and rotting lists
-    otherwise ship dark stations). Each frozen station carries `kind`, a `shore` flag (METAR
+    every station the area lookup finds — NDBC-feed buoys/lights AND shore METARs — within the
+    course bbox (+ a pad) that a LIVE PROBE confirms is actually reporting (seasonal buoys and
+    rotting lists otherwise ship dark stations). The lookup (obsarea, #309) keeps the curated
+    Great Lakes set where it has stations and finds them from the public lists elsewhere, so the
+    boat needs no network to know its stations. Each frozen station carries `kind`, a `shore` flag (METAR
     anemometers under-read the over-water gradient — direction/trend indicators, not pressure)
     and, when the playbook sampled them, the blended field's `promise` series so the boat can
     compare actuals against the forecast the plan routed on. Best-effort — omitted when none."""
     try:
         from . import optimizer as _opt
-        from . import venue as _venue
+        from . import obsarea
         bbox = _opt.course_bbox(definition, course_id)
         if not bbox:
             return None
-        n, s_, w, e = bbox
-        cands = [st for st in _venue.STATIONS if st.get("kind") in ("ndbc", "metar")
-                 and s_ - pad_deg <= st["lat"] <= n + pad_deg
-                 and w - pad_deg <= st["lon"] <= e + pad_deg]
+        cands = [st for st in obsarea.find(bbox, pad_deg)["stations"]
+                 if st.get("kind") in ("ndbc", "metar")]
         live_metars = _probe_metars([st["id"] for st in cands if st["kind"] == "metar"])
         out = []
         for st in cands:
@@ -373,6 +373,28 @@ def _buoy_stations(definition, course_id, promises=None, pad_deg=0.6):
         return out or None
     except Exception:
         return None
+
+
+def _station_notes(definition, course_id):
+    """Plain sentences for observation stations the area has no source for (#309), e.g.
+    "NDBC buoys: not here (US and Caribbean only)." Best-effort: [] on any failure."""
+    try:
+        from . import optimizer as _opt
+        from . import obsarea
+        return obsarea.find(_opt.course_bbox(definition, course_id))["notes"]
+    except Exception:
+        return []
+
+
+def _with_station_notes(data, definition, course_id):
+    """The playbook's `data` (#308 current/wave notes) plus the station notes, shown in the Lab."""
+    notes = _station_notes(definition, course_id)
+    if not notes:
+        return data
+    data = dict(data or {})
+    data["stations"] = " ".join(notes)
+    data["notes"] = list(data.get("notes") or []) + notes
+    return data
 
 
 def _fingerprint(variants, recommended):
@@ -874,7 +896,7 @@ def _synthesize(definition, course_id, start_epoch, models, ensemble_members, ti
         "degraded": bool(playbook.get("degraded")),
         "warnings": list(playbook.get("warnings") or []),
         # #308: the current and wave sources every route above used, or "none: why", in words
-        "data": playbook.get("data"),
+        "data": _with_station_notes(playbook.get("data"), definition, course_id),
         "boat_model": boat_model,      # polars/sail crossovers + draft frozen into the homework
         # the speed-model inputs every route above was built with, so the debrief's best route can
         # be sailed by the same boat (#244) even after the boat's settings change

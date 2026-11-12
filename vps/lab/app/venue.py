@@ -15,7 +15,9 @@ import math
 CELL_DEG = 0.5              # venue cell size for auto-keying
 STATION_MAX_NM = 60.0      # a venue must have an obs station within this range to be scoreable
 
-# Curated observed-wind stations near our racing waters (Great Lakes first; extend as venues grow).
+# Curated observed-wind stations near our racing waters: the verified Great Lakes set. Other areas
+# get their stations from the public station lists (obsarea.py, #309); add here only stations
+# checked by hand.
 # kind: "metar" (ICAO, Iowa State ASOS archive) or "ndbc" (buoy id, realtime2 + historical archive).
 STATIONS = [
     # --- METAR (shore, year-round) ---
@@ -89,11 +91,15 @@ def nearest_station(lat, lon, prefer=None, max_nm=STATION_MAX_NM):
 def stations_for(lat, lon, max_nm=STATION_MAX_NM):
     """The obs stations that anchor a venue — the nearest of EACH kind in range (a shore METAR +
     an over-water NDBC buoy), so skill pools both the shore/lake-breeze regime and the open-water
-    regime. Ordered nearest-first; empty if nothing is in range."""
+    regime. Curated stations first; a kind with none in range comes from the area's station list
+    (obsarea, #309). Ordered nearest-first; empty if nothing is in range."""
     out = []
     for kind in ("metar", "ndbc"):
         s = nearest_station(lat, lon, prefer=kind, max_nm=max_nm)
-        if s and s["kind"] == kind:
+        if not (s and s["kind"] == kind):
+            from . import obsarea
+            s = obsarea.nearest(lat, lon, kind, max_nm)
+        if s:
             out.append(s)
     return sorted(out, key=lambda s: s["dist_nm"])
 
