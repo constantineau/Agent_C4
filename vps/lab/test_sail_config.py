@@ -207,5 +207,16 @@ check("REACHER reads the rated headsail's curve, BIGRED its own",
       and OPT._sail_polar_key("BIGRED", ["J1", "BIGRED"], RCFG) == "BIGRED")
 check("gear-loss plays use the family map", PB._gear_sails({"J1", "BIGRED", "S1"}, RCFG) == ["BIGRED", "S1"])
 
+# ---- 9) holding speed of a named change-down reads the rated headsail (Codex round 2 on #334) -----
+print("9) a named change-down's holding speed")
+SPG = {"G1": [[10, 40, 5.0], [10, 60, 6.0], [10, 90, 6.5], [14, 40, 5.5], [14, 60, 6.5], [14, 90, 7.0]]}
+DOMG = OPT._sail_domains(SPG)
+HCFG = {"sail_families": {"HEAVY": "jib"}}
+check("HEAVY holds on the G1 curve with the family map",
+      OPT._sail_speed(SPG, DOMG, "HEAVY", 12, 60, HCFG) > 5.5
+      and OPT._sail_speed(SPG, DOMG, "HEAVY", 12, 60) == 0.0)
+check("the synthesis' play pricing reads it too",
+      (SYN._sail_speed(SPG, "HEAVY", 12, 60, HCFG) or 0) > 5.5 and SYN._sail_speed(SPG, "HEAVY", 12, 60) is None)
+
 print("RESULT:", "PASS" if ok else "FAIL")
 raise SystemExit(0 if ok else 1)

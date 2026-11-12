@@ -170,7 +170,7 @@ def _nearest_tws(tws):
     return min(sections.keys(), key=lambda k: abs(k - tws))
 
 
-def _zones(rows):
+def _zones(rows, fam_src=None):
     """Contiguous TWA bands per sail, with crossover boundaries at the midpoint between the
     last row of one sail and the first row of the next. Extends to 0 / 180 at the ends."""
     pts = [(r["twa"], r["sail"]) for r in rows if r["sail"]]
@@ -187,7 +187,7 @@ def _zones(rows):
     for i, gp in enumerate(groups):
         lo = 0.0 if i == 0 else round((groups[i - 1]["hi_twa"] + gp["lo_twa"]) / 2, 1)
         hi = 180.0 if i == len(groups) - 1 else round((gp["hi_twa"] + groups[i + 1]["lo_twa"]) / 2, 1)
-        zones.append({"sail": gp["sail"], "label": label(gp["sail"]),
+        zones.append({"sail": gp["sail"], "label": label(gp["sail"], fam_src),
                       "twa_min": lo, "twa_max": hi})
     return zones
 
@@ -212,7 +212,7 @@ def _tws_band_for(fam, a_twa):
     return ks
 
 
-def _fit_and_change(crew, a_twa, tws, optimal, wrong, tossup_ok, boat_model):
+def _fit_and_change(crew, a_twa, tws, optimal, wrong, tossup_ok, boat_model, fam_src=None):
     """How the CREW-SET sail fits the conditions right now, and what to change to if it doesn't:
     (fit, change_to). fit ∈ in_range | overpowered | underpowered | wrong_angle | no_model | None.
     Jib TWS bands + the Code-0 envelope come from the frozen boat model when one is aboard; the
@@ -220,7 +220,7 @@ def _fit_and_change(crew, a_twa, tws, optimal, wrong, tossup_ok, boat_model):
     bm = boat_model or {}
     if crew is None:
         return None, None
-    fam = SV.family(crew, bm)
+    fam = SV.family(crew, fam_src if fam_src is not None else bm)   # thresholds stay bm's
     if fam == "staysail":
         return "no_model", None
     if fam == "code0":
@@ -262,15 +262,16 @@ def _fit_and_change(crew, a_twa, tws, optimal, wrong, tossup_ok, boat_model):
 
 
 def _names_src(boat_model):
-    """Where the boat's sail names come from: the frozen boat model when it lists them, else the
-    boat's profile (app/boatinfo.py). Names only: the fit verdicts read `boat_model` alone."""
-    if isinstance(boat_model, dict) and boat_model.get("sail_inventory"):
-        return boat_model
+    """The boat's sail words, resolved ONCE (shared/sail_vocab.merge): names from the frozen boat
+    model when it lists them, else the boat's profile (app/boatinfo.py); `sail_families` from both
+    (the frozen model wins a clash). Words only: the fit THRESHOLDS read `boat_model` alone."""
+    prof = None
     try:
         from . import boatinfo
-        return boatinfo.profile() or boat_model
+        prof = boatinfo.profile()
     except Exception:
-        return boat_model
+        prof = None
+    return SV.merge(boat_model, prof)
 
 
 def _sail_list(src, rated=()):
@@ -315,7 +316,8 @@ def _advice(tws: float = None, twa: float = None, hoisted: str = None, boat_mode
 
     key = _nearest_tws(tws)
     rows = sections[key]
-    zones = _zones(rows)
+    src = _names_src(boat_model)      # the boat's sail words, resolved once for this answer
+    zones = _zones(rows, src)
     # The record wraps TWA to 0–360 (a port beat at 36° arrives as 324°): take it signed first,
     # or abs() reads a beat as a run and flags the right jib wrong (#47).
     twa = units.signed_twa(twa)
@@ -333,9 +335,8 @@ def _advice(tws: float = None, twa: float = None, hoisted: str = None, boat_mode
                       "deg_away": round(down["twa_min"] - a_twa, 1), "direction": "bear away"}
     row = _nearest_row(rows, a_twa)
     rated = _guide_sails(sections)
-    src = _names_src(boat_model)
     crew_sail = _crew_norm(hoisted, src, rated)
-    hoisted_fam = _cert_equiv(crew_sail, rated, boat_model)
+    hoisted_fam = _cert_equiv(crew_sail, rated, src)
 
     # toss-up: sails within ~1.5% of target AT this TWA (from the crossover overlap bands). The zones are
     # winner-take-all, so a near-tied sail reads as "wrong" — but if the hoisted sail is a toss-up with the
@@ -355,20 +356,20 @@ def _advice(tws: float = None, twa: float = None, hoisted: str = None, boat_mode
     # sail. The angle check alone passes an overpowered J1, so the text used to say "J1 is right"
     # under a tile saying "change to J2".
     fit, change_to = _fit_and_change(crew_sail, a_twa, tws, optimal, wrong,
-                                     hoisted_ok_tossup, boat_model)
+                                     hoisted_ok_tossup, boat_model, fam_src=src)
     change_now = fit in ("overpowered", "underpowered", "wrong_angle")
     if change_now and not change_to:
         change_to = optimal              # the tile's fallback, made explicit so both agree
     # the crew's own jib when it is the right family and fits (J2 up: say J2, not "J1 is right")
-    best = (crew_sail if (fit == "in_range" and _cert_equiv(crew_sail, rated, boat_model) == optimal)
+    best = (crew_sail if (fit == "in_range" and _cert_equiv(crew_sail, rated, src) == optimal)
             else optimal)
 
-    _lbl = lambda s: label(s, boat_model, rated)
+    _lbl = lambda s: label(s, src, rated)
     why = {"overpowered": "Too much wind for {}.", "underpowered": "Not enough wind for {}.",
            "wrong_angle": "{} is wrong for this angle."}
     if change_now:
         rec = f"Change to {_lbl(change_to)}. " + why[fit].format(_lbl(crew_sail))
-    elif fit == "in_range" and SV.family(crew_sail, boat_model) == "code0":
+    elif fit == "in_range" and SV.family(crew_sail, src) == "code0":
         # the cert has no Code 0, so `best` would name the cert's sail here — say the C0 is right
         rec = f"{_lbl(crew_sail)} is right for {round(a_twa)}° TWA, {round(tws)} kts."
     elif wrong:

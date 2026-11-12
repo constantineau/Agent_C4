@@ -126,5 +126,18 @@ try:
 finally:
     matcher._boat_sails = _orig
 
+print("no playbook: the profile's sail_families drive the advice (Codex round 2 on #334)")
+from app import boatinfo  # noqa: E402
+_prof = boatinfo.profile
+boatinfo.profile = lambda: dict(BOAT, sail_inventory=sail_vocab.names(BOAT) + ["HEAVY"],
+                                sail_families={"HEAVY": "jib"})
+try:
+    r = sails.get_sail_advice(14, 140, "HEAVY", None)
+finally:
+    boatinfo.profile = _prof
+check("HEAVY (a jib by the profile) at 140° is the wrong sail",
+      r["crew_sail"] == "HEAVY" and r["wrong_sail"] is True and r["fit"] == "wrong_angle"
+      and r["optimal_sail"] in ("A3", "S1"))
+
 print("RESULT:", "PASS" if ok else "FAIL")
 raise SystemExit(0 if ok else 1)

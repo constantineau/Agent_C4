@@ -551,13 +551,13 @@ def _play_synthesis(plays_in, corridor, profile, race_name):
     return {}, f"play narratives fell back to registry seeds ({last})"
 
 
-def _sail_speed(SP, sail, tws, twa):
+def _sail_speed(SP, sail, tws, twa, sail_config=None):
     """Per-sail-polar speed for `sail` at (tws, twa), interpolated on its curve (`shared.polar`), or
     None when it has no curve or can't be flown there (jib change-downs and the Code 0 read the
     rated headsail's curve, #305)."""
     from shared import polar as SPOL
     from . import optimizer
-    pts = SP.get(optimizer._sail_polar_key(sail, list(SP))) or []
+    pts = SP.get(optimizer._sail_polar_key(sail, list(SP), sail_config)) or []
     v = SPOL.lookup(pts, tws, twa) if pts else 0.0
     return v or None
 
@@ -601,8 +601,8 @@ def _sail_guidance_plays(consensus, jib_crossovers, sail_config=None, boat_polar
             if key in seen:
                 continue
             seen.add(key)
-            v_new = _sail_speed(SP, s2, thr + 1, twa)
-            v_old = _sail_speed(SP, sail, thr + 1, twa)
+            v_new = _sail_speed(SP, s2, thr + 1, twa, sail_config)
+            v_old = _sail_speed(SP, sail, thr + 1, twa, sail_config)
             rec = round(v_new - v_old, 2) if (v_new and v_old) else None
             gain = (f" — worth ~{rec} kn while it lasts" if rec and rec > 0.05 else "")
             verb = "builds" if direction == "over" else "drops"

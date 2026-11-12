@@ -52,6 +52,14 @@ check("kite over Code 0 over jib over staysail",
 check("sr33's sails in words", SV.describe_list(["J1", "A3", "S1"])
       == "J1 jib, A3 asymmetric, S1 symmetric kite")
 
+print("one resolver over several sources")
+m = SV.merge({"sail_inventory": ["J1", "BIGRED"], "sail_families": {"BIGRED": "asym"}},
+             {"sail_inventory": ["J1", "HEAVY"], "sail_families": {"HEAVY": "jib", "BIGRED": "sym"}})
+check("names from the first source that lists them", SV.names(m) == ["J1", "BIGRED"])
+check("families merge, the first source wins a clash",
+      SV.family("BIGRED", m) == "asym" and SV.family("HEAVY", m) == "jib")
+check("nothing to merge: empty", SV.merge(None, {}) == {"sail_inventory": [], "sail_families": {}})
+
 print("the boat's name")
 check("sr33 unchanged: the SR33 racing yacht 'C4'",
       boat_words.describe(SR33) == "the SR33 racing yacht 'C4'")

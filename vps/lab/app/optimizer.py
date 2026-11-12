@@ -392,11 +392,11 @@ def _sail_domains(SP):
     return out
 
 
-def _sail_speed(SP, dom, sail, tws, twa):
+def _sail_speed(SP, dom, sail, tws, twa, src=None):
     """A specific sail's polar boatspeed at (tws, twa) — interpolated on its own curve like the
     envelope (`shared.polar`), 0 outside its rated TWA domain (± SAIL_DOMAIN_MARGIN, held at the edge
     speed inside the margin). This is the speed of HOLDING `sail` here."""
-    key = _sail_polar_key(sail, list(SP))
+    key = _sail_polar_key(sail, list(SP), src)        # src: the boat's sail_families (#305)
     pts = SP.get(key)
     if not pts:
         return 0.0
@@ -611,13 +611,13 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, deadline=None,
         if sail_aware and opt is not None and _sail_polar_key(opt, rated, sail_config) not in dom:
             # gear-loss (exclude_sails): the cert-optimal sail has no curve in the FILTERED inventory
             # — the honest call is the fastest REMAINING sail (the rebuilt envelope already prices it)
-            opt = max(SP, key=lambda s: _sail_speed(SP, dom, s, tws, twa), default=None)
+            opt = max(SP, key=lambda s: _sail_speed(SP, dom, s, tws, twa, sail_config), default=None)
         if not sail_aware or opt is None:
             return (opt or cur_sail, sp_env, False)          # sail-aware off → envelope speed, no peel
         if (cur_sail is None or _sail_polar_key(cur_sail, rated, sail_config)
                 == _sail_polar_key(opt, rated, sail_config)):
             return (opt, sp_env, False)                      # initial set, or same family → relabel free
-        hold = _sail_speed(SP, dom, cur_sail, tws, twa)
+        hold = _sail_speed(SP, dom, cur_sail, tws, twa, sail_config)
         if hold > 0.3 and hold >= sp_env * (1.0 - PEEL_HOLD_TOL):
             return (cur_sail, hold, False)                   # current sail still within tolerance → HOLD
         return (opt, sp_env, True)                           # too slow / infeasible here → PEEL
@@ -1492,7 +1492,7 @@ def _optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s
         exclusion (the crossover table doesn't know a sail is out of service)."""
         s = sailplan.optimal_sail(tws, twa, jib_crossovers, sail_config, xo=xo)
         if s and _gone and _sail_polar_key(s, _rated, sail_config).upper() in _gone and SP:
-            s = max(SP, key=lambda k: _sail_speed(SP, _dom, k, tws, twa), default=s)
+            s = max(SP, key=lambda k: _sail_speed(SP, _dom, k, tws, twa, sail_config), default=s)
         return s
 
     all_leg_obstacles = leg_obstacles            # every leg of the course (the per-model fan's)

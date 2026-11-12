@@ -71,6 +71,22 @@ def inventory(src):
     return out
 
 
+def merge(*srcs):
+    """ONE family resolver over several sources (frozen boat model, profile, sail config…): the
+    first source that lists an inventory gives the names, and `sail_families` merge with the
+    earlier source winning a clash. Pass the result as `src` to family()/match()/drive_rank()."""
+    inv, fams = None, {}
+    for src in reversed([s for s in srcs if isinstance(s, dict)]):
+        f = src.get("sail_families")
+        if isinstance(f, dict):
+            fams.update({str(k).strip().upper(): v for k, v in f.items()})
+    for src in srcs:
+        if isinstance(src, dict) and src.get("sail_inventory"):
+            inv = list(src["sail_inventory"])
+            break
+    return {"sail_inventory": inv or [], "sail_families": fams}
+
+
 def names(src):
     return [s["name"] for s in inventory(src)]
 
