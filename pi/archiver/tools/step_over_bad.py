@@ -19,7 +19,8 @@ import sys
 import urllib.request
 
 DB = "/var/lib/sr33/archive/archive.db"
-VPS = os.environ.get("VPS_URL", "http://100.88.252.115:8101")
+VPS = os.environ.get("VPS_URL", "").strip() or sys.exit(
+    "VPS_URL is not set. Run with VPS_URL=http://<vps>:8101. Not starting.")   # no default (#314)
 TOKEN = os.environ.get("INGEST_TOKEN", "dev-ingest-token")
 BOAT = os.environ.get("BOAT_ID", "").strip() or sys.exit(
     "BOAT_ID is not set. Run with BOAT_ID=<this boat's id>. Not starting.")   # no default (#307)

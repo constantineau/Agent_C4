@@ -67,8 +67,10 @@ pi/deploy/deploy-data-path.sh --apply --expect-rotation   # the first deploy (Oc
 pi/deploy/deploy-data-path.sh --apply                     # any later deploy
 ```
 
-Tailscale SSH may ask for a browser approval first. `PI_HOST`, `EXPECT_BASE` and
-`VERIFY_TIMEOUT_S` can be overridden from the environment.
+Set `PI_HOST=<user>@<pi-host>` first (the boat's Pi as an ssh target): it has no default in
+the code (#314), and the script stops with a plain line when it is missing. Tailscale SSH may
+ask for a browser approval first. `EXPECT_BASE` and `VERIFY_TIMEOUT_S` can be overridden from
+the environment.
 
 ## Rollback
 

@@ -95,7 +95,7 @@ check("committed and loaded", cm.json().get("loaded") is True and on_disk() == "
 check("the old one-shot /playbook/load is gone", PI.post("/playbook/load", json=B).status_code in (404, 405))
 
 print("from anywhere else, or through a proxy:")
-for host in ("100.79.180.102", "192.168.1.20", "127.0.0.1", "10.10.10.2"):
+for host in ("100.64.0.11", "192.168.1.20", "127.0.0.1", "10.10.10.2"):
     st, cm = load(B, "nonce-0002", client=client_from(host))
     check(f"{host}: stage and commit 403, plain", st.status_code == 403 and cm.status_code == 403
           and st.json() == REFUSED and cm.json() == REFUSED)

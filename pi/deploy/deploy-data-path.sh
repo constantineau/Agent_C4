@@ -23,7 +23,10 @@
 # not pass --apply without his go. See pi/deploy/README.md.
 set -euo pipefail
 
-PI_HOST=${PI_HOST:-sr33-pi@100.79.180.102}
+# the boat's Pi as an ssh target (user@host), e.g. from the shell or a sourced env file.
+# No default in code (#314): the repo is public and every boat has its own.
+PI_HOST=${PI_HOST:-}
+[[ -n $PI_HOST ]] || { echo "PI_HOST is not set. Run with PI_HOST=<user>@<pi-host>. Nothing done." >&2; exit 2; }
 PI_REPO=${PI_REPO:-Agent_C4}                  # relative to the Pi user's home
 BACKUPS=${BACKUPS:-deploy-backups}            # relative to the Pi user's home
 EXPECT_BASE=${EXPECT_BASE:-b3c30a1}           # what the Pi's clone should be on

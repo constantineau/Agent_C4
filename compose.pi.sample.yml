@@ -12,7 +12,8 @@ services:
     environment:
       # bench: no Pi↔Orin cable here — reach the real Orin over Tailscale. The Orin's copilot then
       # needs COPILOT_BENCH_BIND / COPILOT_BENCH_ALLOW_FROM set (pi/orin/DEPLOYMENT.md §9).
-      COPILOT_UPSTREAM: "http://100.70.110.72:8300/"
+      # BENCH_ORIN_URL is the Orin's Tailscale address, e.g. http://<orin-tailnet-ip>:8300 (in .env).
+      COPILOT_UPSTREAM: "${BENCH_ORIN_URL:?set BENCH_ORIN_URL in .env (the Orin over Tailscale)}/"
   archiver:
     environment:
       # bench: never prune — the replayed 2014-timestamped sample data would all be
@@ -31,4 +32,4 @@ services:
       BOAT_ID: sr33-bench
       # bench: the playbook goes on to the real Orin over Tailscale (the Orin must list this
       # host's Tailscale IP in PLAYBOOK_LOAD_FROM)
-      COPILOT_URL: "http://100.70.110.72:8300"
+      COPILOT_URL: "${BENCH_ORIN_URL:?set BENCH_ORIN_URL in .env (the Orin over Tailscale)}"

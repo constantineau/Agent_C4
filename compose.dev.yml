@@ -30,10 +30,11 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in .env}
       INGEST_TOKEN: ${INGEST_TOKEN:-dev-ingest-token}
-    # localhost + Tailscale only: the boat's uplink posts to 100.88.252.115:8101.
+    # localhost + Tailscale only: the boat's uplink posts to this host's Tailscale address :8101.
+    # VPS_TAILNET_IP (in .env) is that address; never 0.0.0.0 (ufw does not filter Docker ports).
     ports:
       - "127.0.0.1:8101:8000"
-      - "100.88.252.115:8101:8000"
+      - "${VPS_TAILNET_IP:?set VPS_TAILNET_IP in .env (this host's Tailscale address)}:8101:8000"
     depends_on:
       timescaledb:
         condition: service_healthy
@@ -53,7 +54,7 @@ services:
       RACE_MODE_DEFAULT: ${RACE_MODE_DEFAULT:-practice}   # 9.2 gate: dev opens; prod omits -> fail-closed 'race'
     ports:
       - "127.0.0.1:8102:8000"
-      - "100.88.252.115:8102:8000"
+      - "${VPS_TAILNET_IP:?set VPS_TAILNET_IP in .env (this host's Tailscale address)}:8102:8000"
     depends_on:
       timescaledb:
         condition: service_healthy
@@ -69,7 +70,7 @@ services:
       AGENT_PORT: "8000"
     ports:
       - "127.0.0.1:8090:80"
-      - "100.88.252.115:8090:80"
+      - "${VPS_TAILNET_IP:?set VPS_TAILNET_IP in .env (this host's Tailscale address)}:8090:80"
     depends_on:
       - agent
     restart: unless-stopped
@@ -87,6 +88,13 @@ services:
       AGENT_URL: ${AGENT_URL:-http://agent:8000}        # Monitor: our-boat telemetry from the cloud agent
       BOAT_PASSWORD: ${BOAT_PASSWORD:?set BOAT_PASSWORD in .env}   # to auth to the agent for /conditions
       DEPLOY_BOAT_ID: ${DEPLOY_BOAT_ID:?set DEPLOY_BOAT_ID in .env (the boat Deploy pushes to)}
+      # that boat's Pi engine over Tailscale (http://<pi-tailnet-ip>:8200). Unset: Deploy, the boat
+      # read and the plume push say so and send nothing (#314: no address in code).
+      DEPLOY_PI_ENGINE_URL: ${DEPLOY_PI_ENGINE_URL:-}
+      DEPLOY_COPILOT_URL: ${DEPLOY_COPILOT_URL:-}     # default: the engine's host :8091/copilot
+      DEPLOY_PI_HOST: ${DEPLOY_PI_HOST:-}             # ssh target shown in the manual-load commands
+      DEPLOY_PI_ENGINE: ${DEPLOY_PI_ENGINE:-http://localhost:8200}   # engine URL as seen from the Pi, for the manual-load commands
+      PLUME_PUSH_URL: ${PLUME_PUSH_URL:-}
       # the boat library (#320): the Pi pulls GET /api/boats/library with its ingest token
       INGEST_TOKEN: ${INGEST_TOKEN:-dev-ingest-token}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}        # race-doc ingestion (Opus extraction)
@@ -118,7 +126,7 @@ services:
       FEEDBACK_ALLOW_ORIGINS: ${FEEDBACK_ALLOW_ORIGINS:-https://c4.racertracer.net,https://lab.racertracer.net,http://localhost:8091}
     ports:
       - "127.0.0.1:8103:8000"
-      - "100.88.252.115:8103:8000"
+      - "${VPS_TAILNET_IP:?set VPS_TAILNET_IP in .env (this host's Tailscale address)}:8103:8000"
     volumes:
       - lab_ingested:/srv/ingested
       - lab_gribcache:/srv/gribcache        # Lab-1: cached GRIB subsets (cheap re-runs/members)

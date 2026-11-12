@@ -373,19 +373,19 @@ def test_engine_fallback():
     engine_client.EngineClient._probe = lambda self, base: (probed.append(base), base != "http://10.10.10.9:1")[1]
     try:
         config.ENGINE_URL, config.ENGINE_FALLBACK_OFFBOAT = "http://10.10.10.9:1", False
-        config.ENGINE_URL_FALLBACK = "http://100.79.0.1:8200"
+        config.ENGINE_URL_FALLBACK = "http://100.64.0.13:8200"
         c = engine_client.EngineClient()
         check("a Tailscale fallback is never used (cable down → stays on the cable address)",
-              c.base_url == "http://10.10.10.9:1" and "http://100.79.0.1:8200" not in probed)
+              c.base_url == "http://10.10.10.9:1" and "http://100.64.0.13:8200" not in probed)
         config.ENGINE_URL_FALLBACK = "http://bench.example:8200"
         check("a hostname fallback is never used", engine_client.EngineClient().base_url == "http://10.10.10.9:1")
         config.ENGINE_URL_FALLBACK = "http://127.0.0.1:8200"
         check("a loopback fallback is used", engine_client.EngineClient().base_url == "http://127.0.0.1:8200")
         config.ENGINE_URL_FALLBACK = "http://10.10.10.1:8200/"
         check("a cable-subnet fallback is used", engine_client.EngineClient().base_url == "http://10.10.10.1:8200")
-        config.ENGINE_URL_FALLBACK, config.ENGINE_FALLBACK_OFFBOAT = "http://100.79.0.1:8200", True
+        config.ENGINE_URL_FALLBACK, config.ENGINE_FALLBACK_OFFBOAT = "http://100.64.0.13:8200", True
         check("ENGINE_FALLBACK_OFFBOAT=1 (shore dev) allows it",
-              engine_client.EngineClient().base_url == "http://100.79.0.1:8200")
+              engine_client.EngineClient().base_url == "http://100.64.0.13:8200")
     finally:
         engine_client.EngineClient._probe = orig_probe
         config.ENGINE_URL, config.ENGINE_URL_FALLBACK, config.ENGINE_FALLBACK_OFFBOAT = saved
