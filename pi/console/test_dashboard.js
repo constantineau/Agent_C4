@@ -652,6 +652,19 @@ test("#305 the sails bar lists the boat's sails; an explicit [] clears another b
   await T.D.poll();
   ok(T.D.sailsInv().join() === "J1", "an answer with no sails field must keep the list: " + T.D.sailsInv().join());
 });
+test("#305 any sail name the boat uses gets a button (spaces, long names), built as DOM", async () => {
+  const T = load();
+  const long = "HEAVY WEATHER JIB NUMBER FOUR";
+  pollAnswers(T, { conditions: COND, sail: { available: false, sails: [{ name: "BIG RED" }, { name: long }, { name: "<b>X'" }] } });
+  await T.D.poll();
+  ok(T.D.sailsInv().join("|") === "BIG RED|" + long + "|<b>X'", "names dropped: " + T.D.sailsInv().join("|"));
+  let tapped = null;
+  const b = T.D.sailButton("sb-chip", "BIG RED", "Tap = hoist the BIG RED", () => { tapped = "BIG RED"; });
+  ok(b.textContent === "BIG RED" && b.className === "sb-chip", "the button carries the name as text");
+  const src = require("node:fs").readFileSync(require("node:path").join(DIR, "dashboard.js"), "utf8");
+  ok(!/onclick="toggle(Flying|Gear)\(/.test(src), "sail buttons must not be inline-HTML onclick strings");
+  ok(tapped === null, "no tap yet");
+});
 
 (async () => {
   let fails = 0;

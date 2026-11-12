@@ -1515,8 +1515,16 @@
     const st = App.sailState || {};
     const out = (App.sailList || []).slice();
     (st.flying || []).concat(st.out_of_service || []).forEach((s) => { if (!out.includes(s)) out.push(s); });
-    // names go into buttons and onclick: only plain sail names (letters, digits, - _ .)
-    return out.filter((s) => typeof s === "string" && /^[A-Za-z0-9_.-]{1,16}$/.test(s));
+    // any name the boat uses ("BIG RED", long ones): the buttons are built as DOM, never HTML
+    return out.filter((s) => typeof s === "string" && s.trim() !== "");
+  }
+  /* One sail button, built as DOM (textContent + a click listener), so a sail's name is never
+     read as HTML or script whatever it contains (Codex on #334). */
+  function sailButton(cls, label, title, onTap) {
+    const b = document.createElement("button");
+    b.className = cls; b.textContent = label; b.title = title;
+    b.addEventListener("click", onTap);
+    return b;
   }
   async function fetchSailState() {
     if (App.src !== "live" || App.sailQ) return;   // a tap is in flight: its answer is the state
@@ -1761,18 +1769,19 @@
     const fly = new Set(st.flying || []);
     const out = new Set(st.out_of_service || []);
     const inv = sailsInv();
-    document.getElementById("sbChips").innerHTML = inv.map((s) =>
-      `<button class="sb-chip${fly.has(s) ? " on" : ""}" onclick="toggleFlying('${s}')" ` +
-      `title="Tap = ${fly.has(s) ? "douse" : "hoist"} the ${s}${out.has(s) ? " (marked out)" : ""}">` +
-      `${s}${out.has(s) ? "✕" : ""}</button>`).join("");
+    document.getElementById("sbChips").replaceChildren(...inv.map((s) => sailButton(
+      "sb-chip" + (fly.has(s) ? " on" : ""), s + (out.has(s) ? "✕" : ""),
+      "Tap = " + (fly.has(s) ? "douse" : "hoist") + " the " + s + (out.has(s) ? " (marked out)" : ""),
+      () => window.toggleFlying(s))));
     document.getElementById("sbReef").innerHTML =
       `<button class="sb-chip reef${st.reef ? " on" : ""}" onclick="toggleReef()" ` +
       `title="${st.reef ? "Shake out reef 1" : "Tuck in reef 1"}">R1${st.reef ? " ▽" : ""}</button>`;
     // gear OUT✕ toggles live HERE (always visible in live mode), not in the plays block —
     // a sail blows regardless of which playbook generation is aboard
-    document.getElementById("sbGear").innerHTML = inv.map((s) =>
-      `<button class="st-gear${out.has(s) ? " oos" : ""}" onclick="toggleGear('${s}')" ` +
-      `title="Tap = mark the ${s} ${out.has(s) ? "back in use" : "out (blown or damaged)"}">${s}</button>`).join("");
+    document.getElementById("sbGear").replaceChildren(...inv.map((s) => sailButton(
+      "st-gear" + (out.has(s) ? " oos" : ""), s,
+      "Tap = mark the " + s + " " + (out.has(s) ? "back in use" : "out (blown or damaged)"),
+      () => window.toggleGear(s))));
     const note = document.getElementById("sbNote");   // may be cut short on a narrow bar
     note.textContent = note.title = fly.size
       ? "flying " + [...fly].join(" + ") + (st.reef ? " · reef 1 in" : "")
@@ -3223,7 +3232,8 @@
       fetchCourse: fetchCourse, fetchSelector: fetchSelector, navControlsHtml: navControlsHtml,
       navAction: navAction, fetchDeviation: fetchDeviation, fetchCopilotHealth: fetchCopilotHealth,
       rerouteView: rerouteView, resolveTheme: resolveTheme, sunElevation: sunElevation,
-      deviationHtml: deviationHtml, currentData: currentData, rawDead: rawDead, sailsInv: sailsInv });
+      deviationHtml: deviationHtml, currentData: currentData, rawDead: rawDead, sailsInv: sailsInv,
+      sailButton: sailButton });
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
   else init();
 })();

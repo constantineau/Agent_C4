@@ -160,7 +160,7 @@
   function pick(name) {
     hoisted = name || "";
     try { localStorage.setItem("sr33.hoisted", hoisted); } catch (e) { /* private mode */ }
-    if (App.lastConditions) update(App.lastConditions); else render();
+    update(App.lastConditions);
   }
 
   async function update(c) {
@@ -169,11 +169,14 @@
     if (typeof tacticsAllowed === "function" && !tacticsAllowed()) {
       last = { available: false, note: "Sail advice withheld — RACE mode (RRS 41)." }; render(); return;
     }
-    if (!c || c.tws == null || c.twa == null) { last = { available: false, note: "No true wind yet." }; render(); return; }
+    // No wind yet: still ask, with no wind params, so the boat's sails list (Codex on #334).
+    const wind = !!c && c.tws != null && c.twa != null;
     try {
-      const q = `tws=${c.tws}&twa=${c.twa}` + (hoisted ? `&hoisted=${encodeURIComponent(hoisted)}` : "");
-      last = await (await apiFetch("/api/sail?" + q)).json();
-    } catch (e) { last = { available: false, note: "Sail advice unavailable." }; }
+      const q = [wind ? `tws=${c.tws}&twa=${c.twa}` : "",
+                 hoisted ? `hoisted=${encodeURIComponent(hoisted)}` : ""].filter(Boolean).join("&");
+      last = await (await apiFetch("/api/sail" + (q ? "?" + q : ""))).json();
+      if (!wind && last && !last.available) last.note = "No true wind yet.";
+    } catch (e) { last = { available: false, note: wind ? "Sail advice unavailable." : "No true wind yet." }; }
     render();
   }
 
@@ -182,6 +185,8 @@
     document.querySelectorAll("#sailSel button").forEach((b) =>
       b.addEventListener("click", () => pick(b.dataset.sail || "")));
     render();
+    // the boat's sails on a fresh page, before any wind arrives
+    update(typeof App !== "undefined" ? App.lastConditions : null);
   });
   window.addEventListener("sr33:conditions", (e) => { App.lastConditions = e.detail; update(e.detail); });
   window.addEventListener("resize", draw);

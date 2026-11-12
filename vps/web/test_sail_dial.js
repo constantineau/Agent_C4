@@ -21,6 +21,7 @@ const none = el("button"); none.dataset.sail = ""; sel.appendChild(none);   // t
 const els = { sailSel: sel, sailRec: el("div") };
 const handlers = {};
 let answer = null;
+const asked = [];
 const ctx = {
   console, JSON, Promise,
   localStorage: { getItem: () => "A2", setItem() {} },
@@ -30,12 +31,11 @@ const ctx = {
   getComputedStyle: () => ({ getPropertyValue: () => "" }),
   MutationObserver: function () { this.observe = () => {}; },
   App: {},
-  apiFetch: () => Promise.resolve({ json: () => Promise.resolve(answer) }),
+  apiFetch: (url) => { asked.push(url); return Promise.resolve({ json: () => Promise.resolve(answer) }); },
 };
 ctx.window = { addEventListener: (k, fn) => { handlers[k] = fn; } };
 vm.createContext(ctx);
 vm.runInContext(fs.readFileSync(path.join(__dirname, "public", "sail.js"), "utf8"), ctx);
-handlers.DOMContentLoaded();
 
 const names = () => sel.children.filter((c) => c.tag === "button").map((b) => b.dataset.sail).join(",");
 const flush = () => new Promise((r) => setImmediate(r));
@@ -44,6 +44,13 @@ const check = (name, cond) => { if (!cond) failed++; console.log(`  [${cond ? "O
 
 (async () => {
   const cond = { tws: 10, twa: 90 };
+  // a fresh page, no wind yet: the dial still asks (no wind params) and lists the boat's sails
+  answer = { available: false, note: "Need live wind speed and angle.",
+             sails: [{ name: "G1", family: "genoa" }, { name: "BIG RED", family: "asym" }] };
+  handlers.DOMContentLoaded(); await flush(); await flush();
+  check("asked with no wind params", asked.length === 1 && !/tws=|twa=/.test(asked[0]));
+  check("the boat's sails before any wind, a spaced name too", names() === "G1,BIG RED,");
+  check("says no wind yet", els.sailRec.textContent === "No true wind yet.");
   answer = { available: false, note: "x", sails: [{ name: "G1", family: "genoa" }, { name: "A2", family: "asym" }] };
   handlers["sr33:conditions"]({ detail: cond }); await flush(); await flush();
   check("the boat's sails become the buttons (+ none)", names() === "G1,A2,");
