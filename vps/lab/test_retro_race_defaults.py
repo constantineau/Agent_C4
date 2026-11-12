@@ -84,7 +84,7 @@ def test_setup_other_tracker_says_so():
     su = retro.setup_for(_channel(tracker={"provider": "tractrac", "url": "https://example.invalid"}))
     assert su["yb_id"] is None and "YB" in su["note"] and "tractrac" in su["note"]
     su = retro.setup_for(_channel(tracker={}))
-    assert su["yb_id"] is None and su["note"] == "No YB race id in this race. Type one."
+    assert su["yb_id"] is None and su["note"] == "No YB race id in this race. Type one, or upload a fleet file."
 
 
 def _stub_polars(monkeypatch, entries, dumps):

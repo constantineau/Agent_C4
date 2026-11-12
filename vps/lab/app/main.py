@@ -25,7 +25,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from shared import race_def, boat_profile
-from . import atomicio, auth, store, extract, boats, labstate, feedback, pbstore, deploy, monitor, judge, track, learning, fleetimport, report, retro, retrostore, share, racestart, sessionboat
+from . import atomicio, auth, store, extract, boats, labstate, feedback, pbstore, deploy, monitor, judge, track, learning, fleetimport, report, retro, retrostore, trackers, share, racestart, sessionboat
 
 INGESTED_DIR = os.environ.get("INGESTED_DIR", "/srv/ingested")
 
@@ -1328,7 +1328,8 @@ async def retro_races():
 
 @app.get("/api/retro/setup")
 async def retro_setup(def_race_id: str):
-    """What the retro card fills in from a Lab race: its YB id (or why none), course, countries."""
+    """What the retro card fills in from a Lab race: its tracker (YB id, fleet file, or why
+    neither), course, countries."""
     d = store.get_race(def_race_id)
     if not d:
         return JSONResponse({"detail": "not found"}, status_code=404)
@@ -1338,7 +1339,8 @@ async def retro_setup(def_race_id: str):
 @app.post("/api/retro/ingest")
 async def retro_ingest(body: dict):
     """Pull a YB race (entries + full-fleet tracks + results) into the persistent retro archive.
-    No `race_id` → the YB id named by the picked race definition's tracker (`def_race_id`)."""
+    No `race_id` → the YB id named by the picked race definition's tracker (`def_race_id`). A race
+    whose tracker is a fleet file uses POST /api/retro/upload instead."""
     b = body or {}
     rid = b.get("race_id")
     if not rid and b.get("def_race_id"):
@@ -1353,6 +1355,32 @@ async def retro_ingest(body: dict):
         return await run_in_threadpool(retro.ingest_race, rid)
     except Exception as exc:
         return JSONResponse({"detail": f"retro ingest failed: {exc}"}, status_code=500)
+
+
+@app.post("/api/retro/upload")
+async def retro_upload(def_race_id: str, race_id: str = None,
+                       files: list[UploadFile] = File(...)):
+    """Store an uploaded fleet file (GPX: a named <trk> per boat, or one file per boat; CSV: boat,
+    time, lat, lon rows) in the retro archive, keyed `race_id` (default: the picked race's id).
+    For races on a tracker with no public feed (#310)."""
+    d = store.get_race(def_race_id)
+    if not d:
+        return JSONResponse({"detail": "That race isn't in the library."}, status_code=404)
+    got, total = [], 0
+    for f in files:
+        raw = await f.read()
+        total += len(raw)
+        if total > trackers.MAX_FILE_BYTES:
+            return JSONResponse({"detail": "File too big."}, status_code=413)
+        got.append((f.filename or "track", raw))
+    try:
+        res = await run_in_threadpool(retro.ingest_file, (race_id or "").strip() or def_race_id,
+                                      got, d)
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=400)
+    if not res.get("ok"):
+        return JSONResponse({"detail": res.get("note")}, status_code=400)
+    return res
 
 
 @app.post("/api/retro/run")
@@ -1398,7 +1426,7 @@ async def retro_polars(body: dict):
         return JSONResponse({"detail": f"retro polar match failed: {exc}"}, status_code=500)
 
 
-# ---- Debrief: ACTUAL boat-track ingestion (GPX upload / YB our-boat) → helm-vs-optimal scoring ---
+# ---- Debrief: ACTUAL boat-track ingestion (GPX upload / our boat off the race's tracker) → helm-vs-optimal scoring ---
 @app.get("/api/debrief/track")
 async def debrief_track_get(race_id: str, recording: float = None):
     t = track.load_track(race_id, recording)
@@ -1431,7 +1459,7 @@ async def debrief_track_fetch(body: dict):
     d = store.get_race(race_id) if race_id else None
     if not d:
         return JSONResponse({"detail": "unknown race"}, status_code=404)
-    res = await run_in_threadpool(track.fetch_yb_track, d, (body or {}).get("boat"))
+    res = await run_in_threadpool(trackers.boat_track, d, (body or {}).get("boat"))
     if not res.get("ok"):
         return JSONResponse(res, status_code=502 if "failed" in (res.get("note") or "") else 200)
     meta = await run_in_threadpool(track.save_track, race_id, res)

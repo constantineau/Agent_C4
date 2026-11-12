@@ -31,7 +31,7 @@ def _conn():
     c.executescript("""
     CREATE TABLE IF NOT EXISTS races (
         race_id TEXT PRIMARY KEY,           -- e.g. 'bayviewmack2025' (the YB id)
-        source TEXT,                        -- 'yb'
+        source TEXT,                        -- 'yb' | 'file' (an uploaded GPX/CSV)
         start_epoch REAL,
         setup_json TEXT,                    -- the full RaceSetup (course, bounds, teams meta)
         ingested_at REAL);

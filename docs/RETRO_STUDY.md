@@ -25,6 +25,13 @@ line were the winners, where, and why?
 
 2026 goes live race week (~Jul 11) — the same pipeline becomes this year's post-race analyzer.
 
+**Other trackers (#310).** The tracks come through a tracker provider (`vps/lab/app/trackers.py`)
+named by the race definition's `tracker.provider`. `yb` fetches as above. `file` (also `upload`,
+`gpx`, `csv`) takes an uploaded fleet file instead: a GPX with one named `<trk>` per boat, one GPX
+per boat, or a CSV of `boat,time,lat,lon` rows (optional `sail`, `division`, `rank`). It is stored
+in the same archive under the Lab race id; the debrief's "Get from tracker" and the Fleet tab's
+tracker import then read it from there. A file gives no TCFs; results only when it has `rank`.
+
 ## 3. Persistence — EVERYTHING gathered is kept (user requirement)
 
 New named volume **`lab_retro`** (`/srv/retro`) + a pure-stdlib SQLite DB (`retrostore.py`, same

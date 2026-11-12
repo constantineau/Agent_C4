@@ -2877,7 +2877,16 @@ function fleetOwnSet(f, v) {
 function fleetAddRow() { Lab.editDef.fleet.push({ boat: "", division: "", cls: "", owner: "", sail: "", orc_gph: null, rating: null, mmsi: "", source: "manual" }); Lab.fleetEdit = true; paintFleet(); }
 function fleetRemove(i) { Lab.editDef.fleet.splice(i, 1); paintFleet(); }
 
-// Auto-import the roster from public data. source: 'yb' = the tracker entry list, 'both' = YB → ORC,
+// The race tracker's provider family, as app/trackers.py names it (#310): "yb", "file" or null.
+const TRACKER_YB = ["yb", "ybtracking", "yellowbrick", "bycmack"];
+const TRACKER_FILE = ["file", "upload", "gpx", "csv"];
+function trackerKind(provider) {
+  const p = String(provider || "").trim().toLowerCase();
+  return TRACKER_YB.includes(p) ? "yb" : TRACKER_FILE.includes(p) ? "file" : null;
+}
+
+// Auto-import the roster from public data. source: 'tracker' = the race tracker's entry list
+// (YB, or the uploaded fleet file), 'both' = tracker → ORC,
 // 'website' = a regatta-site URL/pasted text → ORC, 'orc' = enrich the current roster. extra = {url|text}
 // for the website source. Replaces the draft roster for review (nothing is saved until Save).
 // blank = let the Lab use the race's list (its scoring block, else venue country + sail prefixes)
@@ -3158,7 +3167,8 @@ function paintFleet() {
     <td>${inp(e.mmsi, "MMSI", `fleetSet(${i},'mmsi',this.value)`, 90)}</td>
     <td><button class="mini" onclick="fleetRemove(${i})" title="remove">✕</button></td></tr>`;
   const permitted = !!rp.tracker_permitted;
-  const ybCfg = (tr.provider || "").match(/yb|bycmack|ybtracking|yellowbrick/i);
+  const trKind = trackerKind(tr.provider);
+  const trName = trKind === "file" ? "fleet file" : "YB tracker";
 
   document.getElementById("view").innerHTML = `<div class="opt">
     <div class="card">
@@ -3197,12 +3207,12 @@ function paintFleet() {
       : `<div class="card">
       <h3>Import the fleet</h3>
       <div>`}
-      <div class="muted" style="font-size:12px;margin-bottom:8px">Gets boats from the YB tracker and handicaps from ORC. Check the list, then Save. ${ybCfg ? "" : '<b>No YB tracker set for this race.</b> Use the website import below, or add ORC handicaps to the current list.'}
-        ${qhelp("YB gives boat, sail number, owner and class. ORC matches each boat by sail number or name and adds GPH and rating. Both are public.")}</div>
+      <div class="muted" style="font-size:12px;margin-bottom:8px">Gets boats from the race tracker and handicaps from ORC. Check the list, then Save. ${trKind ? (trKind === "file" ? "Boats come from the fleet file uploaded in Debrief." : "") : '<b>No tracker for this race.</b> Use the website import below, or add ORC handicaps to the current list.'}
+        ${qhelp("The tracker gives boat, sail number, owner and class. ORC matches each boat by sail number or name and adds GPH and rating. Both are public.")}</div>
       <div class="opt-controls">
-        <span class="muted" style="font-size:12px">From the <b>YB tracker</b>:</span>
-        <button class="${roster.length ? "mini" : ""}" onclick="fleetAutoImport('both')" ${Lab.fleetBusy || !ybCfg ? "disabled" : ""} title="${ybCfg ? "" : "No YB tracker set for this race"}">${Lab.fleetBusy ? "Importing…" : "Boats + handicaps"}</button>
-        <button class="mini" onclick="fleetAutoImport('yb')" ${Lab.fleetBusy || !ybCfg ? "disabled" : ""}>Boats only</button>
+        <span class="muted" style="font-size:12px">From the <b>${trName}</b>:</span>
+        <button class="${roster.length ? "mini" : ""}" onclick="fleetAutoImport('both')" ${Lab.fleetBusy || !trKind ? "disabled" : ""} title="${trKind ? "" : "No tracker for this race"}">${Lab.fleetBusy ? "Importing…" : "Boats + handicaps"}</button>
+        <button class="mini" onclick="fleetAutoImport('tracker')" ${Lab.fleetBusy || !trKind ? "disabled" : ""}>Boats only</button>
         <label>ORC countries <input id="fleetOrcCC" class="ein" style="width:84px" value="${esc((sc.rating_countries || []).join(","))}" placeholder="from race" oninput="fleetCCSet(this.value)" title="Comma separated. Blank: the venue's country and the sail numbers."></label>
         <button class="mini" onclick="fleetAutoImport('orc')" ${Lab.fleetBusy ? "disabled" : ""}>Add ORC handicaps to list</button>
       </div>
@@ -3715,7 +3725,8 @@ const Deb = { raceId: null, playbookId: null, playbooks: null, report: null, tra
   viewing: null, practice: null, practiceMsg: "" };
 // Fleet-retro card state (docs/RETRO_STUDY.md — debrief across the WHOLE fleet of a past race)
 // No race is built in (#310): the fleet is routed on the course of a race picked here (default: the
-// Debrief race), and the YB id comes from that race's tracker or is typed.
+// Debrief race), and the tracks come from that race's tracker: a YB id (from the race, or typed) or an
+// uploaded fleet file (GPX/CSV), per app/trackers.py.
 const Retro = { ybId: "", defRace: null, courseId: null, setup: null, msg: "", busy: false, races: null, job: null, report: null, poll: null };
 
 async function renderDebrief() {
@@ -3778,28 +3789,32 @@ function debLatestId() {
 // Dates as YYYY-MM-DD, like the recording times beside them (G64).
 function isoDate(ts) { return new Date(ts * 1000).toISOString().slice(0, 10); }
 
-// Boat-track card: upload a GPX or fetch our YB track, then "Run debrief" scores helm vs optimal.
-// Tracks that DON'T come off the boat's own log — a GPX export or the public YB feed. The boat's
+// Boat-track card: upload a GPX or get our track off the race's tracker (YB, or the fleet file in
+// the retro archive — app/trackers.py), then "Run debrief" scores helm vs optimal.
+// Tracks that DON'T come off the boat's own log — a GPX export or the race tracker. The boat's
 // own recordings live in the recordings card above, which is the normal path.
+function trackSourceLabel(src) {
+  return src === "yb" ? "YB" : src === "file" ? "fleet file" : src === "boatlog" ? "boat log" : "GPX";
+}
 function debTrackCard() {
   const t = Deb.track || {};
   const status = t.available
-    ? `<span class="pill ok">track loaded</span> <span class="muted">${esc(t.source === "yb" ? "YB" : t.source === "boatlog" ? "boat log" : "GPX")}${t.boat ? " · " + esc(t.boat) : ""} · ${t.n} fixes${t.matched_by ? " · " + esc(t.matched_by) : ""}</span>`
-    : `<span class="muted">No track yet. Upload a GPX or get it from YB.</span>`;
-  return `<details class="card"><summary><b>Other track sources</b> <span class="muted" style="font-weight:400">— GPX file or YB tracker</span></summary>
+    ? `<span class="pill ok">track loaded</span> <span class="muted">${esc(trackSourceLabel(t.source))}${t.boat ? " · " + esc(t.boat) : ""} · ${t.n} fixes${t.matched_by ? " · " + esc(t.matched_by) : ""}</span>`
+    : `<span class="muted">No track yet. Upload a GPX or get it from the tracker.</span>`;
+  return `<details class="card"><summary><b>Other track sources</b> <span class="muted" style="font-weight:400">— GPX file or race tracker</span></summary>
     <div style="margin:4px 0 8px">${status} ${t.available ? '<button class="mini" onclick="debClearTrack()">Remove</button>' : ""}</div>
     <div class="opt-controls">
       <label>GPX <input type="file" id="debGpx" accept=".gpx,application/gpx+xml,text/xml"></label>
       <button onclick="debUploadGpx()" ${Deb.trackBusy ? "disabled" : ""}>Upload GPX</button>
       <span class="muted">or</span>
-      <label>Our boat <input id="debBoat" placeholder="boat name on YB" style="width:200px"></label>
-      <button onclick="debFetchYb()" ${Deb.trackBusy ? "disabled" : ""}>${Deb.trackBusy ? "Fetching…" : "Get from YB"}</button>
+      <label>Our boat <input id="debBoat" placeholder="boat name on the tracker" style="width:200px"></label>
+      <button onclick="debFetchYb()" ${Deb.trackBusy ? "disabled" : ""}>${Deb.trackBusy ? "Fetching…" : "Get from tracker"}</button>
     </div>
     ${t.available && t.window ? `<div class="muted" style="font-size:12px;margin-top:4px">Window: <b>${esc(debWinRange(t.window))}</b> · ${t.window.kind === "derived" ? "from the recording" : "from the ⏺ LOG button"}${t.window.motion_device ? " · from the " + esc(t.window.motion_device) : ""}${(t.window.provenance || []).map((p) => "<br>· " + esc(p)).join("")}</div>` : ""}
     ${t.available && t.trust && t.trust.available && trustDanger((t.trust.summary || {}).danger_s, (t.trust.summary || {}).line)
       ? `<div style="margin-top:6px">${trustBanner("Instrument fault in this track", (t.trust.summary || {}).line, "Bad stretches are left out of the polar. Fix the calibration before the next race.")}</div>`
       : t.available && t.trust ? `<div class="muted" style="font-size:12px;margin-top:2px">Instrument check: ${t.trust.available ? `<b>${esc(((t.trust.summary || {}).line) || "done")}</b>. Bad stretches are left out.` : `<b>not run</b>. ${esc(t.trust.note || "")}`}</div>` : ""}
-    <div class="muted" style="font-size:12px;margin-top:4px">GPX: export from Expedition, Vakaros, the instruments or a phone. YB: our track from the public tracker. ${Deb.trackMsg ? '<b>' + esc(Deb.trackMsg) + '</b>' : ""}</div>
+    <div class="muted" style="font-size:12px;margin-top:4px">GPX: export from Expedition, Vakaros, the instruments or a phone. Tracker: our track from YB, or from the fleet file in Fleet retro. ${Deb.trackMsg ? '<b>' + esc(Deb.trackMsg) + '</b>' : ""}</div>
   </div>`;
 }
 
@@ -4128,6 +4143,7 @@ function retroCard() {
     ? `<div class="muted" style="font-size:12px;margin-top:6px">Scoring the fleet… <span class="loading-dot"></span><br>${esc((j.progress || []).slice(-3).join(" · "))}</div>`
     : (j.state === "done" && j.result ? `<div class="muted" style="font-size:12px;margin-top:6px"><b>Done:</b> ${j.result.ran} boats scored${(j.result.failed || []).length ? ", " + j.result.failed.length + " failed" : ""}.</div>`
        : (j.state === "error" ? `<div class="muted" style="font-size:12px;margin-top:6px"><b>Error:</b> ${esc(j.error || "")}</div>` : ""));
+  const su = Retro.setup || {};
   return `<div class="card">
     <h3>Fleet retro <span class="muted" style="font-weight:400">— how every boat sailed a past race</span></h3>
     <div style="margin:4px 0 8px">${archived}</div>
@@ -4139,7 +4155,8 @@ function retroCard() {
       ${((Retro.setup || {}).courses || []).length > 1 ? `<label>Course <select onchange="Retro.courseId=this.value">
         ${Retro.setup.courses.map((c) => `<option value="${attr(c.id)}" ${c.id === Retro.courseId ? "selected" : ""}>${esc(c.name)}</option>`).join("")}
       </select></label>` : ""}
-      <label>YB race id <input type="text" id="retroYb" value="${attr(Retro.ybId)}" placeholder="from the race's tracker" style="width:170px"></label>
+      ${su.upload ? "" : `<label>YB race id <input type="text" id="retroYb" value="${attr(Retro.ybId)}" placeholder="from the race's tracker" style="width:170px"></label>`}
+      ${Retro.defRace && trackerKind(su.provider) !== "yb" ? `<label title="GPX: one named track per boat, or one file per boat. CSV: boat, time, lat, lon.">Fleet file <input type="file" id="retroFile" multiple accept=".gpx,.csv,application/gpx+xml,text/csv,text/xml"></label>` : ""}
       <button class="mini" onclick="retroIngest()" ${Retro.busy ? "disabled" : ""}>1 · Get race</button>
       <button class="mini" onclick="retroPolars()" ${Retro.busy ? "disabled" : ""}>2 · Find ORC polars</button>
       <button class="mini" onclick="retroRun()" ${Retro.busy || running ? "disabled" : ""}>${running ? "Scoring…" : "3 · Score the fleet"}</button>
@@ -4215,11 +4232,27 @@ async function retroPick(raceId) {
 }
 async function retroIngest() {
   retroReadYb();
+  const box = document.getElementById("retroFile");
+  if (box && box.files && box.files.length) return retroUpload(box.files);
   Retro.busy = true; Retro.msg = "getting tracks and results…"; paintDebrief();
   try {
     const r = await (await api("/api/retro/ingest", { method: "POST", headers: { "Content-Type": "application/json" }, body: retroBody() })).json();
     Retro.msg = r.ok ? `got ${r.tracks} tracks, ${r.results} results, ${r.divisions} divisions` : (r.note || r.detail || "couldn't get the race");
   } catch (e) { Retro.msg = "couldn't get the race"; }
+  Retro.busy = false; await retroRefresh(); paintDebrief();
+}
+// A race whose tracker has no public feed: upload the fleet's tracks (GPX/CSV, app/trackers.py).
+// They are archived under the picked race's id, which the next steps then use.
+async function retroUpload(files) {
+  if (!Retro.defRace) { Retro.msg = "Pick a race to route on."; paintDebrief(); return; }
+  Retro.busy = true; Retro.msg = "reading the file…"; paintDebrief();
+  try {
+    const fd = new FormData();
+    for (const f of files) fd.append("files", f);
+    const r = await (await api("/api/retro/upload?def_race_id=" + encodeURIComponent(Retro.defRace), { method: "POST", body: fd })).json();
+    if (r.ok) Retro.ybId = r.race_id;
+    Retro.msg = r.ok ? `got ${r.tracks} tracks, ${r.results} results` + (r.note ? `. ${r.note}` : "") : (r.detail || r.note || "couldn't read the file");
+  } catch (e) { Retro.msg = "couldn't read the file"; }
   Retro.busy = false; await retroRefresh(); paintDebrief();
 }
 async function retroPolars() {
@@ -4284,7 +4317,7 @@ function debTrackScore(at) {
   const cav = (at.caveats || []).length
     ? `<div class="banner warn" style="margin-top:8px;font-size:12px">${at.caveats.map(esc).join("<br>")}</div>` : "";
   return `<div class="card">
-    <h3>Speed vs polar <span class="muted" style="font-weight:400">— ${esc(at.source === "yb" ? "YB track" : at.source === "boatlog" ? "the boat's own log" : "GPX track")}${at.boat ? " · " + esc(at.boat) : ""} · ${at.fixes_scored}/${at.fixes_total} fixes used${(at.perf_bins || at.n_bins) ? " · " + ((at.perf_bins || []).length || at.n_bins) + " measured cells saved" : ""}${(at.trust || {}).refused_samples ? " · " + at.trust.refused_samples + " left out (" + esc((at.trust.refused_channels || []).join(", ")) + ")" : ""}</span></h3>
+    <h3>Speed vs polar <span class="muted" style="font-weight:400">— ${esc(at.source === "boatlog" ? "the boat's own log" : trackSourceLabel(at.source) + " track")}${at.boat ? " · " + esc(at.boat) : ""} · ${at.fixes_scored}/${at.fixes_total} fixes used${(at.perf_bins || at.n_bins) ? " · " + ((at.perf_bins || []).length || at.n_bins) + " measured cells saved" : ""}${(at.trust || {}).refused_samples ? " · " + at.trust.refused_samples + " left out (" + esc((at.trust.refused_channels || []).join(", ")) + ")" : ""}</span></h3>
     <div class="dep-grid">
       ${at.oracle_hours != null ? row("Vs best route", `${tbTxt} <span class="muted">(sailed ${at.elapsed_hours != null ? at.elapsed_hours.toFixed(1) + " h" : "—"}, best route ${at.oracle_hours.toFixed(1)} h)</span>`)
         : row("Sailed", `${at.elapsed_hours != null ? at.elapsed_hours.toFixed(1) + " h" : "—"} <span class="muted">(no playbook, so no best route to compare)</span>`)}
