@@ -240,11 +240,19 @@ check("Bravo sailed: not used, plain note naming no boat", not pb.loaded
 check("…the copilot speaks for Bravo, with Bravo's profile",
       boatname.describe() == "the C&C 35 racing yacht 'Bravo'"
       and boatname.possessive(pb) == "the C&C 35's" and boatname.boat_model(pb) == BRAVO["profile"])
+n0 = PIN["asks"]
+for _ in range(3):
+    boatname.describe()
+check("plays off: name lookups reuse the answer (one ask, not one per lookup)", PIN["asks"] - n0 <= 1)
 PIN["answer"] = {"available": False, "error": "timed out", "path": "/playbook/copilot"}
 pb = fresh()
 check("one dropped request: still Bravo, never back to the playbook's boat", not pb.loaded
       and boatname.describe() == "the C&C 35 racing yacht 'Bravo'"
       and boatname.boat_model(pb) == BRAVO["profile"])
+n0 = PIN["asks"]
+for _ in range(3):
+    boatname.describe()
+check("Pi unreachable: lookups don't each wait on the cable", PIN["asks"] - n0 <= 1)
 PIN["answer"] = {"hash": None, "playbook_off": True,
                  "boat": {"boat_id": None, "name": "Mystery", "profile": None}}
 pb = fresh()

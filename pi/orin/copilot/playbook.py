@@ -155,7 +155,7 @@ class Playbook:
 NOT_CONFIRMED = "Playbook not confirmed. Running without it."
 OTHER_BOAT = "Playbook is for another boat. Running without it."
 PIN_CACHE_S = 5.0
-_pin = {"at": None, "hash": None, "boat": None, "off": False}
+_pin = {"at": None, "hash": None, "boat": None, "off": False, "err": False}
 
 
 def bundle_hash(data: dict) -> str:
@@ -171,7 +171,11 @@ def approved_hash():
     import time
     from .engine_client import EngineClient
     now = time.monotonic()
-    if _pin["hash"] is None or _pin["at"] is None or now - _pin["at"] > PIN_CACHE_S:
+    # a "none" answer is not cached (a fresh approval shows at once), except while the Pi says
+    # another boat is sailed or couldn't be asked: those hold for PIN_CACHE_S, so name lookups
+    # don't each wait on the cable (Codex on #342)
+    held = _pin["hash"] is not None or _pin.get("off") or _pin.get("err")
+    if not held or _pin["at"] is None or now - _pin["at"] > PIN_CACHE_S:
         r = EngineClient()._get("/playbook/copilot")
         r = r if isinstance(r, dict) else {}
         h = r.get("hash")
@@ -179,12 +183,12 @@ def approved_hash():
             # the Pi couldn't be asked (timeout, HTTP error): no approval, but the boat being
             # sailed is still the one it last said — one dropped request must not hand the
             # copilot the playbook's boat back (Codex on #342)
-            _pin.update(at=now, hash=None)
+            _pin.update(at=now, hash=None, err=True)
             return None
         b = r.get("boat")
         _pin.update(at=now, hash=h if isinstance(h, str) else None,
                     boat=b if isinstance(b, dict) and "boat_id" in b else None,
-                    off=r.get("playbook_off") is True)
+                    off=r.get("playbook_off") is True, err=False)
     return _pin["hash"]
 
 
