@@ -14,6 +14,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # deployed → the engine says "No boat polar loaded.", never another boat's numbers.
 COPY vps/agent/app/ ./app/
 COPY shared/ ./shared/
+# ...except each bundled boat's HARDWARE block (#313), boat-id scoped: a profile stored aboard before
+# the profile carried one keeps that boat's sensor priority. Only {boat_id, hardware} per boat.
+# (A bind mount, so the full profiles never land in an image layer.)
+RUN --mount=type=bind,source=vps/lab/boats,target=/tmp/boats \
+    python3 -m shared.boat_hardware /tmp/boats ./knowledge/boat_hardware
 COPY pi/engine/engine_app.py ./engine_app.py
 
 EXPOSE 8200

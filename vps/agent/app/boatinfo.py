@@ -34,8 +34,13 @@ def profile():
         except Exception:
             p = None
         return p if isinstance(p, dict) else None
-    bid = _boat_id()
-    if not bid:
+    return bundled(_boat_id())
+
+
+def bundled(bid):
+    """Boat `bid`'s bundled profile (`knowledge/boats/<bid>.json` in the agent image, the Lab's
+    seed in a checkout), or None. Never another boat's: the file must name `bid`."""
+    if not bid or not BP.name_ok(f"{bid}.json"):
         return None
     for d in _PROFILE_DIRS:
         path = os.path.join(d, f"{bid}.json")

@@ -280,8 +280,8 @@ src = FakeSource(rows=[r for r in SERIES if r[0] <= T0 + 460 * 60])
 via = power.assess(src, now=T0 + 460 * 60)
 check("a normal window is read on the voltage path over the trend window",
       src.asked == [(power.PATH, power.WINDOW_MIN)])
-check("...and gives exactly what assess_series gives on the same rows",
-      via == power.assess_series(src.rows, now=T0 + 460 * 60))
+check("...and gives exactly what assess_series gives on the same rows, on the boat's lines",
+      via == power.assess_series(src.rows, now=T0 + 460 * 60, lines=power._boat_lines()))
 down = power.assess(FakeSource(raises=RuntimeError("archive locked")), now=T0)
 check("a read that raises is 'unknown', never an exception into the engine",
       down["status"] == "unknown" and down["available"] is False
@@ -306,6 +306,44 @@ check(f"a live read (no `now`) ages its newest sample by the wall clock ({live.g
 none = power.assess(FakeSource(rows=[], latest=None), now=T0)
 check("no window and no latest value -> unknown", none["status"] == "unknown"
       and none["available"] is False)
+
+print("the boat's own bank (#313): lines from its profile, never assumed silently:")
+import json as _json   # noqa: E402
+from shared import boat_hardware as BH   # noqa: E402
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lab", "boats",
+                       "sr33.json")) as _f:
+    _REF = _json.load(_f)
+ref = power.lines_for(BH.battery_lines(_REF))
+check("the reference boat's profile (12 V lead-acid) gives exactly the historic lines",
+      all(ref[k] == power.lines_for(None)[k] for k in power._ENV_LINES) and ref["assumed"] is False)
+check("...and the same verdicts across the whole race",
+      all(power.assess_series([r for r in SERIES if r[0] <= T0 + m * 60], now=T0 + m * 60,
+                              lines=ref)["status"] == at(m)["status"] for m in range(0, 960, 10)))
+bare = power.lines_for(BH.battery_lines({"boat_id": "bravo"}))
+r = power.assess_series(SERIES[:10], now=SERIES[9][0], lines=bare)
+check(f"no bank in the profile: 12 V lead-acid, and the tile says it was assumed ({r['note']!r})",
+      bare["floor_v"] == 11.0 and power.ASSUMED in r["note"] and r["bank"]["assumed"] is True)
+b24 = power.lines_for(BH.battery_lines({"hardware": {"battery": {"nominal_v": 24,
+                                                                  "chemistry": "agm"}}}))
+check(f"a 24 V bank's lines scale (floor {b24['floor_v']} V, danger {b24['floor_v'] + b24['danger_margin_v']:.1f} V)",
+      b24["floor_v"] == 22.0 and abs(b24["danger_margin_v"] - 0.6) < 1e-9)
+flat24 = [(T0 + m * 60, 22.4) for m in range(0, 60)]
+r24 = power.assess_series(flat24, now=flat24[-1][0], lines=b24)
+r12 = power.assess_series(flat24, now=flat24[-1][0])
+check(f"a 24 V bank sitting at 22.4 V is danger on its own lines ({r24['status']}); "
+      f"the 12 V lines called it {r12['status']}",
+      r24["status"] == "danger" and r12["status"] != "danger")
+li = power.lines_for(BH.battery_lines({"hardware": {"battery": {"nominal_v": 12.8,
+                                                                 "chemistry": "lithium"}}}))
+flat_li = [(T0 + m * 60, 12.2) for m in range(0, 60)]
+rli = power.assess_series(flat_li, now=flat_li[-1][0], lines=li)
+check(f"a lithium bank at 12.2 V (nearly empty) is danger ({rli['status']}, "
+      f"floor {li['floor_v']:.2f} V); the lead-acid lines call it "
+      f"{power.assess_series(flat_li, now=flat_li[-1][0])['status']}", rli["status"] == "danger")
+os.environ["POWER_FLOOR_V"] = "10.5"
+check("a POWER_* env line still wins over the profile (this kit's override)",
+      power.lines_for(BH.battery_lines(_REF))["floor_v"] == 10.5)
+del os.environ["POWER_FLOOR_V"]
 
 print("\nthe headline, for the record:")
 for m in (30, 180, 300, 400, 460, 660, 950):

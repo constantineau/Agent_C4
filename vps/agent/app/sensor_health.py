@@ -59,7 +59,7 @@ import os
 import time
 
 from shared import n2k_sources
-from shared import source_policy
+from shared import boat_hardware, source_policy
 
 from . import datasource
 
@@ -447,14 +447,18 @@ def assess_provenance(channels, ais_excluded=(), boat_id=None):
         if not entry["measured"]:
             synthetic.append(ch)
 
+    n_pref = len(source_policy.all_matchers())
     checks = {
         "policy_binds": {
             "status": "warn" if unresolvable else "ok",
             "unresolvable": unresolvable,
+            # a boat whose profile sets no priority (#313) is said plainly, not "all 0 found"
+            "no_policy": n_pref == 0,
             "reason": (f"{len(unresolvable)} preferred sensor(s) not found "
                        f"({', '.join(unresolvable)}), using any source"
                        if unresolvable else
-                       f"all {len(source_policy.all_matchers())} preferred sensors found"),
+                       f"all {n_pref} preferred sensors found" if n_pref else
+                       boat_hardware.NO_PRIORITY),
         },
         "lead_source": {
             "status": "warn" if went_silent else "ok",
