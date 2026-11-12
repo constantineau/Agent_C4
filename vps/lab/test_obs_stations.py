@@ -174,5 +174,15 @@ near = obsarea.nearest(25.591 - 59.0 / 60.0, -80.097, "ndbc", 60)
 check("nearest keeps to its radius (60.6 nm is out, 59 nm is in)",
       far is None and near and near["id"].upper() == "FWYF1", (far, near))
 
+reset()
+_real_get = obsarea._get
+obsarea._get = lambda url, timeout=20: (FETCHED.append(url) or "") if "aviationweather" in url \
+    else _real_get(url, timeout)
+got = obsarea.SOURCES["metar"].find((10.0, 9.0, -40.0, -39.0))      # open Atlantic: 204, empty
+again = obsarea.SOURCES["metar"].find((10.0, 9.0, -40.0, -39.0))
+check("an empty answer (no airports) is no stations, and cached", got == [] and again == []
+      and sum("aviationweather" in u for u in FETCHED) == 1, FETCHED)
+obsarea._get = _real_get
+
 print("RESULT:", "PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)

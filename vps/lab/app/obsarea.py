@@ -94,7 +94,9 @@ class AwcMetarSource(StationSource):
 
         def load():
             out = []
-            for r in json.loads(_get(_AWC_STATIONS.format(s=s, w=w, n=n, e=e))) or []:
+            body = _get(_AWC_STATIONS.format(s=s, w=w, n=n, e=e))
+            # an area with no airports answers 204 with an empty body: no stations, not an error
+            for r in (json.loads(body) if (body or "").strip() else []) or []:
                 sid = r.get("icaoId") or r.get("id")
                 if not sid or "METAR" not in (r.get("siteType") or []) \
                         or r.get("lat") is None or r.get("lon") is None:
