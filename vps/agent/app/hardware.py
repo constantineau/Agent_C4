@@ -86,7 +86,9 @@ def profile_for(bid):
     if isinstance(prof, dict) and "hardware" in prof:
         return prof
     hw = next((p["hardware"] for _at, p in stored[1:] if isinstance(p.get("hardware"), dict)),
-              None) or _seed(bid)
+              None)
+    if hw is None:                       # an explicit {} on the older copy stands (Codex on #338)
+        hw = _seed(bid)
     if hw is None:
         return prof
     return dict(prof or {"boat_id": bid}, hardware=hw)

@@ -461,8 +461,16 @@ def reroute_assets_load(body: dict):
 
 @app.get("/reroute/assets")
 def reroute_assets_get():
-    """Which chart and boat profile the Orin's re-route gets (no geometry)."""
-    return orinassets.get()
+    """Which chart and boat profile the Orin's re-route gets (no geometry), and whether that boat
+    has an Orin by the profile THIS Pi holds (#313): the Lab's live check takes it from here,
+    never from an unpushed Lab edit."""
+    out = orinassets.get()
+    if isinstance(out, dict):
+        try:
+            out = dict(out, orin=hardware.has_orin(out.get("boat_id")))
+        except Exception:  # noqa: BLE001 — unknown: the Lab then assumes an Orin
+            pass
+    return out
 
 
 @app.get("/tactics")

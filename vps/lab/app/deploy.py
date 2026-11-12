@@ -375,6 +375,8 @@ def boat_status(get=None):
     if assets_ok:            # an engine from before #139 answers 404: nothing shown
         engine["orin_assets"] = {k: assets.get(k) for k in (
             "available", "race_id", "course_id", "chart", "boat_id", "boat_version", "received_at")}
+        if "orin" in assets:             # the Pi's word on its boat's Orin (#313); older: unsaid
+            engine["orin_assets"]["orin"] = assets["orin"]
 
     copilot = {"reachable": bool(cop_ok), "error": None if cop_ok else health.get("error"),
                "playbook": None}
@@ -384,13 +386,12 @@ def boat_status(get=None):
                                "variants": p.get("variants"), "signed": p.get("signed"),
                                "signature_ok": p.get("signature_ok")}
         copilot["mode"] = health.get("mode")
-    # the boat the Pi holds a profile for says it has no Orin (#313): not "unreachable"
-    bid = assets.get("boat_id") if assets_ok else None
-    if bid:
-        from . import boats
-        if not boat_hardware.has_orin(boats.get_boat(bid)):
-            copilot = {"reachable": False, "absent": True, "error": None, "playbook": None,
-                       "note": boat_hardware.NO_ORIN}
+    # the Pi says its boat has no Orin (#313), by the profile it holds: not "unreachable". Only
+    # the Pi's word counts (an unpushed Lab edit must never hide a real Orin failure); an older
+    # engine that doesn't say → an Orin.
+    if assets_ok and assets.get("orin") is False:
+        copilot = {"reachable": False, "absent": True, "error": None, "playbook": None,
+                   "note": boat_hardware.NO_ORIN}
     return {"checked_at": int(time.time()), "engine": engine, "copilot": copilot,
             "reachable": engine["reachable"] or copilot["reachable"]}
 

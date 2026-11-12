@@ -271,6 +271,7 @@ def test_kit_is_the_newest_copy_not_the_one_with_a_polar():
     try:
         assert boatlib.boat_for("bravo")["from"] == "library"      # the polar: the library's
         assert not hardware.has_orin("bravo") and not hardware.has_orin()
+        assert client.get("/reroute/assets").json()["orin"] is False   # what the Lab's check reads
         r = client.post("/playbook/load", json={"bundle": bravo_bundle()}).json()
         assert r["copilot"].get("absent") is True, r
         assert gpsout.show()["note"] == boat_hardware.NO_PLOTTER
@@ -308,6 +309,20 @@ def test_legacy_profile_takes_its_own_boats_seed(tmp_path):
         (seed / "bravo.json").unlink()
         hardware.clear_cache()
         assert source_policy.active_priority() == {} and hardware.has_orin()
+        # an explicit empty block on the older copy stands: it is not "no block" (Codex on #338)
+        (seed / "bravo.json").write_text(json.dumps({"boat_id": "bravo", "hardware": BRAVO_KIT}))
+        from app import boatlib
+        lib = {"schema": boatlib.SCHEMA, "built_at": 1, "boats": [
+            {"boat_id": "bravo", "name": BRAVO["name"], "profile": dict(BRAVO, hardware={}),
+             "boat_version": boat_profile.version(dict(BRAVO, hardware={})),
+             "polar": boat_polar.resolve(BRAVO)}]}
+        assert boatlib.store(lib, now=1)["stored"]          # older than the push
+        hardware.clear_cache()
+        try:
+            assert source_policy.active_priority() == {} and hardware.has_orin()
+            assert hardware.profile()["hardware"] == {}
+        finally:
+            boatlib.store({"schema": boatlib.SCHEMA, "built_at": 2, "boats": []})
     finally:
         hardware.SEED_DIRS[:] = saved
         hardware.clear_cache()

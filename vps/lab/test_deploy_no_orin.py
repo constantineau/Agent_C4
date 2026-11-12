@@ -105,11 +105,11 @@ COP["answer"] = {"loaded": True, "race_id": "r1"}
 res = D.push("r1")
 check("...and green when it loads", res["ok"] and res["steps"][-1]["target"] == "orin-copilot")
 
-print("the live check:")
-boats.save_boat(PIONLY)
+print("the live check (the Pi's word, never an unpushed Lab edit):")
+boats.save_boat(PIONLY)                  # the Lab says no Orin for pionly
 ANS = {"http://pi:8200/playbook": {"loaded": True, "race_id": "r1"},
        "http://pi:8200/course": {"available": True, "marks": []},
-       "http://pi:8200/reroute/assets": {"available": True, "boat_id": "pionly"}}
+       "http://pi:8200/reroute/assets": {"available": True, "boat_id": "pionly", "orin": False}}
 
 
 def fake_get(url, timeout=4):
@@ -119,15 +119,24 @@ def fake_get(url, timeout=4):
 
 
 st = D.boat_status(get=fake_get)
-check(f"no Orin on the carried boat: said, not 'unreachable' ({st['copilot']})",
+check(f"the Pi says no Orin: said, not 'unreachable' ({st['copilot']})",
       st["copilot"].get("absent") is True and st["copilot"]["note"] == BH.NO_ORIN
-      and st["copilot"]["error"] is None)
-ANS["http://pi:8200/reroute/assets"] = {"available": True, "boat_id": "withorin"}
-boats.save_boat(WITH)
+      and st["copilot"]["error"] is None and st["engine"]["orin_assets"]["orin"] is False)
+ANS["http://pi:8200/reroute/assets"] = {"available": True, "boat_id": "pionly", "orin": True}
 st = D.boat_status(get=fake_get)
-check("a boat with an Orin that doesn't answer is still unreachable",
+check("the Lab's unpushed 'no Orin' never hides the Pi's Orin failing to answer",
       not st["copilot"].get("absent") and st["copilot"]["reachable"] is False
       and st["copilot"]["error"])
+HEALTH = {"playbook": {"loaded": True, "race_id": "r1", "variants": 1, "signed": True}}
+ANS["http://pi:8091/copilot/health"] = HEALTH
+st = D.boat_status(get=fake_get)
+check("...nor its loaded playbook", st["copilot"]["reachable"]
+      and st["copilot"]["playbook"]["loaded"] is True)
+del ANS["http://pi:8091/copilot/health"]
+ANS["http://pi:8200/reroute/assets"] = {"available": True, "boat_id": "pionly"}
+st = D.boat_status(get=fake_get)
+check("an older engine that doesn't say → an Orin (unreachable here)",
+      not st["copilot"].get("absent") and st["copilot"]["reachable"] is False)
 
 print("an edited profile from before #313:")
 seed = boats._bundled("sr33")
