@@ -78,6 +78,46 @@ def test_yb_only_reimport_keeps_seeded_mmsi():
     assert next(e for e in r["entries"] if e["boat"] == "Il Mostro")["mmsi"] == "366111111"
 
 
+def test_reread_uses_the_unsaved_rating_column():
+    # #311: pick a column on screen, don't save, re-read → the new column is the one read
+    _setup()
+    draft = [{"boat": "Il Mostro", "sail": "USA 60", "rating": 1.10}]
+    saved_sc = {"rating_system": "ORC", "rating_column": "TMF_Offshore"}
+    stored = dict(STORED, rules_profile={"scoring": saved_sc})
+    main.store.get_race = lambda rid: json.loads(json.dumps(stored)) if rid == "t-race" else None
+    r = _import({"race_id": "t-race", "source": "orc", "country": "USA", "fleet": draft,
+                 "scoring": {"rating_system": "ORC", "rating_column": "TMF_Inshore"}})
+    assert r["tot_col"] == "TMF_Inshore", r
+    e = r["entries"][0]
+    assert e["rating"] is None and e["orc_match"]["col"] == "TMF_Inshore", e   # cert has no inshore
+    # no draft scoring sent → the saved column, as before
+    r = _import({"race_id": "t-race", "source": "orc", "country": "USA", "fleet": draft})
+    assert r["tot_col"] == "TMF_Offshore" and r["entries"][0]["rating"] == 1.10, r
+    # the draft own division picks the course for a per-course column
+    stored["divisions"] = [{"id": "A", "course_ref": "long"}, {"id": "B", "course_ref": "short"}]
+    per = {"rating_system": "ORC", "course_columns": [
+        {"course": "long", "column": "TMF_Offshore", "column_tod": ""},
+        {"course": "short", "column": "TMF_Inshore", "column_tod": ""}]}
+    r = _import({"race_id": "t-race", "source": "orc", "country": "USA", "fleet": draft,
+                 "scoring": per, "own": {"division": "A"}})
+    assert r["tot_col"] == "TMF_Offshore", r
+    # the upload form sends them as JSON strings; junk keeps the saved values
+    d = main._with_draft_rating(stored, json.dumps({"rating_column": "X"}), "not json")
+    assert d["rules_profile"]["scoring"] == {"rating_column": "X"} and "own" not in d, d
+    assert main._with_draft_rating(stored, None, None) is stored
+    assert stored["rules_profile"]["scoring"] is saved_sc                      # stored not mutated
+
+
+def test_candidates_use_the_unsaved_rating_column():
+    _setup()
+    main.store.get_race = lambda rid: json.loads(json.dumps(
+        dict(STORED, rules_profile={"scoring": {"rating_system": "ORC"}}))) if rid == "t-race" else None
+    r = main.fleet_orc_candidates({"race_id": "t-race", "boat": "Il Mostro", "sail": "USA 60",
+                                   "country": "USA",
+                                   "scoring": {"rating_system": "ORC", "rating_column": "TMF_Offshore"}})
+    assert r["tot_col"] == "TMF_Offshore" and r["candidates"][0]["rating"] == 1.10, r
+
+
 if __name__ == "__main__":
     n = 0
     for name, fn in list(globals().items()):

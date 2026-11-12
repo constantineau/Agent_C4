@@ -2840,7 +2840,9 @@ async function fleetAutoImport(source, extra) {
     const r = await (await apiPost("/api/fleet/import", Object.assign(
       // fleet = the roster as it stands here (unsaved edits too): 'orc' enriches it, and seeded
       // MMSIs are carried over from it rather than from the last save
-      { race_id: Lab.sel, source, country: _fleetCC(), fleet: Lab.editDef.fleet }, extra || {}))).json();
+      // scoring/own too: a rating column picked here but not saved yet is the one to read (#311)
+      { race_id: Lab.sel, source, country: _fleetCC(), fleet: Lab.editDef.fleet,
+        scoring: _fleetScoring(), own: Lab.editDef.own || {} }, extra || {}))).json();
     _fleetApplyResult(r, ed);
   } catch (e) { Lab.fleetMsg = "import failed: " + e.message; }
   Lab.fleetBusy = false; if (activeSec === "fleet" && Lab.editDef) paintFleet();
@@ -2859,6 +2861,7 @@ async function fleetUploadEntry() {
   Lab.fleetBusy = true; Lab.fleetMsg = "Reading the PDF…"; paintFleet();
   try {
     const fd = new FormData(); fd.append("file", f); fd.append("fleet", JSON.stringify(Lab.editDef.fleet));
+    fd.append("scoring", JSON.stringify(_fleetScoring())); fd.append("own", JSON.stringify(Lab.editDef.own || {}));
     const q = "?race_id=" + encodeURIComponent(Lab.sel) + "&country=" + encodeURIComponent(_fleetCC());
     const r = await (await api("/api/fleet/import/upload" + q, { method: "POST", body: fd })).json();
     _fleetApplyResult(r, ed);
@@ -2922,7 +2925,8 @@ async function fleetFindOrc(i) {
   Lab.fleetMsg = `Searching ORC for "${e.boat}"…`; Lab.fleetMsgErr = false; paintFleet();
   try {
     const r = await (await apiPost("/api/fleet/orc-candidates",
-      { race_id: Lab.sel, boat: e.boat, sail: e.sail, country: _fleetCC() })).json();
+      { race_id: Lab.sel, boat: e.boat, sail: e.sail, country: _fleetCC(),
+        scoring: _fleetScoring(), own: Lab.editDef.own || {} })).json();
     Lab.fleetCand = { i, list: r.candidates || [] };
     Lab.fleetMsg = (r.candidates || []).length
       ? `${r.candidates.length} ORC match(es) for "${e.boat}". Pick one below the row.`

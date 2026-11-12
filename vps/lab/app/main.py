@@ -1721,18 +1721,43 @@ def _with_draft_fleet(stored, fleet):
     return dict(stored, fleet=[e for e in fleet if isinstance(e, dict)])
 
 
+def _with_draft_rating(stored, scoring=None, own=None):
+    """The stored race with the screen's unsaved scoring block and own-boat entry in place (#311):
+    a rating column picked but not saved yet must be the one the re-read uses, or Save would store
+    the new column next to ratings read off the old one. `own.division` picks the course. JSON
+    strings (the upload form) are parsed; anything that isn't a dict keeps the saved value."""
+    def _dict(v):
+        if isinstance(v, str):
+            try:
+                v = json.loads(v)
+            except ValueError:
+                return None
+        return v if isinstance(v, dict) else None
+    scoring, own = _dict(scoring), _dict(own)
+    if scoring is None and own is None:
+        return stored
+    out = dict(stored)
+    if scoring is not None:
+        rp = dict(out.get("rules_profile") or {})
+        rp["scoring"] = scoring
+        out["rules_profile"] = rp
+    if own is not None:
+        out["own"] = own
+    return out
+
+
 @app.post("/api/fleet/import")
 async def fleet_import(body: dict):
     """Build a DRAFT fleet roster from public data — the entry list (YB tracker OR a regatta-website
     URL/pasted text) + ORC cert handicaps. Returns the proposed roster (with match stats); the human
     reviews/edits in the Fleet tab and Saves via POST /api/races (nothing auto-committed). Body:
-    {race_id, source: yb|both|website|orc, country?, course_id?, url?, text?, fleet?} — fleet = the
-    draft roster on screen (see _with_draft_fleet)."""
+    {race_id, source: yb|both|website|orc, country?, course_id?, url?, text?, fleet?, scoring?, own?}
+    — fleet / scoring / own = the unsaved draft on screen (see _with_draft_fleet / _with_draft_rating)."""
     b = body or {}
     d = store.get_race(b.get("race_id")) if b.get("race_id") else None
     if not d:
         return JSONResponse({"detail": "unknown race"}, status_code=404)
-    d = _with_draft_fleet(d, b.get("fleet"))
+    d = _with_draft_rating(_with_draft_fleet(d, b.get("fleet")), b.get("scoring"), b.get("own"))
     return await run_in_threadpool(fleetimport.import_fleet, d, b.get("source", "both"),
                                    b.get("country") or None, b.get("course_id"),
                                    b.get("url"), b.get("text"))
@@ -1745,6 +1770,8 @@ def fleet_orc_candidates(body: dict):
     candidate in the Fleet tab; nothing auto-applies."""
     body = body or {}
     d = store.get_race(body.get("race_id")) if body.get("race_id") else None
+    if d:
+        d = _with_draft_rating(d, body.get("scoring"), body.get("own"))
     return fleetimport.candidates(body.get("boat"), sail=body.get("sail"),
                                   country=body.get("country") or None,
                                   definition=d, course_id=body.get("course_id"))
@@ -1752,13 +1779,14 @@ def fleet_orc_candidates(body: dict):
 
 @app.post("/api/fleet/import/upload")
 async def fleet_import_upload(race_id: str, country: str = None, course_id: str = None,
-                             file: UploadFile = File(...), fleet: str = Form(None)):
+                             file: UploadFile = File(...), fleet: str = Form(None),
+                             scoring: str = Form(None), own: str = Form(None)):
     """Extract a fleet roster from an uploaded entry-list PDF → ORC-enrich → DRAFT for review.
     `fleet` (form field, JSON) = the draft roster on screen, for carrying seeded MMSIs over."""
     d = store.get_race(race_id)
     if not d:
         return JSONResponse({"detail": "unknown race"}, status_code=404)
-    d = _with_draft_fleet(d, fleet)
+    d = _with_draft_rating(_with_draft_fleet(d, fleet), scoring, own)
     raw = await file.read()
     r = await run_in_threadpool(fleetimport.roster_from_pdf, raw)
     if not r.get("ok"):

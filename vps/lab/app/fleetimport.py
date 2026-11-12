@@ -200,9 +200,10 @@ def enrich_from_orc(entries, country=None, definition=None, course_id=None):
         seen_cols |= _rating_keys(rec)
         if gph is not None:
             e["orc_gph"] = gph
-        if rating is not None:
-            e["rating"] = rating
-        elif tot_col:
+        # the race's column only: a rating read off another column (an earlier pick, a hand entry
+        # before the match) must not survive under this one
+        e["rating"] = rating
+        if rating is None and tot_col:
             lacking += 1
         if not e.get("cls") and rec.get("Class"):
             e["cls"] = rec.get("Class")

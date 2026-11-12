@@ -93,6 +93,25 @@ def test_course_column_follows_course():
           "gets no rating and a note")
 
 
+def test_reenrich_clears_a_rating_off_another_column():
+    # #311 review: a rating read off column A must not survive a switch to a column the cert lacks
+    _fake_net()
+    roster = [{"boat": "Il Mostro", "sail": "USA 60", "rating": 1.10},
+              {"boat": "Windquest", "sail": "USA 99", "rating": 1.05}]
+    en = fleetimport.enrich_from_orc(roster, country="USA", definition=_race(rating_column="XX_RACE_B_TOT"))
+    mostro, wq = en["entries"]
+    assert mostro["rating"] == 0.97, mostro                       # cert has B → the B number
+    assert wq["rating"] is None and wq["orc_match"]["col"] == "XX_RACE_B_TOT", wq   # lacks B → cleared
+    # and switching to no column at all clears them too
+    en = fleetimport.enrich_from_orc(roster, country="USA", definition=_race())
+    assert all(e["rating"] is None for e in en["entries"]), en["entries"]
+    # an unmatched boat keeps a hand-entered rating (no cert to replace it)
+    hand = [{"boat": "Nobody", "sail": "USA 1", "rating": 0.9}]
+    fleetimport.enrich_from_orc(hand, country="USA", definition=_race(rating_column="XX_RACE_B_TOT"))
+    assert hand[0]["rating"] == 0.9, hand
+    print("PASS reenrich_clears: a matched boat's rating is always the selected column's, or empty")
+
+
 def test_missing_column_no_guess():
     _fake_net()
     entries = fleetimport.roster_from_yb({"tracker": {"provider": "yb", "race": "demo2026"}})["entries"]
@@ -356,6 +375,7 @@ def _live():
 
 if __name__ == "__main__":
     test_roster_from_yb(); test_orc_match_and_race_col(); test_course_column_follows_course()
+    test_reenrich_clears_a_rating_off_another_column()
     test_missing_column_no_guess(); test_non_us_orc_race(); test_other_rating_system_has_no_feed()
     test_candidates_use_race_column(); test_set_fields_cli(); test_import_fleet_both()
     test_website_source(); test_yachtscoring_parse(); test_regatta_network_parse()
