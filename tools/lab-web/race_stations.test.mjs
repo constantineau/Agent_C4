@@ -36,7 +36,7 @@ function harness(def, opts = {}) {
   const els = { stCard: { innerHTML: "" }, stMap: {}, stAddId: { value: "" } };
   const posts = [], maps = [];
   const ctx = {
-    console, Promise, JSON, Object, Set, String,
+    console, Promise, JSON, Object, Set, String, syncDirty: () => {}, activeSec: "races",
     Lab: { editDef: def, isDraft: !!opts.draft, cleanDef: JSON.stringify(def) },
     window: {},
     document: { getElementById: (id) => els[id] || null },
@@ -44,6 +44,7 @@ function harness(def, opts = {}) {
     jsonOrFriendly: async (res) => res.json(),
     apiPost: async (p, body) => {
       posts.push({ p, body: JSON.parse(JSON.stringify(body)) });
+      if (opts.gate) await opts.gate(p);
       const reply = opts.reply ? opts.reply(p, body) : {};
       return { ok: reply.status ? reply.status < 400 : true, status: reply.status || 200, json: async () => reply.json || reply };
     },
@@ -52,7 +53,7 @@ function harness(def, opts = {}) {
   vm.createContext(ctx);
   const names = ["esc", "attr", "saveChain", "queueDef", "withOverrides", "St", "stKey", "stationPicks", "stKind",
     "stReset", "detailStationsCard", "stCardHtml", "stPaint", "stDrawMap", "stBase", "stFind", "stTick", "stAdd",
-    "stCheck", "stSave", "syncStations"];
+    "stCheck", "stSave", "syncStations", "stDirty", "stDiscard", "stTickSig"];
   const code = names.map(grab).join("\n").replace(/^(const|let) /gm, "var ");
   vm.runInContext(code, ctx);
   ctx.Opt = { def };
@@ -170,4 +171,49 @@ test("maps: Course & Marks and the Gameplan route map draw the race's picks", ()
   assert.match(mapview, /function buildStations\(\)/);
   assert.match(mapview, /className: "mv-station"/);
   assert.match(mapview, /chk\("stations", "Stations"\)/);
+});
+
+test("a tick changed while the save runs is not lost: controls are off, and a late change stays unsaved", async () => {
+  const def = RACE();
+  let release;
+  const gate = (p) => (p.endsWith("/stations") ? new Promise((r) => { release = r; }) : null);
+  const { ctx, els, posts } = harness(def, { gate, reply: (p, body) => (p.endsWith("/find") ? Object.assign({ picked: null }, FOUND)
+    : { saved: true, stations: { picked: body.picked } }) });
+  els.stCard.innerHTML = ctx.detailStationsCard(def);
+  await ctx.stFind();
+  ctx.stTick(2, true);                       // KPBI on
+  const saving = ctx.stSave(false);
+  await new Promise((r) => setTimeout(r, 0));
+  assert.match(els.stCard.innerHTML, /type="checkbox" checked disabled|type="checkbox"  disabled/, "boxes disabled while saving");
+  ctx.stTick(0, false);                      // ignored while busy
+  assert.ok(ctx.St.ticked["metar:KFXE"]);
+  // even if a change slips in (a stale handler), it stays unsaved
+  ctx.St.ticked["metar:KFXE"] = false;
+  release();
+  assert.equal(await saving, true);
+  assert.deepEqual(posts.at(-1).body.picked.map((s) => s.id), ["KFXE", "LKWF1", "KPBI"]);
+  assert.equal(ctx.St.changed, true);
+  assert.ok(ctx.stDirty());
+  assert.match(els.stCard.innerHTML, /Changed while saving\. Not saved yet\./);
+});
+
+test("unsaved ticks are a dirty source on Races: in the Save bar, the leave prompt, Save and Discard", async () => {
+  assert.match(grab("DIRTY_SOURCES"), /tabs: \["races"\], dirty: \(\) => stDirty\(\)[^]*save: \(\) => stSave\(false\), discard: \(\) => stDiscard\(\)/);
+  const def = RACE();
+  const { ctx, els } = harness(def, { reply: (p, body) => (p.endsWith("/find") ? Object.assign({ picked: null }, FOUND)
+    : { saved: true, stations: { picked: body.picked } }) });
+  els.stCard.innerHTML = ctx.detailStationsCard(def);
+  await ctx.stFind();
+  assert.equal(ctx.stDirty(), false, "a search alone is not an edit");
+  ctx.stTick(1, false);
+  assert.equal(ctx.stDirty(), true);
+  ctx.stDiscard();
+  assert.equal(ctx.stDirty(), false);
+  assert.ok(ctx.St.ticked["ndbc:LKWF1"], "discard puts the automatic ticks back");
+  ctx.stTick(1, false);
+  assert.equal(await ctx.stSave(false), true, "the bar's Save reports success");
+  assert.equal(ctx.stDirty(), false);
+  ctx.Lab.editDef = Object.assign(RACE(), { race_id: "other" });
+  ctx.St.changed = true;
+  assert.equal(ctx.stDirty(), false, "only the open race's ticks count");
 });

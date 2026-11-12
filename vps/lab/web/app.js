@@ -334,6 +334,9 @@ const DIRTY_SOURCES = [
   // the boat model's crew thresholds (jib change-downs, Code 0, reefs) — not part of any race
   { tabs: ["learnings", "gameplan"], dirty: () => bmDirty(), label: () => "boat model",
     save: () => saveBoatModel(), discard: () => bmDiscard() },
+  // the race's weather-station ticks (Races > Weather stations), saved by their own route
+  { tabs: ["races"], dirty: () => stDirty(), label: () => "weather stations",
+    save: () => stSave(false), discard: () => stDiscard() },
 ];
 const dirtySources = () => DIRTY_SOURCES.filter((s) => s.tabs.includes(activeSec) && s.dirty());
 function editDirty() { return dirtySources().length > 0; }
@@ -800,7 +803,7 @@ function stCardHtml(d) {
     : "Automatic: the stations near the course.";
   const live = (s) => { const v = St.live[s.id]; return v == null ? "" : v ? "wind now" : '<span class="muted">no wind</span>'; };
   const trs = rows.map((s, i) => `<tr>
-      <td><label class="echk"><input type="checkbox" ${St.ticked[stKey(s)] ? "checked" : ""} onchange="stTick(${i}, this.checked)"
+      <td><label class="echk"><input type="checkbox" ${St.ticked[stKey(s)] ? "checked" : ""} ${St.busy ? "disabled" : ""} onchange="stTick(${i}, this.checked)"
         aria-label="Use ${attr(s.id)}"></label></td>
       <td>${esc(s.id)}${s.auto ? ' <span class="pill" title="Picked automatically">auto</span>' : ""}</td>
       <td>${esc(s.name || "")}</td><td>${esc(stKind(s.kind))}</td>
@@ -862,10 +865,23 @@ async function stFind() {
 }
 function stTick(i, on) {
   const s = (St.rows || [])[i];
-  if (!s) return;
+  if (!s || St.busy) return;          // no tick changes while a find/add/check/save runs
   St.ticked[stKey(s)] = !!on; St.changed = true; St.msg = "";
+  stPaint(); syncDirty();
+}
+// unsaved ticks on the open race: in the Save bar and the leave prompt like any other edit
+function stDirty() {
+  return !!(St.changed && !Lab.isDraft && Lab.editDef && Lab.editDef.race_id === St.rid);
+}
+// drop unsaved ticks: back to the saved picks (the rows found stay listed)
+function stDiscard() {
+  const rows = St.rows, p = stationPicks(Lab.editDef);
+  St.changed = false; St.msg = ""; St.ticked = {};
+  if (p) p.forEach((s) => { St.ticked[stKey(s)] = true; });
+  else (rows || []).filter((s) => s.auto).forEach((s) => { St.ticked[stKey(s)] = true; });
   stPaint();
 }
+const stTickSig = () => JSON.stringify(Object.keys(St.ticked).filter((k) => St.ticked[k]).sort());
 async function stAdd() {
   const rid = St.rid, inp = document.getElementById("stAddId");
   const id = ((inp && inp.value) || "").trim();
@@ -879,7 +895,7 @@ async function stAdd() {
     const s = r.station;
     St.rows = St.rows || [];
     if (!St.rows.some((x) => stKey(x) === stKey(s))) St.rows.push(s);
-    St.ticked[stKey(s)] = true; St.changed = true;
+    St.ticked[stKey(s)] = true; St.changed = true; syncDirty();
     St.msg = `Added ${s.id}${s.dist_nm != null ? " (" + s.dist_nm + " nm)" : ""}. Not saved yet.`;
   } catch (e) { if (St.rid === rid) St.msg = String(e.message || e); }
   if (St.rid === rid) { St.busy = ""; stPaint(); }
@@ -899,9 +915,10 @@ async function stCheck() {
 }
 async function stSave(auto) {
   const rid = St.rid;
-  if (!rid || Lab.isDraft) return;
+  if (!rid || Lab.isDraft) return false;
   const picked = auto ? null : (St.rows || []).filter((s) => St.ticked[stKey(s)])
     .map((s) => ({ id: s.id, kind: s.kind, lat: s.lat, lon: s.lon, name: s.name, source: s.source }));
+  const sentSig = stTickSig();
   St.busy = "save"; stPaint();
   let r;
   try {
@@ -914,17 +931,24 @@ async function stSave(auto) {
     });
   } catch (e) {
     if (St.rid === rid) { St.busy = ""; St.msg = "Not saved: " + (e.message || e); stPaint(); }
-    return;
+    return false;
   }
   syncStations(rid, r.stations);
-  if (St.rid !== rid) return;
-  St.busy = ""; St.changed = false;
+  if (St.rid !== rid) return true;
+  St.busy = "";
   if (auto) {
-    St.ticked = {};
+    St.changed = false; St.ticked = {};
     (St.rows || []).filter((s) => s.auto).forEach((s) => { St.ticked[stKey(s)] = true; });
+    St.msg = "Back to automatic. Build the playbook again to use them.";
+  } else if (stTickSig() !== sentSig) {
+    St.changed = true;                  // ticks moved while the save ran: those are still unsaved
+    St.msg = "Changed while saving. Not saved yet.";
+  } else {
+    St.changed = false;
+    St.msg = "Saved. Build the playbook again to use them.";
   }
-  St.msg = (auto ? "Back to automatic." : "Saved.") + " Build the playbook again to use them.";
-  stPaint();
+  stPaint(); syncDirty();
+  return true;
 }
 // The saved picks into every copy of the race the Lab holds: the editor's (and its clean baseline,
 // so they don't read as an unsaved edit) and the Gameplan's.
