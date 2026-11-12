@@ -75,6 +75,21 @@ Dual input → Opus extraction → a **draft** RaceDefinition → human review �
   refused while blocking errors remain. Library API: `GET /api/races[/{id}]`, `/validate`.
 - **Course & Marks tab**: schematic + real map per course, editable marks, **Geocode** (Nominatim,
   human-confirmed), Save.
+- **Weather stations** (Races tab card, #309): the observed-wind stations the playbook freezes for
+  the boat. **Find stations** lists what every station source knows around the race's courses
+  (`app/obsarea.finder`, `POST /api/races/{id}/stations/find`): curated list, METAR airports, NDBC
+  buoys, nearest first, the automatic picks marked `auto` and ticked. **Add** takes one id
+  (`/stations/lookup`), **Check live** says which reported wind in the last 3 h (`/stations/check`,
+  the same probe the freeze uses), **Save picks** stores them (`POST /api/races/{id}/stations`).
+  Stored on the race as `stations: {"picked": [{id, kind, lat, lon, name, source?}]}`; absent =
+  automatic (#343's area lookup, unchanged), `picked: []` = none. Only that route changes it: a
+  re-ingest or any other save keeps it (as with chart overrides). The playbook freeze and the
+  station promises use the picks when present (still live-probed), so the boat needs no network to
+  know them. Picked stations show as small purple dots on the Course & Marks map and the Gameplan
+  route map. A new source (e.g. a UK buoy network) is one `StationSource` passed to
+  `obsarea.register()`: it then shows in the finder, add-by-id and the automatic list with no UI
+  change. The boat reads only `metar` and `ndbc` live (`obsarea.READABLE_KINDS`); a new kind needs
+  a reader aboard before the freeze keeps it.
 - **Course loader (homework→onboard)**: `shared.race_def.course_to_marks()` flattens a course
   (gates/finish → midpoints; un-geocoded marks skipped + reported) and `POST /course/load` (cloud
   agent AND onboard engine) writes + activates it.

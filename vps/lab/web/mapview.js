@@ -6,7 +6,8 @@
         obstructions, real land), drawn on a canvas so thousands of polygons stay fast;
      3. GRIB wind overlay — arrows rotated by TWD, coloured by TWS, FADED BY CONFIDENCE
         (low model agreement = faint = the fuzzy-adherence signal);
-     4. the optimized route + marks.
+     4. the optimized route + marks;
+     5. the race's picked weather stations (small purple dots, labelled by id).
    A forecast TIME SLIDER scrubs the embedded multi-time wind frames; a marker shows where the boat
    is on the route at the selected time (time-synced wind = what the boat will actually meet).
 
@@ -14,7 +15,8 @@
 const MapView = (function () {
   let map = null;
   let chartLayer = null, windLayer = null, currentLayer = null, waveLayer = null, exploreLayer = null, routeGroup = null, seamarks = null;
-  let scrimLayer = null;
+  let scrimLayer = null, stationGroup = null;
+  let ST = [];                  // the race's picked weather stations [{id, kind, lat, lon, name}]
   const SCRIM_OPACITY = 0.7;    // white mask over the basemap so wind/current arrows read clearly
   let boatMarker = null, legHighlight = null;
   let R = null;                 // current optimize result
@@ -23,7 +25,7 @@ const MapView = (function () {
   let windMode = "arrows";      // wind overlay style: arrows | barbs | shaded (2.4)
   let followScrub = true;       // Tier 3.3: pan the map to the projected boat position while scrubbing
   const show = { wind: true, current: true, waves: false, shoals: true, rocks: true, land: false,
-                 sea: false, iso: false, laylines: true, models: true, scrim: true };
+                 sea: false, iso: false, laylines: true, models: true, scrim: true, stations: true };
 
   // a stable colour per weather model for the per-model candidate-route fan (PR-4)
   const MODEL_COLORS = { gfs: "#1f77b4", nam: "#2ca02c", hrrr: "#d62728", gefs: "#9467bd",
@@ -351,6 +353,20 @@ const MapView = (function () {
     routeGroup = L.layerGroup(items).addTo(map);
   }
 
+  // the race's picked weather stations: small dots with the id, distinct from the marks
+  function buildStations() {
+    if (stationGroup) { map.removeLayer(stationGroup); stationGroup = null; }
+    const pts = (ST || []).filter((s) => s && s.lat != null && s.lon != null);
+    if (!show.stations || !pts.length) return;
+    stationGroup = L.layerGroup(pts.map((s) => L.circleMarker([s.lat, s.lon],
+      { radius: 4, color: "#5b2bb5", weight: 1.5, fillColor: "#b48cff", fillOpacity: 1 })
+      .bindTooltip(esc(s.id), { permanent: true, direction: "right", className: "mv-station" })
+      .bindPopup(`${esc(s.id)} · ${esc(s.name || "")}`))).addTo(map);
+  }
+  function esc(t) {
+    return String(t == null ? "" : t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  }
+
   function nearestPathByT(t) {
     if (!R || !R.path) return null;
     let best = null, bd = Infinity;
@@ -423,6 +439,7 @@ const MapView = (function () {
         ${chk("wind", "Wind")}${hasCurrent ? chk("current", "Current") : ""}${hasWaves ? chk("waves", "Waves") : ""}${chk("shoals", "Shoals")}${chk("rocks", "Rocks")}${chk("land", "Chart land")}${chk("sea", "Seamarks")}${chk("scrim", "Dim chart")}` +
         (hasModels ? chk("models", "Model routes") : "") +
         (hasIso ? chk("iso", "Isochrones") : "") + (hasLay ? chk("laylines", "Laylines") : "") +
+        ((ST || []).length ? chk("stations", "Stations") : "") +
         windSel + followChk + `</div>`;
 
     const stops = [[3, "<6"], [9, "6–12"], [15, "12–18"], [21, "18–24"], [27, "24+"]];
@@ -471,6 +488,7 @@ const MapView = (function () {
   function toggle(k, on) {
     show[k] = on;
     if (k === "sea") { if (on) seamarks.addTo(map); else map.removeLayer(seamarks); return; }
+    if (k === "stations") { buildStations(); return; }
     if (k === "iso" || k === "laylines" || k === "models") { exploreLayer.redraw(); return; }
     if (k === "current") { currentLayer.redraw(); return; }
     if (k === "waves") { waveLayer.redraw(); return; }
@@ -547,9 +565,11 @@ const MapView = (function () {
     return null;
   }
 
-  function render(id, result) {
+  // opts.stations: the race's picked weather stations, drawn as small labelled dots
+  function render(id, result, opts) {
     stopPlay();
     R = result; frameIdx = 0;
+    ST = (opts && opts.stations) || [];
     const el = document.getElementById(id);
     if (!el) return;
     if (map) { map.remove(); map = null; }
@@ -574,6 +594,7 @@ const MapView = (function () {
     currentLayer = new CanvasOverlay(drawCurrent).addTo(map);
     legHighlight = null;
     buildRoute();
+    buildStations();
     updateBoatMarker();
     addControls();
 

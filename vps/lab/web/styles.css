@@ -184,6 +184,15 @@ button.mini:hover { border-color: var(--accent); }
 .leaflet-tooltip-left.cm-pin::before { border-left-color: rgba(11,11,14,.86); }
 .leaflet-tooltip.cm-pin.cm-hidden { display: none; }   /* declutter: overlaps an earlier label */
 .leaflet-tooltip.cm-pin.cm-hidden.cm-force { display: block; z-index: 700; }
+/* weather stations (#309): a smaller purple chip, so they never read as marks */
+.leaflet-tooltip.cm-pin.cm-station { font-size: 10px; font-weight: 600; background: rgba(91,43,181,.88); }
+.leaflet-tooltip-right.cm-pin.cm-station::before { border-right-color: rgba(91,43,181,.88); }
+.leaflet-tooltip-left.cm-pin.cm-station::before { border-left-color: rgba(91,43,181,.88); }
+.leaflet-tooltip.mv-station { font: 600 10px/1.2 var(--font-body); color: #fff; padding: 1px 5px;
+  background: rgba(91,43,181,.88); border: 1px solid rgba(255,255,255,.3); border-radius: 4px;
+  box-shadow: none; text-shadow: none; }
+.leaflet-tooltip-right.mv-station::before { border-right-color: rgba(91,43,181,.88); }
+.leaflet-tooltip-left.mv-station::before { border-left-color: rgba(91,43,181,.88); }
 /* marks table: scroll sideways inside the card instead of running off it (#79) */
 .tablewrap { overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%; }
 .marktable th, .marktable td { padding: 6px 4px; }
