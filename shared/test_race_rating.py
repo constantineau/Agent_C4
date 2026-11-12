@@ -184,5 +184,15 @@ check("every course has a column", all(by_course.values()) and len(by_course) ==
 check("countries come from the file", R.rating_countries(shipped) == ["USA", "CAN"])
 check("no rating warning", not any("Rating" in x for x in R.validate(shipped)[1]))
 
+print("a ToD-only course row (Codex round 8):")
+dt = race(rating_system="ORC", course_columns=[{"course": "long", "column": "", "column_tod": "LONG_TOD"}])
+dt["fleet"] = [{"name": "x", "division": "A", "orc_gph": 600, "tod_allowance": 620, "tod_col": "LONG_TOD"}]
+sp = R.rating_spec(dt, "long")
+check("the row is read: ToD column named", sp["column_tod"] == "LONG_TOD")
+check("save keeps a tagged ToD allowance on it", R.clear_stale_ratings(dt)["boats"] == []
+      and dt["fleet"][0]["tod_allowance"] == 620)
+check("no 'Rating column unknown' for a ToD-only race",
+      not any("Rating column unknown" in x for x in R.validate(dt)[1]))
+
 print("ALL OK" if ok else "FAILURES")
 sys.exit(0 if ok else 1)

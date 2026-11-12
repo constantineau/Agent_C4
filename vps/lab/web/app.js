@@ -2832,13 +2832,13 @@ function _fleetColsFor(entry) {
   const d = Lab.editDef, sc = (d.rules_profile || {}).scoring || {};
   const div = ((entry || {}).division || "").trim();
   const dv = (d.divisions || []).find((x) => div && String(x.id || "").trim() === div);
-  const rows = (sc.course_columns || []).filter((r) => r && r.column);
+  const rows = (sc.course_columns || []).filter((r) => r && (r.column || r.column_tod));
   let row = dv && rows.find((r) => r.course === dv.course_ref);
   // same rule as race_def.rating_spec: no course known → the only per-course column, if just one
   // and every course of the race has it
   const covers = (d.courses || []).every((c) => !c || !c.id || rows.some((r) => r.course === c.id));
-  if (!dv && !row && rows.length && covers && new Set(rows.map((r) => r.column + "/" + (r.column_tod || ""))).size === 1) row = rows[0];
-  return row ? { rating: row.column, tod: row.column_tod || null }
+  if (!dv && !row && rows.length && covers && new Set(rows.map((r) => (r.column || "") + "/" + (r.column_tod || ""))).size === 1) row = rows[0];
+  return row ? { rating: row.column || sc.rating_column || null, tod: row.column_tod || null }
              : { rating: sc.rating_column || null, tod: sc.rating_column_tod || null };
 }
 function _fleetOwnCols() { return _fleetColsFor(Lab.editDef.own || {}); }
@@ -3054,7 +3054,7 @@ async function fleetSave() {
 // the import says it's unknown. Per-course columns are edited in Rules.
 function fleetRatingCard(sc) {
   const sys = sc.rating_system || "";
-  const perCourse = (sc.course_columns || []).filter((r) => r && r.column);
+  const perCourse = (sc.course_columns || []).filter((r) => r && (r.column || r.column_tod));
   if (sys && sys !== "ORC") {
     return `<div class="card"><h3>Ratings</h3><div class="muted" style="font-size:12px">${esc(sys)} race. ${sys === "ONE_DESIGN" ? "No ratings needed." : "No feed yet. Enter ratings by hand."}</div></div>`;
   }

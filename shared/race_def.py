@@ -471,7 +471,8 @@ def rating_spec(definition: dict, course_id: str = None, own_course: bool = True
     A per-course column (scoring.course_columns) wins over the race-wide `rating_column`; with no
     course given, our division's course is used, or the only per-course column there is."""
     sc = (((definition or {}).get("rules_profile") or {}).get("scoring")) or {}
-    rows = [r for r in (sc.get("course_columns") or []) if isinstance(r, dict) and r.get("column")]
+    rows = [r for r in (sc.get("course_columns") or [])
+            if isinstance(r, dict) and (r.get("column") or r.get("column_tod"))]   # a ToD-only row counts
     cid = _course_for(definition, course_id) if own_course else course_id
     row = next((r for r in rows if cid and str(r.get("course")) == str(cid)), None)
     # no course known: the per-course column stands in only when EVERY course of the race uses it
@@ -480,7 +481,7 @@ def rating_spec(definition: dict, course_id: str = None, own_course: bool = True
                   if isinstance(c, dict) and c.get("id")}
     covers = course_ids <= {str(r.get("course")) for r in rows}
     if (row is None and not cid and covers
-            and len({(r["column"], r.get("column_tod") or "") for r in rows}) == 1):
+            and len({(r.get("column") or "", r.get("column_tod") or "") for r in rows}) == 1):
         row = rows[0]
     col = (row or {}).get("column") or sc.get("rating_column") or None
     tod = ((row or {}).get("column_tod") if row else sc.get("rating_column_tod")) or None
@@ -602,15 +603,17 @@ def rating_warnings(d: dict) -> list:
     if system and system not in RATING_SYSTEMS:
         out.append(f"scoring.rating_system {system!r} unknown (ORC, PHRF, IRC, ONE_DESIGN)")
     elif system == "ORC":
-        cols = [r for r in (sc.get("course_columns") or []) if isinstance(r, dict) and r.get("column")]
+        cols = [r for r in (sc.get("course_columns") or [])
+                if isinstance(r, dict) and (r.get("column") or r.get("column_tod"))]
         if not sc.get("rating_column") and not cols:
             out.append("Rating column unknown: pick one (scoring)")
     elif not system and d.get("fleet"):
         out.append("Rating system unknown: set it in scoring")
     # boats whose division the race doesn't list can't be put on a course: with per-course
     # columns they fall back to the race-wide one (or none), so say how many
-    per = {(r.get("column"), r.get("column_tod") or "")
-           for r in (sc.get("course_columns") or []) if isinstance(r, dict) and r.get("column")}
+    per = {(r.get("column") or "", r.get("column_tod") or "")
+           for r in (sc.get("course_columns") or [])
+           if isinstance(r, dict) and (r.get("column") or r.get("column_tod"))}
     if len(per) > 1:
         n = sum(1 for e in d.get("fleet") or []
                 if isinstance(e, dict) and not course_of_division(d, e.get("division")))
