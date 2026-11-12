@@ -163,8 +163,10 @@ sources/history (multi-source instrument reads), sail advice + crossovers, navig
 tactics, route (isochrone on live/forecast wind), polar target + polar analysis (archive
 mining), AIS targets, fleet (handicap tactics), alerts, summaries, forecast, route status,
 fatigue, log note. A deterministic no-LLM fallback answers every tool intent when no API
-key is set. The boat-speed gospel (ORC Speed Guide) is cached system context; regenerate
-its four artifacts after a cert update: `python3 vps/agent/knowledge/build_speed_guide.py`.
+key is set. The boat's ORC Speed Guide is cached system context (each boat its own, #306);
+regenerate a boat's four artifacts after a cert update with
+`python3 vps/agent/knowledge/build_speed_guide.py <cert.md> <boat_id> [--wardrobe W.json]`, e.g. sr33:
+`python3 vps/agent/knowledge/build_speed_guide.py vps/agent/knowledge/C4_boatspeed_gospel.md sr33 --wardrobe vps/agent/knowledge/sr33_wardrobe.json`.
 
 - **Alerting** (`alerts.py`, migration 004): debounced rules — closing AIS (CPA/TCPA),
   persistent shift, polar deficit, stale telemetry, shoaling, helm `rotate_now` — evaluated

@@ -11,6 +11,7 @@ import os
 os.environ["BOAT_ID"] = "sr33"     # the shore agent's sail guide is its own boat's (#304)
 
 from app import sails
+from shared import sail_vocab
 
 ok = True
 
@@ -28,7 +29,7 @@ BOAT = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
 # drift with the crew's edits, and so the sweep exercises an ENABLED C0 (#227).
 C0 = {"enabled": True, "tws_max": 9, "twa_min": 55, "twa_max": 110}
 BOAT = dict(BOAT, code0=dict(C0))
-lbl = lambda s: sails.SAIL_LABEL.get(s, s)
+lbl = lambda s: sails.label(s, BOAT)
 
 print("the replay frame: J1 up, 18 kn, port beat 32° (arrives as 328°)")
 r = sails.get_sail_advice(18, 328, "J1", BOAT)
@@ -88,7 +89,7 @@ check("no 'enabled' flag counts as on (as the Lab does)", r["fit"] == "overpower
 
 print("sweep: text and tile agree on every crew sail, wind and angle")
 bad, fits = [], set()
-for hoisted in sails.CREW_SAILS:
+for hoisted in sail_vocab.names(BOAT):     # sr33's own sails, from its profile (#305)
     for tws in (6, 9, 10, 14.5, 18, 24):
         for twa in (35, 55, 60, 90, 110, 120, 150, 210, 250, 300, 328):
             r = sails.get_sail_advice(tws, twa, hoisted, BOAT)
@@ -104,6 +105,87 @@ for b in bad[:8]:
 check(f"no disagreements ({len(bad)} found)", not bad)
 check("sweep covers an enabled C0 in every verdict",
       {("C0", f) for f in ("in_range", "overpowered", "wrong_angle")} <= fits)
+
+print("no wind: no call, but the boat's sails still list (Codex on #334)")
+r = sails.get_sail_advice(None, None, "J2", BOAT)
+check("not available, says why", r["available"] is False and "wind" in r["note"])
+check("the sails bar still gets the boat's sails",
+      [x["name"] for x in r.get("sails") or []][:7] == sail_vocab.names(BOAT))
+check("the crew's sail is still named", r.get("crew_sail") == "J2")
+
+print("the driving sail reads the boat's family map (Codex on #334)")
+from app import matcher  # noqa: E402
+BIG = {"sail_inventory": ["J1", "BIGRED"], "sail_families": {"BIGRED": "asym"}}
+check("BIGRED (asym by the map) drives over the J1", matcher._primary(["BIGRED", "J1"], BIG) == "BIGRED")
+check("sr33's order unchanged", matcher._primary(["SS", "J2", "A3"], BOAT) == "A3"
+      and matcher._primary(["J1", "C0"], BOAT) == "C0")
+_orig = matcher._boat_sails
+matcher._boat_sails = lambda: BIG
+try:
+    check("with no boat passed, the boat's own map is used", matcher._primary(["J1", "BIGRED"]) == "BIGRED")
+finally:
+    matcher._boat_sails = _orig
+
+print("no playbook: the profile's sail_families drive the advice (Codex round 2 on #334)")
+from app import boatinfo  # noqa: E402
+_prof = boatinfo.profile
+boatinfo.profile = lambda: dict(BOAT, sail_inventory=sail_vocab.names(BOAT) + ["HEAVY"],
+                                sail_families={"HEAVY": "jib"})
+try:
+    r = sails.get_sail_advice(14, 140, "HEAVY", None)
+finally:
+    boatinfo.profile = _prof
+check("HEAVY (a jib by the profile) at 140° is the wrong sail",
+      r["crew_sail"] == "HEAVY" and r["wrong_sail"] is True and r["fit"] == "wrong_angle"
+      and r["optimal_sail"] in ("A3", "S1"))
+
+print("a rated sail with its own hyphenated name keeps it (Codex round 3 on #334)")
+_rows = [{"twa": a, "btv": 5.0, "vmg": 3.0, "awa": 30.0, "heel": 5.0, "sail": sl}
+         for a, sl in ((45, "J1"), (60, "J1"), (90, "J1"), (120, "BIG-RED"), (140, "BIG-RED"), (170, "BIG-RED"))]
+_g = sails._guide
+# the guide as read from disk (the answer's pinned, resolved copy still wins, as in _guide)
+sails._guide = lambda: sails._PINNED.get() or (sails._sections_of({"10": _rows}), {})
+BR = {"sail_inventory": ["J1", "BIG-RED"], "sail_families": {"BIG-RED": "asym"}}
+try:
+    r = sails.get_sail_advice(10, 140, "BIG-RED", BR)
+finally:
+    sails._guide = _g
+check("the optimal sail is BIG-RED, not BIG", r["optimal_sail"] == "BIG-RED")
+check("the crew's BIG-RED is right", r["crew_sail"] == "BIG-RED" and r["wrong_sail"] is False)
+check("no phantom BIG in the boat's sails", [x["name"] for x in r["sails"]] == ["J1", "BIG-RED"])
+check("the text names BIG-RED", "BIG-RED" in r["recommendation"] and "BIG " not in r["recommendation"])
+
+print("another boat's playbook still loaded: its frozen model is dropped (Codex on #334)")
+SR33_BM = dict(BOAT, boat_id="sr33")
+BRAVO_P = {"boat_id": "bravo", "name": "Bravo", "sail_inventory": ["G1", "G2", "A2", "S2"]}
+_cur, _prof2 = boatinfo._current_boat, boatinfo.profile
+boatinfo._current_boat = lambda: (True, "bravo")
+boatinfo.profile = lambda: BRAVO_P
+try:
+    r = sails.get_sail_advice(14, 60, "G1", SR33_BM)
+    names = [x["name"] for x in r["sails"]]
+    check("Bravo's G1 is the crew's sail, not refused", r["crew_sail"] == "G1")
+    check("the sails are Bravo's, not sr33's", names[:4] == ["G1", "G2", "A2", "S2"] and "J2" not in names)
+    check("sr33's frozen model is dropped", boatinfo.frozen_for_current(SR33_BM) is None)
+    from app import deviation  # noqa: E402
+    _lp = deviation._load_playbook
+    deviation._load_playbook = lambda: {"boat_model": SR33_BM}
+    try:
+        check("the matcher reads Bravo's sails, not the loaded sr33 playbook's",
+              matcher._boat_sails().get("boat_id") == "bravo")
+    finally:
+        deviation._load_playbook = _lp
+    boatinfo._current_boat = lambda: (True, "sr33")
+    check("the same model stands when sr33 is the boat", boatinfo.frozen_for_current(SR33_BM) is SR33_BM)
+    boatinfo._current_boat = lambda: (False, None)
+    check("and when nothing says which boat", boatinfo.frozen_for_current(SR33_BM) is SR33_BM)
+finally:
+    boatinfo._current_boat, boatinfo.profile = _cur, _prof2
+
+print("a Code 0 with its own name shows it")
+check("REACHER reads 'Code 0 (REACHER)', sr33's C0 stays 'Code 0'",
+      sails.label("REACHER", {"sail_families": {"REACHER": "code0"}}, []) == "Code 0 (REACHER)"
+      and sails.label("C0", BOAT, []) == "Code 0")
 
 print("RESULT:", "PASS" if ok else "FAIL")
 raise SystemExit(0 if ok else 1)

@@ -264,7 +264,35 @@ function withOverrides(snap) {
 }
 // After a save resolves: only re-baseline if the same definition is still in the editor (the user
 // may have switched race or discarded while the request was in flight).
-function markSaved(snap, ed) { if (Lab.editDef === ed) markClean(snap); }
+// A save may clear imported ratings that no longer match their boat's column (#311, server side).
+// The fixes belong to what was SENT: the baseline is the sent copy with them applied, and the editor
+// takes a fixed number only where that boat's number is unchanged since the send, so an edit made
+// while the save was in flight survives (and still shows as unsaved).
+// each number moves with its column tag: if either changed since the send, both are kept
+const _RATING_PAIRS = [["rating", "rating_col"], ["tod_allowance", "tod_col"]];
+function _takeRatingFix(cur, sent, fixed) {
+  if (!cur || !sent || !fixed) return;
+  _RATING_PAIRS.forEach((pair) => {
+    if (pair.some((k) => JSON.stringify(cur[k]) !== JSON.stringify(sent[k]))) return;   // edited: keep
+    pair.forEach((k) => { if (fixed[k] === undefined) delete cur[k]; else cur[k] = fixed[k]; });
+  });
+}
+function markSaved(snap, ed) {
+  const fix = Lab.ratingFix; Lab.ratingFix = null;
+  if (Lab.editDef !== ed) return;
+  if (fix) {
+    const sent = JSON.parse(snap);
+    const fixedSent = Object.assign({}, sent, { fleet: fix.fleet, own: fix.own });
+    const sameBoat = (a, b) => a && b && (a.boat || "") === (b.boat || "") && (a.sail || "") === (b.sail || "");
+    (ed.fleet || []).forEach((e, i) => {
+      const s = (sent.fleet || [])[i], f = (fix.fleet || [])[i];
+      if (sameBoat(e, s) && sameBoat(s, f)) _takeRatingFix(e, s, f);
+    });
+    if (ed.own) _takeRatingFix(ed.own, sent.own || {}, fix.own || {});
+    snap = JSON.stringify(fixedSent);
+  }
+  markClean(snap);
+}
 // Every RaceDefinition write goes through one queue: two overlapping saves (bar + in-page button)
 // then persist and resolve in the order they were sent, so the last baseline set is what's on disk.
 let saveChain = Promise.resolve();
@@ -273,7 +301,10 @@ function queueDef(fn) {
   saveChain = p.catch(() => {});
   return p;
 }
-const postDef = (path, body) => queueDef(() => apiPost(path, body).then((r) => r.json()));
+const postDef = (path, body) => queueDef(() => apiPost(path, body).then((r) => r.json()).then((r) => {
+  Lab.ratingFix = (r && r.rating_fixes) || null;   // applied by the caller's markSaved
+  return r;
+}));
 // Wait out any save still in flight (and its handler's repaint) before leaving or discarding, so a
 // late response can't repaint another tab or persist edits the user just threw away.
 async function settleSaves() {
@@ -1349,7 +1380,7 @@ async function renderGameplan() {
         <span id="optResHint" class="muted" style="font-size:11px"></span>
       </div>
       <div class="muted" style="font-size:12px;margin-top:6px">Routes the course on live weather. First run about 1 min.
-        ${qhelp("Downloads forecasts from NOAA and ECMWF and sails them on the SR33 polar. Later runs reuse the download. Prep only: nothing changes after the start (rule 41).")}</div>
+        ${qhelp("Downloads forecasts from NOAA and ECMWF and sails them on the boat's own polar. Later runs reuse the download. Prep only: nothing changes after the start (rule 41).")}</div>
     </div>
     <div id="optOut"></div>
     <div class="card">
@@ -1545,7 +1576,24 @@ function renderBoatModel() {
 
 // Sail palette (mirrors the .sail-bg-* CSS) — used to hatch the toss-up overlap bands in two colors.
 const SAIL_COLORS = { J1: "#36b3ff", J2: "#66a9e0", J3: "#9b8cff", C0: "#4dd6c9", SS: "#f28cc4", A3: "#f5c451", S1: "#ff8042" };
-const sailColor = (s) => SAIL_COLORS[s] || "#8899a6";
+// A sail's family (#305): the boat model's `sail_families`, else the usual shorthand (the same rules
+// as shared/sail_vocab.py). A sail with no colour of its own wears its family's.
+const SAIL_SHORTHAND = [[/^(C0|CODE ?0)/, "code0"], [/^(SS|STAY)/, "staysail"], [/^J\d/, "jib"],
+  [/^G\d/, "genoa"], [/^A\d/, "asym"], [/^S\d/, "sym"]];
+const FAMILY_COLORS = { jib: "#36b3ff", genoa: "#36b3ff", code0: "#4dd6c9", staysail: "#f28cc4",
+  asym: "#f5c451", sym: "#ff8042" };
+function sailFamily(s, m) {
+  const fams = (m || Opt.boatModel || {}).sail_families || {};
+  const n = String(s || "").toUpperCase();
+  if (fams[n]) return fams[n];
+  const hit = SAIL_SHORTHAND.find(([rx]) => rx.test(n));
+  return hit ? hit[1] : "other";
+}
+// the boat's first sail of a family ("asym" → its A3), or null
+function sailOfFamily(fam, m) {
+  return ((m || {}).inventory || (m || {}).sail_inventory || []).find((s) => sailFamily(s, m) === fam) || null;
+}
+const sailColor = (s) => SAIL_COLORS[s] || FAMILY_COLORS[sailFamily(s)] || "#8899a6";
 function hexRgba(hex, a) {
   const h = String(hex).replace("#", "");
   const n = parseInt(h.length === 3 ? h.replace(/(.)/g, "$1$1") : h, 16);
@@ -1588,18 +1636,19 @@ function boatModelCard(m) {
     </div>
     <h4>Best sail by wind angle and speed</h4>
     <div class="muted" style="font-size:11px;margin-bottom:4px">From the ORC certificate. <b>Striped strip</b> under a band = toss-up, either sail works.
-      ${qhelp("The certificate rates one jib. The J1/J2/J3 split comes from your wind settings above. Striped means two sails are within 1.5% of each other.")}</div>
+      ${qhelp("The certificate rates one jib. The jib split comes from your wind settings above. Striped means two sails are within 1.5% of each other.")}</div>
     <div class="xo-axis"><span>0°</span><span>45°</span><span>90°</span><span>135°</span><span>180°</span></div>
     <div class="xo">${bands}</div>
     ${renderPolarGrid()}
   </div>`;
 }
 
-/* Upwind jib change-downs by TWS (J1/J2/J3) — NOT in the ORC cert (it rates one headsail), so
-   these are editable crew/sailmaker thresholds. Two boundaries: J1→J2 and J2→J3. */
+/* Upwind jib change-downs by TWS (the boat's own names, e.g. J1/J2/J3) — NOT in the ORC cert (it
+   rates one headsail), so these are editable crew/sailmaker thresholds. Three bands, two
+   boundaries; another number of bands shows but is edited in the boat file. */
 function renderJibCrossovers(m) {
   const jc = m.jib_crossovers || [];
-  if (!jc.length) return `<div class="muted" style="font-size:12px">No jib changes set. The route uses the J1 only.</div>`;
+  if (!jc.length) return `<div class="muted" style="font-size:12px">No jib changes set. The route uses the rated jib only.</div>`;
   const max = 35;     // axis ceiling for the TWS bars (kn)
   const bars = jc.map((b) => {
     const lo = b.tws_min != null ? b.tws_min : 0;
@@ -1613,10 +1662,10 @@ function renderJibCrossovers(m) {
     <div class="muted" style="font-size:11px;margin-bottom:6px">Your crew's change points. They set the jib on each upwind leg.</div>
     <div class="xo-axis"><span>0</span><span>~9</span><span>~17</span><span>~26</span><span>35 kts</span></div>
     <div class="xo"><div class="xo-row"><span class="xo-tws">TWS</span><div class="xo-track">${bars}</div></div></div>
-    <div class="jib-edit">
-      <label>J1→J2 at <input type="number" id="jibT1" value="${attr(f.t1)}" min="2" max="34" step="0.5" style="width:58px" oninput="bmSet('t1',this.value)"> kts</label>
-      <label>J2→J3 at <input type="number" id="jibT2" value="${attr(f.t2)}" min="2" max="34" step="0.5" style="width:58px" oninput="bmSet('t2',this.value)"> kts</label>
-    </div>`;
+    ${jc.length === 3 ? `<div class="jib-edit">
+      <label>${esc(jc[0].sail)}→${esc(jc[1].sail)} at <input type="number" id="jibT1" value="${attr(f.t1)}" min="2" max="34" step="0.5" style="width:58px" oninput="bmSet('t1',this.value)"> kts</label>
+      <label>${esc(jc[1].sail)}→${esc(jc[2].sail)} at <input type="number" id="jibT2" value="${attr(f.t2)}" min="2" max="34" step="0.5" style="width:58px" oninput="bmSet('t2',this.value)"> kts</label>
+    </div>` : ""}`;
 }
 
 /* Code 0 band + mainsail reef points — crew sail-config overlays the ORC cert can't express (it
@@ -1625,6 +1674,7 @@ function renderJibCrossovers(m) {
    routing SPEED stays the rated envelope (no invented numbers). */
 function renderSailConfig(m) {
   const f = Opt.bmEdit || bmFormFrom(m);
+  const kite = esc(sailOfFamily("asym", m) || "kite");    // the boat's own asym (#305)
   return `<h4>Code 0 — light-air reaching</h4>
     <div class="muted" style="font-size:11px;margin-bottom:6px">When to fly the Code 0. Sets the sail call, not the boat speed.
       ${qhelp("The certificate doesn't rate the Code 0, so route speed stays the jib speed. The band shows as C0 in the chart below, in the leg sail calls and in the playbook.")}</div>
@@ -1634,10 +1684,10 @@ function renderSailConfig(m) {
       <label>TWA <input type="number" id="c0Alo" value="${attr(f.c0Alo)}" min="30" max="150" step="5" style="width:58px" oninput="bmSet('c0Alo',this.value)">–<input type="number" id="c0Ahi" value="${attr(f.c0Ahi)}" min="40" max="170" step="5" style="width:58px" oninput="bmSet('c0Ahi',this.value)">°</label>
     </div>
     <h4>Mainsail reef points</h4>
-    <div class="muted" style="font-size:11px;margin-bottom:6px">Reef 1 to depower. A lower setting opens the slot when flying the A3.</div>
+    <div class="muted" style="font-size:11px;margin-bottom:6px">Reef 1 to depower. A lower setting opens the slot when flying the ${kite}.</div>
     <div class="jib-edit">
       <label>Reef 1 (depower) at <input type="number" id="r1Tws" value="${attr(f.r1)}" min="4" max="45" step="0.5" style="width:58px" oninput="bmSet('r1',this.value)"> kts</label>
-      <label>Reef 1 with the A3 at <input type="number" id="r1Slot" value="${attr(f.slot)}" min="4" max="45" step="0.5" style="width:58px" oninput="bmSet('slot',this.value)"> kts</label>
+      <label>Reef 1 with the ${kite} at <input type="number" id="r1Slot" value="${attr(f.slot)}" min="4" max="45" step="0.5" style="width:58px" oninput="bmSet('slot',this.value)"> kts</label>
     </div>`;
 }
 
@@ -1687,8 +1737,11 @@ function bmBodies(f, was) {
   let jib = null, sc = null;
   if (changed(BM_JIB)) {
     const t1 = parseFloat(f.t1), t2 = parseFloat(f.t2);
-    if (isNaN(t1) || isNaN(t2) || t1 <= 0 || t1 >= t2) return { err: "J1→J2 must be below J2→J3." };
-    jib = { jib_crossovers: [{ sail: "J1", tws_max: t1 }, { sail: "J2", tws_min: t1, tws_max: t2 }, { sail: "J3", tws_min: t2 }] };
+    // the boat's own three jibs, as its change-downs name them (#305)
+    const n = (((Opt.boatModel || {}).jib_crossovers) || []).map((b) => b.sail);
+    if (n.length !== 3) return { err: "Edit this boat's jib changes in its boat file." };
+    if (isNaN(t1) || isNaN(t2) || t1 <= 0 || t1 >= t2) return { err: `${n[0]}→${n[1]} must be below ${n[1]}→${n[2]}.` };
+    jib = { jib_crossovers: [{ sail: n[0], tws_max: t1 }, { sail: n[1], tws_min: t1, tws_max: t2 }, { sail: n[2], tws_min: t2 }] };
   }
   if (changed(BM_SC)) {
     const tws = parseFloat(f.c0Tws), alo = parseFloat(f.c0Alo), ahi = parseFloat(f.c0Ahi);
@@ -1697,7 +1750,7 @@ function bmBodies(f, was) {
     if (f.c0On && !(tws > 0 && tws <= 30 && alo >= 0 && ahi <= 180)) return { err: "Code 0: wind up to 30 kts, TWA within 0–180°." };
     const r1 = parseFloat(f.r1), slot = parseFloat(f.slot);
     if ([r1, slot].some((v) => !isNaN(v) && (v < 4 || v > 45))) return { err: "Reef points must be 4–45 kts (or blank)." };
-    if (!isNaN(r1) && !isNaN(slot) && slot > r1) return { err: "The A3 reef should be at or below the depower reef." };
+    if (!isNaN(r1) && !isNaN(slot) && slot > r1) return { err: `The ${sailOfFamily("asym", Opt.boatModel) || "kite"} reef should be at or below the depower reef.` };
     sc = { code0: f.c0On ? { enabled: true, tws_max: tws, twa_min: alo, twa_max: ahi } : { enabled: false },
       main_reefs: { r1_tws_kn: isNaN(r1) ? null : r1, r1_a3_slot_tws_kn: isNaN(slot) ? null : slot } };
   }
@@ -2542,7 +2595,7 @@ function paintDeploy() {
       <div class="dep-grid">
         <div class="dep-row">${depPill(r.reviewed, "Race reviewed")}<span class="muted">${r.reviewed ? "approved" : "approve it in the Races tab"}</span></div>
         <div class="dep-row">${depPill(c.ready, "Course")}<span class="muted">${esc(c.course_id || "—")} · ${c.marks} marks${c.skipped && c.skipped.length ? " · ⚠ " + c.skipped.length + " without a position (" + c.skipped.map(esc).join(", ") + ")" : ""}</span></div>
-        <div class="dep-row">${depPill(fl.ready, "Fleet")}<span class="muted">${fl.roster} boats${fl.scoring ? " · " + esc(fl.scoring) : ""}${fl.tracker_permitted ? " · tracker permitted" : ""}</span></div>
+        <div class="dep-row">${depPill(fl.ready, "Fleet")}<span class="muted">${fl.roster} boats${fl.scoring ? " · " + esc(fl.scoring) : ""}${fl.tracker_permitted ? " · tracker permitted" : ""}${(fl.stale_ratings || []).length ? ` · <b>${fl.stale_ratings.length} old rating${fl.stale_ratings.length === 1 ? "" : "s"} not sent. Re-read ratings.</b>` : ""}</span></div>
         <div class="dep-row">${depPill(ck.ready, "Checklists")}<span class="muted">${ck.total} items · ${ck.ipad} go to the iPad as reminders</span></div>
         <div class="dep-row">${depPill((r.watch || {}).ready, "Watch plan")}<span class="muted">${(r.watch || {}).ready ? (r.watch.blocks + " watches. The iPad can still change them.") : "optional. Set it up in the Races tab."}</span></div>
         <div class="dep-row">${depPill(pbReady, "Playbook")}<span class="muted">${pbReady ? pbs.length + " frozen for this race" : "Build and freeze one in Gameplan."}</span></div>
@@ -2784,16 +2837,57 @@ async function renderFleet() {
 
 async function fleetPickRace(id) {
   if (!(await confirmLeave())) return paintFleet();   // Stay → repaint puts the picker back
-  Lab.sel = id; Lab.editDef = null; Lab.fleetMsg = ""; renderFleet(); }
-function fleetSet(i, f, v) { if (Lab.editDef && Lab.editDef.fleet[i]) { Lab.editDef.fleet[i][f] = v; } }
-function fleetOwnSet(f, v) { if (!Lab.editDef) return; if (!Lab.editDef.own) Lab.editDef.own = {}; Lab.editDef.own[f] = v; }
+  Lab.sel = id; Lab.editDef = null; Lab.fleetMsg = ""; Lab.fleetCols = []; renderFleet(); }
+// A number typed by hand is tagged "manual" (#311): the Lab keeps hand-typed competitor numbers
+// across a column switch, and only clears numbers it imported off another column.
+const _FLEET_TAG = { rating: "rating_col", tod_allowance: "tod_col" };
+function fleetSet(i, f, v) {
+  const e = Lab.editDef && Lab.editDef.fleet[i];
+  if (!e) return;
+  e[f] = v;
+  if (_FLEET_TAG[f]) e[_FLEET_TAG[f]] = "manual";
+}
+// Our boat's number is stamped with the column in force when typed, so a later column switch
+// asks for it again instead of scoring the fleet against a number for another column.
+// The column one boat (or our boat) scores on: same rule as race_def.rating_spec_for.
+function _fleetColsFor(entry) {
+  const d = Lab.editDef, sc = (d.rules_profile || {}).scoring || {};
+  const div = ((entry || {}).division || "").trim();
+  const dv = (d.divisions || []).find((x) => div && String(x.id || "").trim() === div);
+  const rows = (sc.course_columns || []).filter((r) => r && (r.column || r.column_tod));
+  let row = dv && rows.find((r) => r.course === dv.course_ref);
+  // same rule as race_def.rating_spec: no course known → the only per-course column, if just one
+  // and every course of the race has it
+  const covers = (d.courses || []).every((c) => !c || !c.id || rows.some((r) => r.course === c.id));
+  if (!dv && !row && rows.length && covers && new Set(rows.map((r) => (r.column || "") + "/" + (r.column_tod || ""))).size === 1) row = rows[0];
+  return row ? { rating: row.column || sc.rating_column || null, tod: row.column_tod || null }
+             : { rating: sc.rating_column || null, tod: sc.rating_column_tod || null };
+}
+function _fleetOwnCols() { return _fleetColsFor(Lab.editDef.own || {}); }
+function fleetOwnSet(f, v) {
+  if (!Lab.editDef) return;
+  if (!Lab.editDef.own) Lab.editDef.own = {};
+  const own = Lab.editDef.own;
+  own[f] = v;
+  if (f === "rating") own.rating_col = _fleetOwnCols().rating;
+  if (f === "tod_allowance") own.tod_col = _fleetOwnCols().tod;
+}
 function fleetAddRow() { Lab.editDef.fleet.push({ boat: "", division: "", cls: "", owner: "", sail: "", orc_gph: null, rating: null, mmsi: "", source: "manual" }); Lab.fleetEdit = true; paintFleet(); }
 function fleetRemove(i) { Lab.editDef.fleet.splice(i, 1); paintFleet(); }
 
 // Auto-import the roster from public data. source: 'yb' = the tracker entry list, 'both' = YB → ORC,
 // 'website' = a regatta-site URL/pasted text → ORC, 'orc' = enrich the current roster. extra = {url|text}
 // for the website source. Replaces the draft roster for review (nothing is saved until Save).
-function _fleetCC() { return (document.getElementById("fleetOrcCC") || {}).value || "USA"; }
+// blank = let the Lab use the race's list (its scoring block, else venue country + sail prefixes)
+function _fleetCC() { return ((document.getElementById("fleetOrcCC") || {}).value || "").trim(); }
+function _fleetScoring() {
+  const rp = (Lab.editDef.rules_profile = Lab.editDef.rules_profile || {});
+  return (rp.scoring = rp.scoring || {});
+}
+function fleetColSet(v) { _fleetScoring().rating_column = (v || "").trim(); }
+function fleetCCSet(v) {
+  _fleetScoring().rating_countries = (v || "").split(",").map((c) => c.trim().toUpperCase()).filter(Boolean);
+}
 function _fleetApplyResult(r, ed) {
   if (Lab.editDef !== ed) return;   // switched race / discarded while the import ran — don't land on it
   if (!r.ok) { Lab.fleetMsg = r.note || r.detail || "import failed. No boats found."; Lab.fleetMsgErr = true; return; }
@@ -2804,6 +2898,12 @@ function _fleetApplyResult(r, ed) {
   if (r.unmatched && r.unmatched.length) bits.push(`${r.unmatched.length} need a handicap by hand`);
   if (r.seeded_mmsi) bits.push(`${r.seeded_mmsi} kept their MMSI`);
   if (r.orc_error) bits.push("ORC lookup failed: " + r.orc_error);
+  if (r.rating_note) bits.push(r.rating_note);
+  if (r.stale_cleared) bits.push(`${r.stale_cleared} old rating${r.stale_cleared === 1 ? "" : "s"} cleared`);
+  if (r.own) Lab.editDef.own = r.own;
+  if (r.own_note) bits.push(r.own_note);
+  Lab.fleetCols = r.orc_columns || Lab.fleetCols || [];
+  Lab.fleetMsgErr = !!(r.orc_error || r.rating_note || r.own_note);
   Lab.fleetMsg = "Imported " + bits.join(" · ") + ". Check below, then Save.";
 }
 // An import REPLACES the draft roster. With boats already in it, ask first and say how many go.
@@ -2828,7 +2928,9 @@ async function fleetAutoImport(source, extra) {
     const r = await (await apiPost("/api/fleet/import", Object.assign(
       // fleet = the roster as it stands here (unsaved edits too): 'orc' enriches it, and seeded
       // MMSIs are carried over from it rather than from the last save
-      { race_id: Lab.sel, source, country: _fleetCC(), fleet: Lab.editDef.fleet }, extra || {}))).json();
+      // scoring/own too: a rating column picked here but not saved yet is the one to read (#311)
+      { race_id: Lab.sel, source, country: _fleetCC(), fleet: Lab.editDef.fleet,
+        scoring: _fleetScoring(), own: Lab.editDef.own || {} }, extra || {}))).json();
     _fleetApplyResult(r, ed);
   } catch (e) { Lab.fleetMsg = "import failed: " + e.message; }
   Lab.fleetBusy = false; if (activeSec === "fleet" && Lab.editDef) paintFleet();
@@ -2847,6 +2949,7 @@ async function fleetUploadEntry() {
   Lab.fleetBusy = true; Lab.fleetMsg = "Reading the PDF…"; paintFleet();
   try {
     const fd = new FormData(); fd.append("file", f); fd.append("fleet", JSON.stringify(Lab.editDef.fleet));
+    fd.append("scoring", JSON.stringify(_fleetScoring())); fd.append("own", JSON.stringify(Lab.editDef.own || {}));
     const q = "?race_id=" + encodeURIComponent(Lab.sel) + "&country=" + encodeURIComponent(_fleetCC());
     const r = await (await api("/api/fleet/import/upload" + q, { method: "POST", body: fd })).json();
     _fleetApplyResult(r, ed);
@@ -2909,13 +3012,14 @@ async function fleetFindOrc(i) {
   if (!e) return;
   Lab.fleetMsg = `Searching ORC for "${e.boat}"…`; Lab.fleetMsgErr = false; paintFleet();
   try {
-    const cc = (document.getElementById("fleetOrcCC") || {}).value || "USA,CAN";
     const r = await (await apiPost("/api/fleet/orc-candidates",
-      { race_id: Lab.sel, boat: e.boat, sail: e.sail, country: cc })).json();
-    Lab.fleetCand = { i, list: r.candidates || [] };
+      { race_id: Lab.sel, boat: e.boat, sail: e.sail, division: e.division || "", country: _fleetCC(),
+        scoring: _fleetScoring(), own: Lab.editDef.own || {} })).json();
+    Lab.fleetCand = { i, list: r.candidates || [], tot_col: r.tot_col || null, tod_col: r.tod_col || null };
     Lab.fleetMsg = (r.candidates || []).length
       ? `${r.candidates.length} ORC match(es) for "${e.boat}". Pick one below the row.`
-      : `No ORC match for "${e.boat}". Enter the handicap by hand.`;
+      : (r.note || `No ORC match for "${e.boat}". Enter the handicap by hand.`);
+    if (r.note && (r.candidates || []).length) Lab.fleetMsg += " " + r.note + ".";
   } catch (err) { Lab.fleetMsg = "ORC search failed: " + (err.message || err); Lab.fleetMsgErr = true; }
   paintFleet();
 }
@@ -2923,8 +3027,14 @@ function fleetApplyCand(i, ci) {
   const e = (Lab.editDef.fleet || [])[i];
   const c = ((Lab.fleetCand || {}).list || [])[ci];
   if (!e || !c) return;
-  if (c.orc_gph != null) e.orc_gph = c.orc_gph;
-  if (c.rating != null) e.rating = c.rating;
+  const fc = Lab.fleetCand || {};
+  e.orc_gph = c.orc_gph != null ? c.orc_gph : null;
+  // the picked cert's numbers replace the old ones outright, nulls too: a cert without the race's
+  // column must not leave the previous cert's rating beside its GPH (#311)
+  e.rating = c.rating != null ? c.rating : null;
+  e.tod_allowance = c.tod_allowance != null ? c.tod_allowance : null;
+  if (e.rating != null) e.rating_col = fc.tot_col; else delete e.rating_col;
+  if (e.tod_allowance != null) e.tod_col = fc.tod_col; else delete e.tod_col;
   if (!e.cls && c.cls) e.cls = c.cls;
   if (!e.sail && c.sail) e.sail = c.sail;
   e.source = (e.source || "") ? e.source + "+orc" : "orc";
@@ -2936,24 +3046,54 @@ function fleetApplyCand(i, ci) {
 
 async function fleetSave() {
   // coerce numerics so the persisted JSON is clean (orc_gph/rating numbers|null)
-  Lab.editDef.fleet = Lab.editDef.fleet.filter((e) => (e.boat || "").trim()).map((e) => ({
+  // the column tags ride along (#311): they say which column an imported number was read off
+  const tags = (e) => Object.assign({},
+    e.rating_col !== undefined ? { rating_col: e.rating_col } : {},
+    e.tod_col !== undefined ? { tod_col: e.tod_col } : {});
+  Lab.editDef.fleet = Lab.editDef.fleet.filter((e) => (e.boat || "").trim()).map((e) => Object.assign({
     boat: e.boat.trim(), division: e.division || "", cls: e.cls || "", owner: e.owner || "",
     sail: (e.sail || "").trim(), source: e.source || "manual",
-    orc_gph: fleetNum(e.orc_gph), rating: fleetNum(e.rating), mmsi: (e.mmsi || "").trim() }));
+    orc_gph: fleetNum(e.orc_gph), rating: fleetNum(e.rating), tod_allowance: fleetNum(e.tod_allowance),
+    mmsi: (e.mmsi || "").trim() }, tags(e)));
   const own = Lab.editDef.own || {};
-  Lab.editDef.own = { boat: (own.boat || "").trim(), division: own.division || "",
-    orc_gph: fleetNum(own.orc_gph), rating: fleetNum(own.rating), mmsi: (own.mmsi || "").trim() };
+  Lab.editDef.own = Object.assign({ boat: (own.boat || "").trim(), sail: (own.sail || "").trim(),
+    division: own.division || "", orc_gph: fleetNum(own.orc_gph), rating: fleetNum(own.rating),
+    tod_allowance: fleetNum(own.tod_allowance), mmsi: (own.mmsi || "").trim() }, tags(own));
   Lab.fleetMsg = "Saving…"; Lab.fleetMsgErr = false; paintFleet();
   let ok = false;
   const sent = JSON.stringify(Lab.editDef), ed = Lab.editDef;
   try {
     const r = await postDef("/api/races", { definition: JSON.parse(sent) });
-    if (r.saved) { markSaved(sent, ed); ok = true; Lab.fleetMsgErr = false;
-      Lab.fleetMsg = `Saved. ${Lab.editDef.fleet.length} boat${Lab.editDef.fleet.length === 1 ? "" : "s"} in the roster.`; }
+    if (r.saved) { const fx = r.rating_fixes; markSaved(sent, ed); ok = true; Lab.fleetMsgErr = !!fx;
+      Lab.fleetMsg = `Saved. ${Lab.editDef.fleet.length} boat${Lab.editDef.fleet.length === 1 ? "" : "s"} in the roster.` + (fx ? " " + fx.note : ""); }
     else { Lab.fleetMsg = "Save failed."; Lab.fleetMsgErr = true; }
   } catch (e) { Lab.fleetMsg = "Save failed: " + e.message; Lab.fleetMsgErr = true; }
   paintFleet();
   return ok;
+}
+
+// Which certificate number the race scores on (#311). Comes from the NOR/SI via Rules; set here when
+// the import says it's unknown. Per-course columns are edited in Rules.
+function fleetRatingCard(sc) {
+  const sys = sc.rating_system || "";
+  const perCourse = (sc.course_columns || []).filter((r) => r && (r.column || r.column_tod));
+  if (sys && sys !== "ORC") {
+    return `<div class="card"><h3>Ratings</h3><div class="muted" style="font-size:12px">${esc(sys)} race. ${sys === "ONE_DESIGN" ? "No ratings needed." : "No feed yet. Enter ratings by hand."}</div></div>`;
+  }
+  const cols = Lab.fleetCols || [];
+  const known = sc.rating_column || perCourse.length;
+  const per = perCourse.length
+    ? `<div class="muted" style="font-size:12px;margin-top:6px">By course: ${perCourse.map((r) => `${esc(r.course)} ${esc(r.column)}`).join(" · ")}. Edit in <a href="#rules">Rules</a>.</div>` : "";
+  return `<div class="card">
+    <h3>Rating column ${known ? "" : '<span class="pill warn" style="margin-left:6px">unknown</span>'}</h3>
+    ${known ? "" : '<div class="banner warn" style="margin-bottom:6px">Rating column unknown: pick one.</div>'}
+    <div class="opt-controls">
+      <label>ORC column <input class="ein" list="fleetColList" style="width:170px" value="${esc(sc.rating_column || "")}" placeholder="e.g. TMF_Inshore" oninput="fleetColSet(this.value)"></label>
+      <datalist id="fleetColList">${cols.map((c) => `<option value="${esc(c)}">`).join("")}</datalist>
+      <button class="mini" onclick="fleetAutoImport('orc')" ${Lab.fleetBusy ? "disabled" : ""}>Re-read ratings</button>
+      ${qhelp("The certificate number the race scores on. It's in the NOR or SI. Pick it, re-read, then Save.")}
+    </div>${per}
+  </div>`;
 }
 
 function fleetSrcBadge(e) {
@@ -3002,6 +3142,8 @@ function paintFleet() {
   const d = Lab.editDef, roster = d.fleet || [], own = d.own || {};
   const rp = d.rules_profile || {}, sc = rp.scoring || {}, tr = d.tracker || {};
   const inp = (val, ph, oninput, w) => `<input class="ein" style="width:${w}px" placeholder="${esc(ph)}" value="${esc(val == null ? "" : val)}" oninput="${oninput}">`;
+  // a ToD allowance box only on boats whose course scores on a named ToD column (#311)
+  const anyTod = roster.some((e) => _fleetColsFor(e).tod);
   const row = (e, i) => `<tr>
     <td>${inp(e.boat, "boat name", `fleetSet(${i},'boat',this.value)`, 140)}${fleetSrcBadge(e)}</td>
     <td>${inp(e.sail, "sail #", `fleetSet(${i},'sail',this.value)`, 70)}</td>
@@ -3010,6 +3152,7 @@ function paintFleet() {
     <td>${inp(e.owner, "owner", `fleetSet(${i},'owner',this.value)`, 110)}</td>
     <td>${inp(e.orc_gph, "GPH", `fleetSet(${i},'orc_gph',this.value)`, 56)}</td>
     <td>${inp(e.rating, "ToT", `fleetSet(${i},'rating',this.value)`, 56)}</td>
+    ${anyTod ? `<td>${_fleetColsFor(e).tod ? inp(e.tod_allowance, "s/nm", `fleetSet(${i},'tod_allowance',this.value)`, 56) : ""}</td>` : ""}
     <td>${inp(e.mmsi, "MMSI", `fleetSet(${i},'mmsi',this.value)`, 90)}</td>
     <td><button class="mini" onclick="fleetRemove(${i})" title="remove">✕</button></td></tr>`;
   const permitted = !!rp.tracker_permitted;
@@ -3032,13 +3175,17 @@ function paintFleet() {
         <label>Boat ${inp(own.boat, "SR33 \"C4\"", "fleetOwnSet('boat',this.value)", 150)}</label>
         <label>Division ${inp(own.division, "div", "fleetOwnSet('division',this.value)", 70)}</label>
         <label>ORC GPH (s/nm) ${inp(own.orc_gph, "GPH", "fleetOwnSet('orc_gph',this.value)", 70)}</label>
+        <label>Sail # ${inp(own.sail, "sail #", "fleetOwnSet('sail',this.value)", 80)}</label>
         <label>ORC ToT coefficient ${inp(own.rating, "ToT", "fleetOwnSet('rating',this.value)", 80)}</label>
+        ${_fleetOwnCols().tod ? `<label>ToD allowance (s/nm) ${inp(own.tod_allowance, "s/nm", "fleetOwnSet('tod_allowance',this.value)", 70)}</label>` : ""}
         <label>MMSI ${inp(own.mmsi, "MMSI", "fleetOwnSet('mmsi',this.value)", 100)}</label>
       </div>
       <div class="muted" style="font-size:12px;margin-top:6px">Race scoring: <b>${esc(sc.method || "not set")}</b>. Set it in <a href="#rules">Rules</a>.</div>
     </div>
 
     ${fleetGunsCard(roster, own)}
+
+    ${fleetRatingCard(sc)}
 
     ${Lab.fleetMsg ? `<div class="banner ${Lab.fleetMsgErr ? "warn" : "ok"}" style="margin-bottom:8px">${esc(Lab.fleetMsg)}</div>` : ""}
     ${roster.length
@@ -3054,7 +3201,7 @@ function paintFleet() {
         <span class="muted" style="font-size:12px">From the <b>YB tracker</b>:</span>
         <button class="${roster.length ? "mini" : ""}" onclick="fleetAutoImport('both')" ${Lab.fleetBusy || !ybCfg ? "disabled" : ""} title="${ybCfg ? "" : "No YB tracker set for this race"}">${Lab.fleetBusy ? "Importing…" : "Boats + handicaps"}</button>
         <button class="mini" onclick="fleetAutoImport('yb')" ${Lab.fleetBusy || !ybCfg ? "disabled" : ""}>Boats only</button>
-        <label>ORC countries <input id="fleetOrcCC" class="ein" style="width:84px" value="USA,CAN" title="Countries to search, comma separated. Great Lakes = USA,CAN."></label>
+        <label>ORC countries <input id="fleetOrcCC" class="ein" style="width:84px" value="${esc((sc.rating_countries || []).join(","))}" placeholder="from race" oninput="fleetCCSet(this.value)" title="Comma separated. Blank: the venue's country and the sail numbers."></label>
         <button class="mini" onclick="fleetAutoImport('orc')" ${Lab.fleetBusy ? "disabled" : ""}>Add ORC handicaps to list</button>
       </div>
       <div style="margin-top:10px;border-top:1px solid var(--line);padding-top:10px">
@@ -3080,7 +3227,7 @@ function paintFleet() {
       <details ${Lab.fleetEdit ? "open" : ""} style="margin-top:10px" ontoggle="Lab.fleetEdit=this.open">
         <summary style="cursor:pointer;font-size:13px">Edit roster ${roster.length ? `(${roster.length})` : "(add boats)"}</summary>
         ${roster.length ? `<table class="fleet-tbl" style="margin-top:8px"><thead><tr>
-          <th>Boat</th><th>Sail #</th><th>Div</th><th>Class</th><th>Owner</th><th>GPH (s/nm)</th><th>ToT</th><th>MMSI</th><th></th>
+          <th>Boat</th><th>Sail #</th><th>Div</th><th>Class</th><th>Owner</th><th>GPH (s/nm)</th><th>ToT</th>${anyTod ? "<th>ToD (s/nm)</th>" : ""}<th>MMSI</th><th></th>
           </tr></thead><tbody>${roster.map(row).join("")}</tbody></table>` : ""}
         <div style="margin-top:8px"><button class="mini" onclick="fleetAddRow()">+ Add boat</button></div>
       </details>
@@ -3125,6 +3272,26 @@ async function renderRules() {
 async function rulesPickRace(id) {
   if (!(await confirmLeave())) return paintRules();   // Stay → repaint puts the picker back
   Lab.sel = id; Lab.editDef = null; renderRules();
+}
+function rulesCCSet(v) {
+  Lab.editDef.rules_profile.scoring.rating_countries =
+    (v || "").split(",").map((c) => c.trim().toUpperCase()).filter(Boolean);
+}
+// Per-course ORC columns, for a race whose courses score on different numbers. Blank = race-wide column.
+function rulesCourseCol(cid, v) {
+  const sc = Lab.editDef.rules_profile.scoring;
+  const old = (sc.course_columns || []).find((r) => r && r.course === cid) || {};
+  const rows = (sc.course_columns || []).filter((r) => r && r.course !== cid);
+  // a blank ToT keeps the row while it still names a ToD column (typing over a column passes through "")
+  if ((v || "").trim() || old.column_tod) rows.push({ course: cid, column: (v || "").trim(), column_tod: old.column_tod || "" });
+  sc.course_columns = rows;
+}
+function rulesCourseCols(d, sc) {
+  const courses = d.courses || [];
+  if (courses.length < 2) return "";
+  const colOf = (cid) => ((sc.course_columns || []).find((r) => r && r.course === cid) || {}).column || "";
+  return `<div class="opt-controls" style="margin-top:6px"><span class="muted" style="font-size:12px">Column by course:</span>
+    ${courses.map((c) => `<label>${esc(c.name || c.id)} <input class="ein" value="${attr(colOf(c.id))}" placeholder="same" oninput="rulesCourseCol('${attr(c.id)}', this.value)"></label>`).join("")}</div>`;
 }
 function modAdd() { Lab.editDef.rules_profile.modifications.push({ ref: "", rule: "", summary: "" }); paintRules(); }
 function modRemove(i) { rulesRemove(Lab.editDef.rules_profile.modifications, i, "rule change"); }
@@ -3178,7 +3345,8 @@ async function rulesSave() {
     if (r.saved) markSaved(sent, ed);
     paintRules();
     const m2 = document.getElementById("rulesMsg");
-    if (m2) m2.textContent = r.saved ? `Saved · ${(r.errors || []).length} error(s), ${(r.warnings || []).length} warning(s).` : "Save failed.";
+    if (m2) m2.textContent = r.saved ? `Saved · ${(r.errors || []).length} error(s), ${(r.warnings || []).length} warning(s).` +
+      (r.rating_fixes ? " " + r.rating_fixes.note : "") : "Save failed.";
     return !!r.saved;
   } catch (e) { const m2 = document.getElementById("rulesMsg"); if (m2) m2.textContent = "Save failed: " + e.message; return false; }
 }
@@ -3249,6 +3417,13 @@ function paintRules() {
         <label>Method ${ein("rules_profile.scoring.method", sc.method, "Single-Number ToT", "wide")}</label>
         <label>Ref ${ein("rules_profile.scoring.ref", sc.ref, "NOR §13")}</label>
       </div>
+      <div class="opt-controls" style="margin-top:8px">
+        <label>Rating ${esel("rules_profile.scoring.rating_system", sc.rating_system || "", ["", "ORC", "PHRF", "IRC", "ONE_DESIGN"])}</label>
+        <label>ORC column ${ein("rules_profile.scoring.rating_column", sc.rating_column, "e.g. TMF_Inshore")}</label>
+        <label>ToD column ${ein("rules_profile.scoring.rating_column_tod", sc.rating_column_tod, "optional")}</label>
+        <label>ORC countries <input class="ein" value="${attr((sc.rating_countries || []).join(","))}" placeholder="from venue + sail numbers" oninput="rulesCCSet(this.value)"></label>
+      </div>
+      ${rulesCourseCols(d, sc)}
       <div style="margin-top:10px"><b style="font-size:12px">Rule changes</b>
         <div class="muted" style="font-size:11px;margin:2px 0 6px">Reference and rule on top, full text below.</div>
         ${mods.length ? mods.map((m, i) => `<div class="req-block">
@@ -4477,9 +4652,15 @@ const Pol = { data: null, tws: null, config: "all", race: "all", split: "config"
 
 // Colour follows the sail, never the filter: each sail wears its SAIL_COLORS colour, the same one
 // as the crossover chart and its legend (#240). A two-sail set is drawn in its first sail's colour
-// with the second sail's colour dashed over it. Older sail logs call the kite "S2" (its cert id);
-// the server pools those under the crew name S1 (app/obspolar.py), so the tab only ever sees S1.
-const POL_ORDER = ["J1", "J1+J3", "A3", "A3+J1", "A3+SS", "S1", "S1+SS"];
+// with the second sail's colour dashed over it. Configs sort like the crossover chart (#305): by the
+// first sail's family (headsail, Code 0, asym, sym, staysail), then single sails before sets.
+const POL_FAMILY_ORDER = ["jib", "genoa", "code0", "asym", "sym", "staysail"];
+function polRank(cfg) {
+  if (!cfg || cfg === "—") return 99;
+  const parts = String(cfg).split("+"), i = POL_FAMILY_ORDER.indexOf(sailFamily(parts[0]));
+  return (i < 0 ? POL_FAMILY_ORDER.length : i) * 10 + Math.min(parts.length, 9);
+}
+const polOrder = (x, y) => polRank(x) - polRank(y) || x.localeCompare(y);
 const POL_SS = "#f28cc4";             // the staysail's colour, until SAIL_COLORS carries SS (#259)
 const POL_SPARE = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9"];
 function polSailHex(t) {
@@ -4510,7 +4691,7 @@ function polSwatch(cfg) {
 }
 // The logged configs in the crossover chart's order.
 function polConfigNames() {
-  return ((Pol.data || {}).configs || []).slice().sort((x, y) => (POL_ORDER.indexOf(x) + 1 || 99) - (POL_ORDER.indexOf(y) + 1 || 99) || x.localeCompare(y));
+  return ((Pol.data || {}).configs || []).slice().sort(polOrder);
 }
 
 // the race instances that carry measured cells, oldest first (the ramp's order)
@@ -4629,7 +4810,7 @@ function polSeries() {
   const by = {};
   cells.forEach((c) => { const k = c.config || "—"; (by[k] = by[k] || []).push(c); });
   return Object.keys(by)
-    .sort((x, y) => (POL_ORDER.indexOf(x) + 1 || 99) - (POL_ORDER.indexOf(y) + 1 || 99) || x.localeCompare(y))
+    .sort(polOrder)
     .map((name) => {
       const [color, color2] = polColors(name === "—" ? null : name);
       const pts = by[name].slice().sort((m, n) => m.twa - n.twa);

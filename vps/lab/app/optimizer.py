@@ -13,6 +13,8 @@ RRS 41: this is pre-race cloud homework, frozen at the gun.
 """
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import math
 import os
 import time
@@ -22,6 +24,7 @@ from shared import polar as SPOL
 from shared.boat_polar import NO_POLAR
 from . import polars as POL
 from . import sailplan
+from shared import sail_vocab
 
 HSTEP = 12          # heading fan resolution (deg)
 SECTOR = 3.0        # isochrone pruning bucket (deg of bearing from leg start)
@@ -33,6 +36,31 @@ FILL_NM = float(os.environ.get("C4_FORECAST_FILL_NM", "10"))
 GAPS_FILLED = "Forecast gaps filled from nearby."
 ROUTE_CONE_DEG = float(os.environ.get("ROUTE_CONE_DEG", "120"))    # prune headings >this° off the mark
 TACK_COST_S = float(os.environ.get("ROUTE_TACK_COST_S", "30"))     # time a tack/gybe costs (anti-over-tack)
+# ...unless the boat's profile gives its own (`tack_cost_s`, #305): set for one run by
+# `boat_tack_cost` (or optimize_course's `tack_cost_s`), read by `tack_cost_s()`.
+_TACK_S = contextvars.ContextVar("route_tack_cost_s", default=None)
+
+
+def tack_cost_s():
+    """Seconds a tack/gybe costs on this run: the boat's own, else ROUTE_TACK_COST_S."""
+    v = _TACK_S.get()
+    return TACK_COST_S if v is None else v
+
+
+@contextlib.contextmanager
+def boat_tack_cost(seconds):
+    """Route everything inside on this boat's tack cost (None = keep the current one)."""
+    tok = None
+    try:
+        if seconds is not None and math.isfinite(float(seconds)) and float(seconds) >= 0:
+            tok = _TACK_S.set(float(seconds))
+    except (TypeError, ValueError):
+        tok = None
+    try:
+        yield
+    finally:
+        if tok is not None:
+            _TACK_S.reset(tok)
 ISO_CURVES = int(os.environ.get("ROUTE_ISO_CURVES", "10"))         # frontier polylines emitted per leg (viz)
 ISO_PTS = int(os.environ.get("ROUTE_ISO_PTS", "60"))               # max points kept per frontier curve
 ISO_MAX = int(os.environ.get("ROUTE_ISO_MAX", "80"))               # cap on total frontier curves in a result
@@ -337,13 +365,19 @@ def _wave_reshape_decision(waves, stats):
             f"Waves are even across the course ({stats['spread']:.1f} m range), so they only slow the boat.")
 
 
-def _sail_polar_key(sail):
-    """The per-sail polar-curve key for a DISPLAY sail. The ORC cert rates ONE jib (J1); J2/J3 are the
-    crew's change-downs sharing the upwind slot, so they map to the J1 curve for SPEED (the polar can't
-    distinguish them — a jib change is a wind/depower call, not a speed one). The Code 0 is the same
-    kind of overlay in the jib slot's light reaching band (the cert doesn't rate it) — it reads the J1
-    curve too, so a J1↔C0 relabel is free, not a routing peel."""
-    return "J1" if sail and (sail[0] == "J" or sail == "C0") else sail
+def _sail_polar_key(sail, rated=(), src=None):
+    """The per-sail polar-curve key for a DISPLAY sail; `rated` = the boat's rated sails (its
+    curves / crossover inventory). The ORC cert rates ONE headsail; the other jibs (or genoas) are
+    the crew's change-downs sharing the upwind slot, so they map to the rated headsail's curve for
+    SPEED (the polar can't distinguish them — a jib change is a wind/depower call, not a speed one).
+    The Code 0 is the same kind of overlay in the jib slot's light reaching band (the cert doesn't
+    rate it) — it reads the headsail curve too, so a jib↔Code 0 relabel is free, not a routing
+    peel. Families come from the boat's sail names (shared/sail_vocab.py, #305)."""
+    if not sail or sail in rated:
+        return sail
+    if sail_vocab.family(sail, src) in sail_vocab.HEADSAILS + ("code0",):
+        return next((r for r in rated if sail_vocab.family(r, src) in sail_vocab.HEADSAILS), sail)
+    return sail
 
 
 def _sail_domains(SP):
@@ -358,11 +392,11 @@ def _sail_domains(SP):
     return out
 
 
-def _sail_speed(SP, dom, sail, tws, twa):
+def _sail_speed(SP, dom, sail, tws, twa, src=None):
     """A specific sail's polar boatspeed at (tws, twa) — interpolated on its own curve like the
     envelope (`shared.polar`), 0 outside its rated TWA domain (± SAIL_DOMAIN_MARGIN, held at the edge
     speed inside the margin). This is the speed of HOLDING `sail` here."""
-    key = _sail_polar_key(sail)
+    key = _sail_polar_key(sail, list(SP), src)        # src: the boat's sail_families (#305)
     pts = SP.get(key)
     if not pts:
         return 0.0
@@ -549,10 +583,13 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, deadline=None,
     No invented wind (#203): where the forecast has nothing, the nearest covered point's wind within
     FILL_NM stands in (`wind_filled` counts the path nodes sailed from on it); past that the route doesn't sail from that node,
     so a leg that needs it comes back `reached: False`."""
+    TACK_COST_S = tack_cost_s()        # this boat's (the nested steps below read it)
     direct = _hav_nm(slat, slon, dlat, dlon)
     SP = sail_polars or {}
     sail_aware = SAIL_AWARE and bool(SP)
     dom = _sail_domains(SP) if sail_aware else {}
+    # the boat's rated sails: the crossover table's (whole inventory, even under a gear loss) + curves
+    rated = list(sailplan.model(xo).get("inventory") or []) + [k for k in SP]
     # realized (achievable) speed = helm × sea state; only do the work when it actually bites. Helm may
     # be >1.0 (boat rated soft / sails above the cert), so trigger on any departure from 1.0, not just <1.
     realized_on = (abs(helm_factor - 1.0) > 1e-3) or (waves is not None and getattr(waves, "loaded", False))
@@ -571,15 +608,16 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, deadline=None,
         PEEL_HOLD_TOL off the optimal sail, then PEEL to the optimal sail at full (envelope) speed +
         a peel cost. A jib change-down (same aero family) is a free relabel, not a routing peel."""
         opt = sailplan.optimal_sail(tws, twa, jib_crossovers, sail_config, xo=xo)
-        if sail_aware and opt is not None and _sail_polar_key(opt) not in dom:
+        if sail_aware and opt is not None and _sail_polar_key(opt, rated, sail_config) not in dom:
             # gear-loss (exclude_sails): the cert-optimal sail has no curve in the FILTERED inventory
             # — the honest call is the fastest REMAINING sail (the rebuilt envelope already prices it)
-            opt = max(SP, key=lambda s: _sail_speed(SP, dom, s, tws, twa), default=None)
+            opt = max(SP, key=lambda s: _sail_speed(SP, dom, s, tws, twa, sail_config), default=None)
         if not sail_aware or opt is None:
             return (opt or cur_sail, sp_env, False)          # sail-aware off → envelope speed, no peel
-        if cur_sail is None or _sail_polar_key(cur_sail) == _sail_polar_key(opt):
+        if (cur_sail is None or _sail_polar_key(cur_sail, rated, sail_config)
+                == _sail_polar_key(opt, rated, sail_config)):
             return (opt, sp_env, False)                      # initial set, or same family → relabel free
-        hold = _sail_speed(SP, dom, cur_sail, tws, twa)
+        hold = _sail_speed(SP, dom, cur_sail, tws, twa, sail_config)
         if hold > 0.3 and hold >= sp_env * (1.0 - PEEL_HOLD_TOL):
             return (cur_sail, hold, False)                   # current sail still within tolerance → HOLD
         return (opt, sp_env, True)                           # too slow / infeasible here → PEEL
@@ -1165,6 +1203,7 @@ def _corner_leg(wf, P, leg, pts, dlat, dlon, leg_obs, helm_factor):
     its two boards (not the chord) are what's checked, priced and drawn (Codex on #287). Steps are
     a 0.1 nm circle's chords, so the boards stay close. Each tack put in costs TACK_COST_S of
     clock, like a tack anywhere else on the route (#293)."""
+    TACK_COST_S = tack_cost_s()
     boards, n_tacks = [], 0                 # (a, b, tack at b?)
     for a, b in zip(pts, pts[1:]):
         if leg_obs is not None and leg_obs.crosses(*a, *b):
@@ -1361,6 +1400,26 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
                     resolution="auto", cur=None, waves=None, helm_factor=1.0,
                     polar_adjustments=None, wave_coeffs=None, polar=None,
                     from_mark=0, exclude_sails=None, maneuver_prune_mult=1.0, sail_config=None,
+                    leg_obstacles=None, boat_polar=None, tack_cost_s=None):
+    """`_optimize_course` (below) on the boat's own tack cost when `tack_cost_s` is given (#305)."""
+    with boat_tack_cost(tack_cost_s):
+        return _optimize_course(
+            definition, course_id, start_epoch, wf, time_budget_s=time_budget_s,
+            obstacles=obstacles, avoid=avoid, source=source, safety_depth=safety_depth,
+            jib_crossovers=jib_crossovers, emit_exploration=emit_exploration,
+            per_model=per_model, resolution=resolution, cur=cur, waves=waves,
+            helm_factor=helm_factor, polar_adjustments=polar_adjustments,
+            wave_coeffs=wave_coeffs, polar=polar, from_mark=from_mark,
+            exclude_sails=exclude_sails, maneuver_prune_mult=maneuver_prune_mult,
+            sail_config=sail_config, leg_obstacles=leg_obstacles, boat_polar=boat_polar)
+
+
+def _optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=None,
+                    obstacles=None, avoid=True, source=None, safety_depth=None,
+                    jib_crossovers=None, emit_exploration=True, per_model=False,
+                    resolution="auto", cur=None, waves=None, helm_factor=1.0,
+                    polar_adjustments=None, wave_coeffs=None, polar=None,
+                    from_mark=0, exclude_sails=None, maneuver_prune_mult=1.0, sail_config=None,
                     leg_obstacles=None, boat_polar=None):
     """Route the whole course from its start through every mark to the finish via `wf`.
 
@@ -1406,6 +1465,8 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
         # helm factor is applied once, later, on whichever speed the router picks.
         SP = POL.adjust_sail_polars(POL.sail_polars(boat_polar), polar_adjustments, P)  # {} → envelope
         P = POL.apply_adjustments(P, polar_adjustments)
+    # the boat's rated sails, before any gear loss (a change-down maps to its rated headsail)
+    _rated = list(sailplan.model(xo).get("inventory") or []) + [k for k in SP]
     if exclude_sails and SP:
         # GEAR-LOSS PLAYS (Playbook v2 Phase C): route as if a sail is out of service — the router
         # must genuinely sail without it, so its curve is removed AND the envelope is rebuilt as the
@@ -1430,8 +1491,8 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
         """Per-leg display sail — remapped to the fastest REMAINING sail under a gear-loss
         exclusion (the crossover table doesn't know a sail is out of service)."""
         s = sailplan.optimal_sail(tws, twa, jib_crossovers, sail_config, xo=xo)
-        if s and _gone and _sail_polar_key(s).upper() in _gone and SP:
-            s = max(SP, key=lambda k: _sail_speed(SP, _dom, k, tws, twa), default=s)
+        if s and _gone and _sail_polar_key(s, _rated, sail_config).upper() in _gone and SP:
+            s = max(SP, key=lambda k: _sail_speed(SP, _dom, k, tws, twa, sail_config), default=s)
         return s
 
     all_leg_obstacles = leg_obstacles            # every leg of the course (the per-model fan's)
@@ -1523,7 +1584,7 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
         _sail = (_headline_sail(det["tws"], twa) if det and twa is not None else None)
         # main reef decoration (crew thresholds — depower in breeze / open the A3 slot); label-only
         _reef = (sailplan.reef_for(det["tws"], pos, _sail,
-                                   (sail_config or {}).get("main_reefs"))
+                                   (sail_config or {}).get("main_reefs"), sail_config)
                  if det and _sail else None)
         legs.append({
             "to": name, "seq": seq,

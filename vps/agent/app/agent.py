@@ -8,6 +8,7 @@ ingestion → DB → tools → web app — is exercisable with no LLM and no boa
 import json
 import os
 
+from shared import boat_polar as BP, boat_words, sail_vocab
 from shared.tool_contracts import AGENT_TOOLS
 from . import tools, race_mode
 
@@ -28,17 +29,83 @@ BOAT_ID = _require_setting("BOAT_ID")   # no default: another boat must never wr
 MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-8")
 API_KEY = os.environ.get("ANTHROPIC_API_KEY", "").strip()
 
-# The SR33's ORC Speed Guide (Best Performance polar) — the boat-speed "gospel". Loaded
-# as standing context so the agent can judge performance against target boatspeed (BTV),
-# optimum beat/run angles, target AWA, heel, and when to reef/flatten.
-_GUIDE_PATH = os.path.join(os.path.dirname(__file__), "..", "knowledge", "sr33_speed_guide.md")
-try:
-    SPEED_GUIDE = open(_GUIDE_PATH).read()
-except OSError:
-    SPEED_GUIDE = ""
+# The boat's own ORC Speed Guide (Best Performance polar) — the boat-speed "gospel" — and its
+# name come from ITS profile (#306, app/boatinfo.py). Loaded as standing context so the agent can
+# judge performance against target boatspeed (BTV), optimum beat/run angles, target AWA, heel,
+# and when to reef/flatten. A boat with no guide gets none, never another boat's.
 
-SYSTEM_PROMPT = f"""You are the SR33 AI Navigator — navigator, coach, and data historian
-for the racing yacht {BOAT_ID}. You answer the crew over a shared chat thread during
+
+def _coaching(short, guide, sails, kite):
+    if not guide:
+        return """COACHING — no speed guide is loaded for this boat. Judge speed with the polar tool
+(get_polar_target) only, and say the targets come from the polar. If the polar tool has no
+polar either, say so plainly: you cannot judge boatspeed without one. If true wind (TWS/TWA)
+is unavailable, say so — without it you cannot place the boat on the polar."""
+    return f"""COACHING — judge speed against the {short + ' ' if short else ''}ORC Speed Guide provided below (the boat-speed
+gospel). It is the source of truth for target boatspeed (BTV) at a given TWS/TWA, the
+optimum beat/run angles (best VMG), target AWA for trim reference, expected heel, and the
+Reef/Flat depowering points. When asked about performance, compare live STW to the BTV at
+the current TWS/TWA, and live heel/AWA to the targets. The polar tool returns the same data
+numerically; the guide gives you the full curve and the surrounding context. If true wind
+(TWS/TWA) is unavailable, say so — without it you cannot place the boat on the polar.
+
+SAIL SELECTION — each polar row lists the optimal Sail, and each TWS has a Sail plan
+showing which sail to fly across the wind range ({sails}). Use it to recommend the right sail and to call CROSSOVERS / PEELS: when the optimal
+sail changes as the boat bears away/heads up or the breeze builds/drops, say so explicitly
+(e.g. "past 95° TWA the {kite} is faster than the jib — time to hoist"). Note that sail changes
+take time and crew, so flag a change when the boat is clearly in or approaching the new
+sail's range, not for a momentary wiggle. The get_sail_advice tool returns this structured
+(optimal sail, the TWA zones, the next crossover, and whether the crew's hoisted sail is
+wrong) — use it for precise peel calls and crossover distances."""
+
+
+def _prompt_parts():
+    """(profile, speed guide markdown, the guide's sails) of the boat this agent serves."""
+    from . import boatinfo
+    prof = boatinfo.profile() or {}
+    guide = boatinfo.speed_guide()
+    rated = []
+    if guide:
+        for rows in BP.parse_speed_guide(guide).values():
+            for r in rows:
+                # the boat's own name when the cell starts with one (BIG-RED), else the token
+                t = sail_vocab.match(r.get("sail") or "", prof) or sail_vocab.token(r.get("sail"))
+                if t and t not in rated:
+                    rated.append(t)
+    return prof, guide, rated
+
+
+def build_system_prompt(prof, guide, rated):
+    """The coach's instructions for this boat (its name, its guide, its sails)."""
+    short = boat_words.short(prof)
+    sails = sail_vocab.describe_list(rated or sail_vocab.names(prof), prof) or "the boat's sails"
+    kites = sail_vocab.of_family("asym", prof, rated)
+    kite = kites[0] if kites else "kite"
+    return _SYSTEM_TEMPLATE.format(
+        navigator=f"{short} AI Navigator" if short else "AI Navigator",
+        boat_id=prof.get("boat_id") or os.environ.get("BOAT_ID") or BOAT_ID,
+        coaching=_coaching(short, guide, sails, kite))
+
+
+def system_blocks():
+    """The system blocks sent to the API: instructions + the boat's speed guide as a cached block
+    (it's large and unchanging, so caching it keeps per-message cost low). Rebuilt per call, so a
+    Deploy push or a boat change aboard is picked up."""
+    prof, guide, rated = _prompt_parts()
+    blocks = [{"type": "text", "text": build_system_prompt(prof, guide, rated)}]
+    if guide:
+        short = boat_words.short(prof)
+        blocks.append({
+            "type": "text",
+            "text": f"## {(short.upper() + ' ') if short else ''}ORC SPEED GUIDE (reference)\n\n"
+                    + guide,
+            "cache_control": {"type": "ephemeral"},
+        })
+    return blocks
+
+
+_SYSTEM_TEMPLATE = """You are the {navigator} — navigator, coach, and data historian
+for the racing yacht {boat_id}. You answer the crew over a shared chat thread during
 distance races and practice.
 
 Ground every factual claim in the tools; never invent telemetry. Always note data
@@ -49,23 +116,7 @@ sentence (about 12 words). Keep the numbers; drop jargon and never name tools, f
 data sources unless asked. WIND LANGUAGE: say the wind shifted RIGHT or LEFT — never
 "veer", "veered", "back" or "backed". Units: knots, degrees true unless told otherwise.
 
-COACHING — judge speed against the SR33 ORC Speed Guide provided below (the boat-speed
-gospel). It is the source of truth for target boatspeed (BTV) at a given TWS/TWA, the
-optimum beat/run angles (best VMG), target AWA for trim reference, expected heel, and the
-Reef/Flat depowering points. When asked about performance, compare live STW to the BTV at
-the current TWS/TWA, and live heel/AWA to the targets. The polar tool returns the same data
-numerically; the guide gives you the full curve and the surrounding context. If true wind
-(TWS/TWA) is unavailable, say so — without it you cannot place the boat on the polar.
-
-SAIL SELECTION — each polar row lists the optimal Sail, and each TWS has a Sail plan
-showing which sail to fly across the wind range (J1 jib, A3 asymmetric, S1 symmetric
-kite). Use it to recommend the right sail and to call CROSSOVERS / PEELS: when the optimal
-sail changes as the boat bears away/heads up or the breeze builds/drops, say so explicitly
-(e.g. "past 95° TWA the A3 is faster than the jib — time to hoist"). Note that sail changes
-take time and crew, so flag a change when the boat is clearly in or approaching the new
-sail's range, not for a momentary wiggle. The get_sail_advice tool returns this structured
-(optimal sail, the TWA zones, the next crossover, and whether the crew's hoisted sail is
-wrong) — use it for precise peel calls and crossover distances.
+{coaching}
 
 ROUTING / WEATHER — get_route returns the isochrone optimal route to the next mark or finish
 (ETA, tacks, recommended first heading/tack) computed on the polars through the wind forecast;
@@ -162,15 +213,9 @@ and the GPS 24xd; heading from several). Never treat one number as truth:
   failing mid-race shouldn't blind you, but the crew must know they're on a backup.
 Your job is to be the crew's sanity-check on the instruments, not just a readout."""
 
-# System sent to the API: instructions + the speed guide as a cached block (it's large and
-# unchanging, so caching it keeps per-message cost low).
-SYSTEM_BLOCKS = [{"type": "text", "text": SYSTEM_PROMPT}]
-if SPEED_GUIDE:
-    SYSTEM_BLOCKS.append({
-        "type": "text",
-        "text": "## SR33 ORC SPEED GUIDE (reference)\n\n" + SPEED_GUIDE,
-        "cache_control": {"type": "ephemeral"},
-    })
+# The blocks at import (kept for readers of the module); each call uses system_blocks().
+SYSTEM_BLOCKS = system_blocks()
+SYSTEM_PROMPT = SYSTEM_BLOCKS[0]["text"]
 
 
 def _withheld(action: str, m: str) -> str | None:
@@ -358,7 +403,8 @@ def _claude_loop(message: str, history: list) -> str:
     # dispatch-level refusal below is defense in depth (the model can't call what it can't see, but
     # if it ever names a gated tool anyway, it gets the refusal, not data).
     racing = race_mode.racing()
-    system = ([{"type": "text", "text": RACE_MODE_NOTE}] + SYSTEM_BLOCKS) if racing else SYSTEM_BLOCKS
+    blocks = system_blocks()
+    system = ([{"type": "text", "text": RACE_MODE_NOTE}] + blocks) if racing else blocks
     tool_list = race_mode.allowed_tools(AGENT_TOOLS)
     messages = list(history) + [{"role": "user", "content": message}]
     for _ in range(8):  # bounded tool-use turns

@@ -178,7 +178,11 @@ def _template_narrative(m, mode):
 def _llm_narrative(m, mode):
     import anthropic
     client = anthropic.Anthropic(api_key=API_KEY)
-    instr = ("You are the SR33 race navigator writing a crew " + mode + ". Use plain, short "
+    from . import boatinfo
+    from shared import boat_words
+    short = boat_words.short(boatinfo.profile())            # the boat's own name (#306)
+    instr = ("You are the " + (short + " " if short else "") + "race navigator writing a crew "
+             + mode + ". Use plain, short "
              "sentences (about 12 words each), lead with the takeaway, keep the numbers given, and "
              "cover the 2-3 things that matter most (speed vs target, wind pattern/shifts, any "
              "safety alerts). No jargon. Say the wind shifted right or left; never say "

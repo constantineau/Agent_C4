@@ -21,6 +21,7 @@ holding module state is fine (the same shape as the cloud alerting loop).
 import os
 
 from . import adherence as adherence_mod
+from . import boatname
 from . import brief as brief_mod
 from . import ground
 
@@ -709,7 +710,7 @@ def step(route, snapshot, playbook=None, engine=None):
 # Narration — the LLM phrases the callouts; the deterministic text is the fallback.
 # ---------------------------------------------------------------------------------------------
 _NARR_SYSTEM = (
-    "You are the onboard tactical copilot for the SR33 racing yacht 'C4', speaking to the crew. "
+    "You are the onboard tactical copilot for {boat}, speaking to the crew. "
     "You are given one or more CALLOUTS the engine has already computed and grounded. Restate the "
     "most important one or two as a single short coach line — calm and practical like a good "
     "navigator, most urgent first, at most two short sentences (about 12 words each), leading with "
@@ -751,7 +752,8 @@ def narrate(callouts, llm=None):
     import json
     from .llm import LLMUnavailable
     try:
-        msg = llm.chat([{"role": "system", "content": _NARR_SYSTEM},
+        msg = llm.chat([{"role": "system",
+                          "content": _NARR_SYSTEM.replace("{boat}", boatname.describe())},
                         {"role": "user", "content": "Callouts:\n" + json.dumps(payload, ensure_ascii=False)}])
         text = (msg.get("content") or "").strip()
     except LLMUnavailable:

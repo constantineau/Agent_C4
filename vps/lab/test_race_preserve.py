@@ -72,6 +72,45 @@ def test_draft_with_real_values_wins():
     assert d["learnings_notes"] == "old notes"
 
 
+def test_reingest_draft_keeps_confirmed_rating_setup():
+    # Codex on #333: a re-read of the NOR/SI that names no column must not wipe the one the user
+    # picked, then clear every imported rating against the blank setup
+    prior = {"race_id": "t-race", "name": "T", "venue_country": "GBR",
+             "rules_profile": {"scoring": {"rating_system": "ORC", "rating_column": "TMF_Inshore"}},
+             "fleet": [{"boat": "X", "rating": 1.2, "rating_col": "TMF_Inshore", "source": "yb+orc"}]}
+    d = {"race_id": "t-race", "name": "T (SIs)", "fleet": [], "rules_profile": {"scoring": {}}}
+    orig = main.store.get_race
+    main.store.get_race = lambda rid: json.loads(json.dumps(prior))
+    try:
+        main._write_race(d, draft=True)
+    finally:
+        main.store.get_race = orig
+    sc = d["rules_profile"]["scoring"]
+    assert sc["rating_column"] == "TMF_Inshore" and sc["rating_system"] == "ORC", sc
+    assert d["fleet"][0]["rating"] == 1.2, d["fleet"]
+    assert d["venue_country"] == "GBR"
+    # what the new extraction does name wins
+    d2 = {"race_id": "t-race", "fleet": [], "rules_profile": {"scoring": {"rating_column": "TMF_Offshore"}}}
+    main.store.get_race = lambda rid: json.loads(json.dumps(prior))
+    try:
+        main._write_race(d2, draft=True)
+    finally:
+        main.store.get_race = orig
+    assert d2["rules_profile"]["scoring"]["rating_column"] == "TMF_Offshore"
+    # a new race-wide column replaces an old per-course one; it doesn't sit under it
+    prior3 = dict(prior, rules_profile={"scoring": {"rating_system": "ORC",
+                  "course_columns": [{"course": "long", "column": "OLD"}]}})
+    d3 = {"race_id": "t-race", "fleet": [], "rules_profile": {"scoring": {"rating_column": "NEW",
+          "course_columns": []}}}
+    main.store.get_race = lambda rid: json.loads(json.dumps(prior3))
+    try:
+        main._write_race(d3, draft=True)
+    finally:
+        main.store.get_race = orig
+    sc3 = d3["rules_profile"]["scoring"]
+    assert sc3["rating_column"] == "NEW" and not sc3.get("course_columns"), sc3
+
+
 if __name__ == "__main__":
     n = 0
     for name, fn in list(globals().items()):

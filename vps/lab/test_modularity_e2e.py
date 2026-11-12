@@ -451,8 +451,8 @@ def test_retro_has_no_bayview_default():
     assert not any(re.search(r"bayview|cove_island", d, re.I) for d in defaults), defaults
 
 
-@xfail("#311", "an ORC fleet for a race with no known ToT column gets the offshore number silently")
 def test_fleet_ratings_say_which_number():
+    """#311: a race that names no ORC column gets no rating and a plain note, not the offshore one."""
     rec = {"YachtName": "Bravo", "SailNo": "USA 5288", "GPH": 659.5, "TMF_Offshore": 0.6721,
            "Class": "C&C 35"}
     idx = {"by_sail": {fleetimport._norm_sail("USA 5288"): rec}, "by_name": {}, "n": 1}
@@ -465,7 +465,9 @@ def test_fleet_ratings_say_which_number():
         fleetimport._orc_dump = real
     assert res.get("ok") and res.get("matched") == 1
     head = {k: v for k, v in res.items() if k != "entries"}
-    assert re.search(r"offshore|generic|no (known|race)", json.dumps(head).lower()), head
+    assert re.search(r"offshore|generic|no (known|race)|column unknown", json.dumps(head).lower()), head
+    assert res["note"] == "Rating column unknown: pick one", head
+    assert res["entries"][0].get("rating") is None, res["entries"]   # no guessed offshore number
 
 
 def test_gun_without_timezone_is_flagged():

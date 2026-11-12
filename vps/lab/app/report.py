@@ -320,8 +320,11 @@ def build_gameplan_pdf(payload: dict) -> bytes:
         story.append(t)
 
     story.append(Spacer(1, 14))
+    from shared import boat_words           # the boat's own name (#306), never a fixed one
+    _short = boat_words.short({"name": payload.get("boat")}) if payload.get("boat") else ""
+    _polars = f"the {_esc(_short)} polars" if _short else "the boat's polars"
     story.append(Paragraph(
-        "Pre-race cloud homework — frozen at the gun (RRS 41). Routes optimize on the SR33 polars "
+        f"Pre-race cloud homework — frozen at the gun (RRS 41). Routes optimize on {_polars} "
         "through a multi-model GRIB forecast; confidence = model agreement. Verify against the "
         "official course &amp; the chart before racing.", st["small"]))
     return _render(story)
