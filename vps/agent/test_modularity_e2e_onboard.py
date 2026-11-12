@@ -200,6 +200,56 @@ def test_coach_prompt_is_bravos():
     assert "sr33" not in text.lower()
 
 
+# ==== #313: Bravo's own kit (sensor priority, house bank, Orin, plotter) ==========================
+def _push_profile(profile):
+    """Bravo's profile as the Lab's Deploy push carries it (POST /reroute/assets)."""
+    from app import hardware
+    a = client.post("/reroute/assets", json={
+        "schema": "c4.orin-assets/v1", "race_id": "channel-offshore-test", "course_id": "c",
+        "boat_id": "bravo", "boat": profile, "boat_version": boat_profile.version(profile),
+        "chart": None, "polar": boat_polar.resolve(profile)})
+    assert a.status_code == 200 and a.json().get("loaded"), a.text
+    hardware.clear_cache()
+
+
+BRAVO_KIT = {"source_priority": {"heel": ["h5000", "zg100"], "tws": ["h5000", "derived"]},
+             "battery": {"nominal_v": 24, "chemistry": "lithium"}, "orin": False, "plotter": False}
+
+
+def test_kit_is_bravos_own():
+    """Bravo's profile says what it carries: its sensor priority, a 24 V lithium bank, no Orin
+    and no plotter. Each is honoured, and nothing of sr33's kit is left in force."""
+    from app import gpsout, power
+    from shared import boat_hardware, source_policy
+    _push_profile(dict(BRAVO, hardware=BRAVO_KIT))
+    try:
+        assert source_policy.matchers_for("heel") == ["h5000", "zg100"]
+        assert source_policy.matchers_for("navigation.speedOverGround") == []   # none of sr33's
+        lines = power._boat_lines()
+        assert lines["floor_v"] == 24.0 and lines["chemistry"] == "lithium" and not lines["assumed"]
+        r = client.post("/playbook/load", json={"bundle": bravo_bundle()}).json()
+        assert r["loaded"] and r["copilot"] == {"loaded": False, "absent": True,
+                                                 "detail": boat_hardware.NO_ORIN}, r
+        assert gpsout.show()["note"] == boat_hardware.NO_PLOTTER
+    finally:
+        _push_profile(BRAVO)
+
+
+def test_kit_unset_is_said_never_sr33s():
+    """Bravo's profile says nothing of its kit: no priority (freshest source, said), a 12 V
+    lead-acid bank that the tile calls assumed, an Orin. Never sr33's devices."""
+    from app import power, sensor_health
+    from shared import boat_hardware, source_policy
+    _push_profile(BRAVO)
+    assert source_policy.active_priority() == {}
+    ch = {"heel": {"preferred": {"source": "can0.7", "value": 3.0, "age_s": 1},
+                   "readings": [{"source": "can0.7", "value": 3.0, "age_s": 1}]}}
+    pb = sensor_health.assess_provenance(ch)["checks"]["policy_binds"]
+    assert pb["no_policy"] and pb["reason"] == boat_hardware.NO_PRIORITY, pb
+    lines = power._boat_lines()
+    assert lines["floor_v"] == 11.0 and lines["assumed"] is True
+
+
 # ==== boat id: never "sr33" by default ===========================================================
 ENGINE_MODULES = ["app.datasource", "app.datasource_onboard", "app.onboard_conditions", "app.ais",
                   "app.fatigue", "app.navigator", "app.sensor_health", "engine_app"]

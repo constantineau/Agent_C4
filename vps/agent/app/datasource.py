@@ -29,6 +29,8 @@ except ImportError:
 
 from shared.boat_id import require as _require_setting  # noqa: E402
 BOAT_ID = _require_setting("BOAT_ID")   # no default: another boat must never write as sr33 (#307)
+# the boat's own sensor priority (its profile's hardware block, #313) for every priority read
+from . import hardware  # noqa: E402,F401
 
 # `source_priority` is tuned live in the DB; a few seconds' cache keeps one navigator read (seven
 # latest_value calls plus the series) to a single priority query.

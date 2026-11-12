@@ -3,9 +3,10 @@
 -- against the source's DEVICE IDENTITY (manufacturer + model + label) via
 -- `shared/n2k_sources.py` — not against the bare `$source` label. Idempotent.
 --
--- ⚠️ Keep in lockstep with `shared/source_policy.DEFAULT_PRIORITY`, which is what the BOAT
--- uses (the Pi has no Postgres). `vps/agent/test_source_priority.py` parses this file and
--- asserts the two agree, and that every matcher below resolves to something that publishes.
+-- ⚠️ Keep in lockstep with the boat's profile, `hardware.source_priority` in
+-- `vps/lab/boats/sr33.json` (#313), which is what the BOAT uses (the Pi has no Postgres).
+-- `vps/agent/test_source_priority.py` parses this file and asserts the two agree, and that
+-- every matcher below resolves to something that publishes.
 --
 -- Revised 2026-09-07 after measuring the Jul 18 race. Until then the matchers below were
 -- tested with `match in $source.lower()` against labels like `n2k-socketcan.15`, so NONE of
@@ -65,7 +66,7 @@ INSERT INTO source_priority (boat_id, channel, rank, match, note) VALUES
  -- ranking whose only protection is a filter somewhere else. Reading another vessel's position
  -- as own-ship already cost a race (see the archiver context filter and its regression test);
  -- ranking the AIS box for lat/lon is that bug written down as an intention, waiting for the
- -- filter to regress. Keep in lockstep with shared/source_policy.DEFAULT_PRIORITY.
+ -- filter to regress. Keep in lockstep with the profile (vps/lab/boats/sr33.json).
  ('sr33','sog',1,'24xd',NULL),('sr33','sog',2,'orca',NULL),('sr33','sog',3,'943',NULL),
  ('sr33','cog',1,'24xd',NULL),('sr33','cog',2,'orca',NULL),('sr33','cog',3,'943',NULL),
  ('sr33','lat',1,'24xd',NULL),('sr33','lat',2,'orca',NULL),('sr33','lat',3,'943',NULL),

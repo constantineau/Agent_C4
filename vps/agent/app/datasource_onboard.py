@@ -34,6 +34,7 @@ from datetime import datetime, timedelta, timezone
 from shared import n2k_sources
 from shared import source_policy
 from shared import units
+from . import hardware  # noqa: E402,F401  (installs the current boat's sensor priority, #313)
 
 from shared.boat_id import require as _require_setting  # noqa: E402
 BOAT_ID = _require_setting("BOAT_ID")   # no default: another boat must never write as sr33 (#307)

@@ -12,9 +12,9 @@ So the assertions here are mostly about *bindability*, not about ranking taste:
 
   - every matcher in the SQL seed resolves to a device on this boat's bus (or to a real
     non-bus source label like `derived-data`)
-  - the SQL seed and `shared/source_policy.DEFAULT_PRIORITY` agree, channel by channel and
-    rank by rank — the boat reads the Python, the cloud reads the table, and nothing else
-    stops them drifting apart
+  - the SQL seed and the boat's profile (`hardware.source_priority` in vps/lab/boats/sr33.json,
+    #313) agree, channel by channel and rank by rank — the boat reads the profile, the cloud
+    reads the table, and nothing else stops them drifting apart
   - `CHANNEL_FOR_PATH` covers exactly the paths `tools.PRESENT` publishes
   - failover, unranked passthrough, and replay-safe (relative, not wall-clock) freshness
 
@@ -31,6 +31,13 @@ for _p in (_ROOT, os.path.join(_ROOT, "vps", "agent")):
         sys.path.insert(0, _p)
 
 from shared import n2k_sources, source_policy   # noqa: E402
+# the reference boat's own sensor priority, from its profile (#313): these checks are about its bus
+import json as _json   # noqa: E402
+from shared import boat_hardware as _BH, source_policy as _SP   # noqa: E402
+with open(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                       "vps", "lab", "boats", "sr33.json")) as _f:
+    SR33_PRIORITY = _BH.source_priority(_json.load(_f))
+_SP.set_priority(SR33_PRIORITY)
 
 ok = True
 
@@ -121,10 +128,10 @@ check("the policy's own matchers resolve too",
       n2k_sources.unresolved(source_policy.all_matchers(), DEV, NON_BUS_LABELS) == [])
 
 # --- SQL seed vs the committed policy the boat uses -------------------------
-print("source_priority.sql and shared/source_policy agree:")
-check("same channels", sorted(seed) == sorted(source_policy.DEFAULT_PRIORITY))
+print("source_priority.sql and the boat's profile (hardware.source_priority) agree:")
+check("same channels", sorted(seed) == sorted(SR33_PRIORITY))
 for ch in sorted(seed):
-    check(f"  {ch}: {seed[ch]}", seed[ch] == source_policy.DEFAULT_PRIORITY.get(ch))
+    check(f"  {ch}: {seed[ch]}", seed[ch] == SR33_PRIORITY.get(ch))
 
 print("CHANNEL_FOR_PATH matches tools.PRESENT:")
 present = re.findall(r'"([a-zA-Z0-9.]+)":\s*\("([a-z_]+)"',

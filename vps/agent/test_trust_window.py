@@ -8,7 +8,16 @@ No DB or network.
 
 Run:  PYTHONPATH=vps/agent:. python3 vps/agent/test_trust_window.py
 """
+import os
+
 from app import sensor_health, trust_window as TW
+# the reference boat's own sensor priority, from its profile (#313): these checks are about its bus
+import json as _json   # noqa: E402
+from shared import boat_hardware as _BH, source_policy as _SP   # noqa: E402
+with open(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                       "vps", "lab", "boats", "sr33.json")) as _f:
+    SR33_PRIORITY = _BH.source_priority(_json.load(_f))
+_SP.set_priority(SR33_PRIORITY)
 
 ok = True
 

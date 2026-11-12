@@ -31,7 +31,7 @@ import time
 import urllib.error
 import urllib.request
 
-from shared import staleness
+from shared import boat_hardware, staleness
 
 from . import datasource, deviation, landchart, orinroute, reoptimize, routing
 from . import navigator as NAV
@@ -52,6 +52,18 @@ POST_TIMEOUT_S = float(os.environ.get("GPSOUT_POST_TIMEOUT_S", "3"))
 # route on the plotter.
 DEV_TOL_NM = float(os.environ.get("GPSOUT_DEV_TOL_NM", "0.05"))
 HARD_MAX_WPTS = int(os.environ.get("GPSOUT_HARD_MAX_WPTS", "250"))
+# The boat's own plotter (#313, its profile's `hardware.plotter`): a smaller per-route limit there
+# lowers both caps; a boat with no plotter never sends ("No plotter on this boat. Not sent.").
+NO_PLOTTER = boat_hardware.NO_PLOTTER
+
+
+def _plotter():
+    """The current boat's plotter; a plotter of unknown limit when the profile can't be read."""
+    try:
+        from . import hardware
+        return hardware.plotter()
+    except Exception:  # noqa: BLE001
+        return {"present": True, "model": None, "max_route_waypoints": None}
 TOO_DETAILED = "Route too detailed for the GPS. Not sent."
 NO_SAFE_WPT = "No safe waypoint from here. Press Re-route now."
 NO_SHORE = "GPS route doesn't check the shore."
@@ -569,6 +581,8 @@ def show(source: str = "playbook", variant=None, route=None):
     the broadcast all see ONE course, so a reload can't land between the check and the send.
     This runs in the engine process, the same one that serves /course/load; the n2kout POST is
     bounded by POST_TIMEOUT_S, so the lock is held a few seconds at most."""
+    if not _plotter()["present"]:
+        return {"shown": False, "dest_index": None, "note": NO_PLOTTER}
     with orinroute.COURSE_LOCK:
         # the live leg after the send (course token, mark progress, leg checks) follows the
         # ACTIVE course, so the route must be that course. The iPad never names another one
@@ -698,8 +712,9 @@ def _show(source: str = "playbook", variant=None, route=None):
     except CourseUnreadable:
         return {"shown": False, "dest_index": None, "note": COURSE_UNREADABLE}
     blocked = _blocked_fn(bundle, obstacles)
-    idx = _downsample_idx(path, MAX_WPTS, set(verts.values()), blocked)
-    if len(idx) > HARD_MAX_WPTS:
+    cap = min(HARD_MAX_WPTS, _plotter()["max_route_waypoints"] or HARD_MAX_WPTS)
+    idx = _downsample_idx(path, min(MAX_WPTS, cap), set(verts.values()), blocked)
+    if len(idx) > cap:
         return {"shown": False, "note": TOO_DETAILED}
     pts = [path[i] for i in idx]
     where = {i: j for j, i in enumerate(idx)}

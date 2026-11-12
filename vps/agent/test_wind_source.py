@@ -31,6 +31,13 @@ from freezegun import freeze_time   # noqa: E402
 from app import datasource, datasource_onboard as ds, tactics   # noqa: E402
 from shared import source_policy   # noqa: E402
 from app import navigator as NAV   # noqa: E402
+# the reference boat's own sensor priority, from its profile (#313): these checks are about its bus
+import json as _json   # noqa: E402
+from shared import boat_hardware as _BH, source_policy as _SP   # noqa: E402
+with open(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                       "vps", "lab", "boats", "sr33.json")) as _f:
+    SR33_PRIORITY = _BH.source_priority(_json.load(_f))
+_SP.set_priority(SR33_PRIORITY)
 
 ok = True
 _REAL_LATEST, _REAL_NAVIGATOR = NAV._latest, NAV.get_navigator
@@ -255,7 +262,7 @@ def run_cloud(rows, prio):
     return cloud
 
 
-SEEDED = {k: list(v) for k, v in source_policy.DEFAULT_PRIORITY.items()}
+SEEDED = {k: list(v) for k, v in SR33_PRIORITY.items()}
 # The source pick judges freshness on the wall clock (#221, same rule as /conditions), so every
 # cloud read below runs on the fixtures' clock, not today's.
 _cloud_clock = freeze_time(NOW)

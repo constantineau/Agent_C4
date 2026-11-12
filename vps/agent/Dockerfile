@@ -12,6 +12,8 @@ COPY vps/agent/knowledge/ ./knowledge/
 # each boat's sail crossover model (its per-TWS toss-up overlaps feed the /sail dial), read by the
 # boat id this agent runs for (knowledge/<BOAT_ID>_crossovers.json, #304); canonical copies in db/seed
 COPY vps/db/seed/*_crossovers.json ./knowledge/
+# each boat's bundled profile (#306): the coach names the boat it runs for (knowledge/boats/<BOAT_ID>.json)
+COPY vps/lab/boats/ ./knowledge/boats/
 COPY vps/agent/app/ ./app/
 
 EXPOSE 8000
