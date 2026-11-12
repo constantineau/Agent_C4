@@ -93,7 +93,7 @@ def clear_state():
 # ---------------------------------------------------------------------------- crew sail state
 
 def get_sail_state():
-    """The crew-set sail state: {'hoisted': 'A3'|None, 'out_of_service': ['S1', ...], 'ts': epoch}.
+    """The crew-set sail state: {'hoisted': <sail>|None, 'out_of_service': [<sail>, ...], 'ts': epoch}.
     Persisted in the engine kv (onboard) / app_state (cloud) so the matcher + copilot read one
     truth. Empty dict when never set."""
     try:
@@ -102,15 +102,11 @@ def get_sail_state():
         return {}
 
 
-# ordered by "which sail is driving" — the legacy single-sail mirror picks the first flying
-_PRIMARY_ORDER = ("A3", "S1", "C0", "J1", "J2", "J3", "SS")
-
-
 def _primary(flying):
-    for s in _PRIMARY_ORDER:
-        if s in flying:
-            return s
-    return flying[0] if flying else None
+    """The driving sail of the flying set — the legacy single-sail mirror: by family, the kite
+    over the Code 0 over the headsail over the staysail (#305: the boat's own names)."""
+    from shared import sail_vocab
+    return min(flying, key=sail_vocab.drive_rank) if flying else None
 
 
 def set_sail_state(hoisted=None, flying=None, reef=None, out_of_service=None):

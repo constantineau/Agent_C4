@@ -67,8 +67,8 @@ check("G66 the empty state links to Races and keeps the retro card",
       re.search(r'if \(!Deb\.raceId\) \{[^}]*href="#races".*?retroCard\(\)', paint, re.S))
 
 print("#240 Polar sails use the crew names and the chart's colours:")
-check("the kite is S1 in the display order, never S2",
-      re.search(r'const POL_ORDER = \[[^\]]*"S1"', JS) and not re.search(r'const POL_ORDER = \[[^\]]*"S2"', JS))
+check("the display order is by sail family, never a fixed list of one boat's names (#305)",
+      "const POL_FAMILY_ORDER" in JS and "polOrder" in JS and "const POL_ORDER" not in JS)
 check("logged S2 is pooled as S1 on the server, so the page has no S2 rename of its own",
       "polSailName" not in JS and "(logged " not in JS)
 check("sail colours come from SAIL_COLORS (one colour per sail across the Lab)",

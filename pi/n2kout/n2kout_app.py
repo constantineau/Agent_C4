@@ -47,6 +47,8 @@ ROUTE_EVERY_S = float(os.environ.get("N2KOUT_ROUTE_EVERY_S", "5"))
 NAV_EVERY_S = float(os.environ.get("N2KOUT_NAV_EVERY_S", "1"))
 # the engine's own-ship fix (source-policy chosen, with its receive time) + the course token
 FIX_URL = os.environ.get("N2KOUT_FIX_URL", "http://127.0.0.1:8200/gps/fix")
+# the name the plotter lists us under (126996, #306): set per boat, e.g. "<boat> Navigator"
+PRODUCT_MODEL = os.environ.get("N2KOUT_MODEL", "").strip() or "Agent C4 Navigator"
 FIX_TIMEOUT_S = float(os.environ.get("N2KOUT_FIX_TIMEOUT_S", "0.5"))
 # the engine approves every new leg against land / islands / zones (n2kout holds none)
 LEG_CHECK_URL = os.environ.get("N2KOUT_LEG_CHECK_URL", "http://127.0.0.1:8200/gps/leg-check")
@@ -448,7 +450,7 @@ class _BusThread(threading.Thread):
         if req == 60928:
             self.claim()
         elif req == 126996:
-            self.sender.send(*n2k.encode_126996())
+            self.sender.send(*n2k.encode_126996(PRODUCT_MODEL))
         elif req == 126464:
             self.sender.send(*n2k.encode_126464(0, n2k.TX_PGNS))
             self.sender.send(*n2k.encode_126464(1, n2k.RX_PGNS))

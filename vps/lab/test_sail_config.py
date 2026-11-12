@@ -154,5 +154,30 @@ check("legs' beat/reach/run map to real scan angles",
       SYN._POS_TWA["beat"] == 45.0 and SYN._POS_TWA["reach"] == 100.0
       and SYN._POS_TWA["run"] == 150.0)
 
+# ---- 7) another boat's own sail names (#305) -------------------------------------------------------
+print("7) the boat's own sail names, by family")
+check("an A2 opens the slot like the A3 (any asym)",
+      (sailplan.reef_for(17, "run", "A2", mr) or {}).get("why") == "open the slot between the A2 and the main")
+check("a symmetric S2 gets no slot reef", sailplan.reef_for(17, "run", "S2", mr) is None)
+gx = [{"sail": "G1", "tws_max": 12}, {"sail": "G2", "tws_min": 12, "tws_max": 18}, {"sail": "G3", "tws_min": 18}]
+check("genoa change-downs pick by TWS", [sailplan.jib_for_tws(t, gx, "G1") for t in (8, 15, 22)]
+      == ["G1", "G2", "G3"])
+check("no change-downs: the rated headsail itself", sailplan.jib_for_tws(15, [], "G1") == "G1")
+check("a genoa change-down and a Code 0 read the rated headsail's curve",
+      OPT._sail_polar_key("G2", ["G1", "A2"]) == "G1" and OPT._sail_polar_key("C0", ["G1"]) == "G1"
+      and OPT._sail_polar_key("A2", ["G1", "A2"]) == "A2")
+check("sr33 unchanged: J2/J3/C0 read the J1 curve",
+      all(OPT._sail_polar_key(s, ["J1", "A3", "S1"]) == "J1" for s in ("J2", "J3", "C0")))
+from app import playbook as PB   # noqa: E402
+check("gear-loss plays for every kite in the plan, asym first",
+      PB._gear_sails({"G1", "S2", "A2", "C0"}) == ["A2", "S2"]
+      and PB._gear_sails({"J1", "A3", "S1"}) == ["A3", "S1"])
+cons_a2 = {"legs": [{"wind": {"tws": 15}, "sail": "A2", "twa": 140}]}
+a2 = next((p for p in SYN._reef_guidance_plays(cons_a2, {"main_reefs": mr})
+           if p["id"] == "reef_r1_a3_slot"), None)
+check("the slot-reef play names the boat's own asym",
+      a2 is not None and a2["name"] == "Reef 1 with the A2 — open the slot"
+      and a2["params"].get("hoisted") == "A2")
+
 print("RESULT:", "PASS" if ok else "FAIL")
 raise SystemExit(0 if ok else 1)

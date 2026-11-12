@@ -77,7 +77,7 @@ TOOL_SPECS = [
         "function": {
             "name": "get_sail_advice",
             "description": (
-                "The optimal sail for the live TWS/TWA against the SR33 sail crossovers, plus "
+                "The optimal sail for the live TWS/TWA against the boat's sail crossovers, plus "
                 "whether the sail actually hoisted is right and any imminent peel."
             ),
             "parameters": {"type": "object", "properties": {}},
@@ -166,7 +166,7 @@ TOOL_SPECS = [
             "name": "get_route",
             "description": (
                 "The engine's isochrone optimal route to the next mark (target='next') or the "
-                "finish (target='finish') through the forecast wind on the SR33 polars: ETA, "
+                "finish (target='finish') through the forecast wind on the boat's polars: ETA, "
                 "number of tacks, recommended first tack."
             ),
             "parameters": {

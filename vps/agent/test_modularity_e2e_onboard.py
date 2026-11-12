@@ -179,8 +179,8 @@ def test_sail_call_targets_are_bravos_or_none(sail_call):
     assert isinstance(btv, (int, float)) and lo - 0.05 <= btv <= hi + 0.05, out.get("targets")
 
 
-@xfail("#305", "sail names are fixed to sr33's (J1/A3/S1…): an A2 is not recognised")
 def test_sail_call_knows_the_boats_own_sails():
+    """#305: the sail call knows the boat's own sails (an A2, a genoa), named as the boat names them."""
     deploy(bravo_bundle(sail_inventory=["G1", "G2", "A2", "S2"]))
     try:
         out = client.get("/sail", params={"tws": 11, "twa": 110, "hoisted": "A2"}).json()
@@ -190,8 +190,8 @@ def test_sail_call_knows_the_boats_own_sails():
 
 
 # ==== what Bravo's crew is told (the cloud/iPad coach) ===========================================
-@xfail("#306", "the coach's prompt says 'SR33 AI Navigator' and loads sr33's speed guide")
 def test_coach_prompt_is_bravos():
+    """#306: the coach names Bravo and loads no other boat's speed guide (Bravo has none)."""
     with watch() as seen:
         from app import agent
         agent = importlib.reload(agent)

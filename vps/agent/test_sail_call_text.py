@@ -11,6 +11,7 @@ import os
 os.environ["BOAT_ID"] = "sr33"     # the shore agent's sail guide is its own boat's (#304)
 
 from app import sails
+from shared import sail_vocab
 
 ok = True
 
@@ -28,7 +29,7 @@ BOAT = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
 # drift with the crew's edits, and so the sweep exercises an ENABLED C0 (#227).
 C0 = {"enabled": True, "tws_max": 9, "twa_min": 55, "twa_max": 110}
 BOAT = dict(BOAT, code0=dict(C0))
-lbl = lambda s: sails.SAIL_LABEL.get(s, s)
+lbl = lambda s: sails.label(s, BOAT)
 
 print("the replay frame: J1 up, 18 kn, port beat 32° (arrives as 328°)")
 r = sails.get_sail_advice(18, 328, "J1", BOAT)
@@ -88,7 +89,7 @@ check("no 'enabled' flag counts as on (as the Lab does)", r["fit"] == "overpower
 
 print("sweep: text and tile agree on every crew sail, wind and angle")
 bad, fits = [], set()
-for hoisted in sails.CREW_SAILS:
+for hoisted in sail_vocab.names(BOAT):     # sr33's own sails, from its profile (#305)
     for tws in (6, 9, 10, 14.5, 18, 24):
         for twa in (35, 55, 60, 90, 110, 120, 150, 210, 250, 300, 328):
             r = sails.get_sail_advice(tws, twa, hoisted, BOAT)

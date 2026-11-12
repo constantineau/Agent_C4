@@ -656,7 +656,8 @@ def chart_with(land_fn, fingerprint=None):
     chart = {"schema": "c4.obstacles/v1", "kind": "land-v2", "bbox": list(BB), "res_deg": RES,
              "nx": NX, "ny": NY, "safety_depth": 2.63, "source": "test",
              "mask_zb64": base64.b64encode(zlib.compress(bytes(mask))).decode(),
-             "fingerprint": fingerprint or landchart.course_fingerprint(DEF_L, "c", 2.63)}
+             # no boat in this push: no depth of its own (#305), so the fingerprint has none
+             "fingerprint": fingerprint or landchart.course_fingerprint(DEF_L, "c", None)}
     orinassets._write(json.dumps({"received_at": 1, "assets": {
         "schema": "c4.orin-assets/v1", "race_id": "race", "course_id": "c", "chart": chart}}))
 

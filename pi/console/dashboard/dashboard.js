@@ -1507,9 +1507,16 @@
     if (App.src === "demo") return (SCENARIOS[App.demoScn] || {}).plays || null;
     return App.plays;
   }
-  /* the boat's sail inventory for the SAILS bar — cert sails + the crew-config overlays
-     (C0/J2/J3/SS aren't in the ORC cert; the boat flies COMBINATIONS, so chips multi-select) */
-  const SAILS_INV = ["J1", "J2", "J3", "C0", "SS", "A3", "S1"];
+  /* the boat's sail inventory for the SAILS bar — the boat's OWN sails (#305), as the engine's
+     /sail answer lists them (cert sails + the crew-config overlays like a Code 0 or a staysail; the
+     boat flies COMBINATIONS, so chips multi-select). Sails already set stay listed too. */
+  function sailsInv() {
+    const st = App.sailState || {};
+    const out = (App.sailList || []).slice();
+    (st.flying || []).concat(st.out_of_service || []).forEach((s) => { if (!out.includes(s)) out.push(s); });
+    // names go into buttons and onclick: only plain sail names (letters, digits, - _ .)
+    return out.filter((s) => typeof s === "string" && /^[A-Za-z0-9_.-]{1,16}$/.test(s));
+  }
   async function fetchSailState() {
     if (App.src !== "live" || App.sailQ) return;   // a tap is in flight: its answer is the state
     const seq = App.sailSeq;
@@ -1752,7 +1759,8 @@
     const st = App.sailState || {};
     const fly = new Set(st.flying || []);
     const out = new Set(st.out_of_service || []);
-    document.getElementById("sbChips").innerHTML = SAILS_INV.map((s) =>
+    const inv = sailsInv();
+    document.getElementById("sbChips").innerHTML = inv.map((s) =>
       `<button class="sb-chip${fly.has(s) ? " on" : ""}" onclick="toggleFlying('${s}')" ` +
       `title="Tap = ${fly.has(s) ? "douse" : "hoist"} the ${s}${out.has(s) ? " (marked out)" : ""}">` +
       `${s}${out.has(s) ? "✕" : ""}</button>`).join("");
@@ -1761,7 +1769,7 @@
       `title="${st.reef ? "Shake out reef 1" : "Tuck in reef 1"}">R1${st.reef ? " ▽" : ""}</button>`;
     // gear OUT✕ toggles live HERE (always visible in live mode), not in the plays block —
     // a sail blows regardless of which playbook generation is aboard
-    document.getElementById("sbGear").innerHTML = SAILS_INV.map((s) =>
+    document.getElementById("sbGear").innerHTML = inv.map((s) =>
       `<button class="st-gear${out.has(s) ? " oos" : ""}" onclick="toggleGear('${s}')" ` +
       `title="Tap = mark the ${s} ${out.has(s) ? "back in use" : "out (blown or damaged)"}">${s}</button>`).join("");
     const note = document.getElementById("sbNote");   // may be cut short on a narrow bar
@@ -3005,6 +3013,11 @@
       // is the old reading again, not a new one (#184-4)
       if (res[0] != null) pushWind(res[0], at[0] / 1000);
       pushForecast(p.forecast);
+      const sl = res[keys.indexOf("sail")];
+      if (sl && Array.isArray(sl.sails) && sl.sails.length) {
+        const names = sl.sails.map((x) => x && x.name).filter(Boolean);
+        if (names.join() !== (App.sailList || []).join()) { App.sailList = names; renderSailsBar(); }
+      }
       App.data = buildLive(p);
       if (App.src === "live") render();
     } finally { if (gen === App.pollGen) App.polling = false; }

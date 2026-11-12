@@ -26,7 +26,7 @@ from __future__ import annotations
 import json
 import time
 
-from . import config, ground, narrate
+from . import boatname, config, ground, narrate
 from . import playbook as playbook_mod
 from .engine_client import EngineClient
 from .llm import LLMClient, LLMUnavailable
@@ -131,12 +131,15 @@ def _sail_window_lines(snap, pb):
         mr = bm.get("main_reefs") or {}
         if mr.get("r1_tws_kn") is not None:
             thresholds.append((f"the reef-1 threshold ({mr['r1_tws_kn']:g} kts)", mr["r1_tws_kn"]))
-        if mr.get("r1_a3_slot_tws_kn") is not None and "A3" in flying:
-            thresholds.append((f"the A3 slot-reef threshold ({mr['r1_a3_slot_tws_kn']:g} kts)",
+        # sails by family, named as the boat names them (#305)
+        kite = next((s for s in flying if boatname.sail_vocab.family(s, bm) == "asym"), None)
+        if mr.get("r1_a3_slot_tws_kn") is not None and kite:
+            thresholds.append((f"the {kite} slot-reef threshold ({mr['r1_a3_slot_tws_kn']:g} kts)",
                                mr["r1_a3_slot_tws_kn"]))
         c0 = bm.get("code0") or {}
-        if c0.get("tws_max") is not None and "C0" in flying:
-            thresholds.append((f"the C0 ceiling ({c0['tws_max']:g} kts)", c0["tws_max"]))
+        code0 = next((s for s in flying if boatname.sail_vocab.family(s, bm) == "code0"), None)
+        if c0.get("tws_max") is not None and code0:
+            thresholds.append((f"the {code0} ceiling ({c0['tws_max']:g} kts)", c0["tws_max"]))
         for label, thr in thresholds:
             hrs = None
             if rate > 0 and thr > tws:
@@ -435,7 +438,8 @@ def _phrase(kind, headline, body_text, llm):
     desc, style = _KIND_STYLE[kind]
     from .copilot import _WIND_VOCAB, _extract_json     # shared conventions (no import cycle)
     sys_p = (_WIND_VOCAB + "\n"
-             "You are the SR33's onboard coach writing the " + desc + ". Below is the "
+             "You are " + boatname.possessive() + " onboard coach writing the " + desc
+             + ". Below is the "
              "DETERMINISTIC brief — every number in it is an engine fact. Rewrite it as "
              + style + ", plain tactician's language, most important first. Reuse the numbers "
              "EXACTLY as given; invent nothing, add no numbers, no new tactics, no commands. "

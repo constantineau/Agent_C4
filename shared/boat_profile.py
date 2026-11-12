@@ -64,7 +64,15 @@ class BoatProfile:
     air_draft_m: Optional[float] = None
     displacement_kg: Optional[float] = None
     hull_type: str = "mono"
+    # Length overall in metres (#305): "N boatlengths of leverage". None → no boatlengths.
+    loa_m: Optional[float] = None
+    # Seconds a tack or gybe costs this boat on a route (#305). None → the optimizer's default.
+    tack_cost_s: Optional[float] = None
+    # The boat's own sail names (#305). Logic keys on each sail's family (shared/sail_vocab.py),
+    # read from the usual shorthand (J1 jib, G1 genoa, A3 asym, S2 sym, C0, SS) or set here in
+    # `sail_families` {name: jib|genoa|code0|staysail|asym|sym} for a name that doesn't say.
     sail_inventory: list = field(default_factory=list)
+    sail_families: dict = field(default_factory=dict)
     # Upwind jib change-downs by TWS (kn). The ORC cert rates only ONE headsail (the speed-optimal
     # J1), so J2/J3 — same upwind slot, smaller jibs for a building breeze — aren't in the polar;
     # these crew/sailmaker thresholds split the upwind jib by wind strength. [{sail, tws_min?, tws_max?}].
@@ -168,7 +176,7 @@ def shape_errors(d) -> list:
         errs.append("bad boat_id")
     if not _num(d.get("draft_m")):
         errs.append("bad draft_m")
-    for k in ("safety_margin_m", "helm_factor"):
+    for k in ("safety_margin_m", "helm_factor", "loa_m", "tack_cost_s"):
         opt(k, _num)
     for k in ("name", "boat_class", "hull_type"):
         opt(k, lambda v: isinstance(v, str))
@@ -185,6 +193,9 @@ def shape_errors(d) -> list:
     opt("main_reefs", lambda v: isinstance(v, dict) and all(
         x is None or _num(x) for x in v.values()))
     opt("sail_inventory", lambda v: isinstance(v, list) and all(isinstance(x, str) for x in v))
+    from shared import sail_vocab
+    opt("sail_families", lambda v: isinstance(v, dict) and all(
+        isinstance(k, str) and x in sail_vocab.FAMILIES for k, x in v.items()))
     from shared import boat_polar
     errs += boat_polar.files_errors(d.get("polar_files"))
     return errs
@@ -216,6 +227,14 @@ def validate(d: dict):
                 errors.append("safety_margin_m must be >= 0")
         except (TypeError, ValueError):
             errors.append("safety_margin_m is not a number")
+    for k, hi in (("loa_m", 100.0), ("tack_cost_s", 600.0)):
+        v = d.get(k)
+        if v is not None:
+            try:
+                if not 0 < float(v) <= hi:
+                    errors.append(f"{k} must be between 0 and {hi:g}")
+            except (TypeError, ValueError):
+                errors.append(f"{k} is not a number")
     ht = d.get("hull_type", "mono")
     if ht and ht not in HULL_TYPES:
         warnings.append(f"hull_type '{ht}' not in {sorted(HULL_TYPES)}")

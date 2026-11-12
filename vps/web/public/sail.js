@@ -1,13 +1,26 @@
 /* Sail-range dial (5.1). A point-of-sail arc (0° head-to-wind at top → 180° dead-downwind
-   at bottom) split into the SR33's sail zones for the current TWS; a live needle marks where
+   at bottom) split into the boat's sail zones for the current TWS; a live needle marks where
    the true wind angle sits, crossover boundaries are ticked, and the crew's hoisted sail is
    highlighted so a wrong sail / imminent peel is obvious at a glance. Data from /api/sail. */
 "use strict";
 (function () {
-  const FAMILY = ["J1", "A3", "S1"];
-  // day palette per sail; night uses a red monochrome ramp for night vision.
-  const DAY = { J1: "#3f7bd6", A3: "#e0902f", S1: "#b06bd8" };
-  const NIGHT = { J1: "#3a0c0c", A3: "#7e1d1d", S1: "#a83030" };
+  // Colours by sail FAMILY (#305): the boat's own sail names come with /api/sail's `sails`.
+  // Day palette per family; night uses a red monochrome ramp for night vision.
+  const DAY = { jib: "#3f7bd6", genoa: "#3f7bd6", code0: "#2fa6a0", staysail: "#7f8c99",
+                asym: "#e0902f", sym: "#b06bd8" };
+  const NIGHT = { jib: "#3a0c0c", genoa: "#3a0c0c", code0: "#5a1515", staysail: "#4a1010",
+                  asym: "#7e1d1d", sym: "#a83030" };
+  // the usual shorthand, for a sail the server didn't list (same rules as shared/sail_vocab.py)
+  const SHORTHAND = [[/^(C0|CODE ?0)/, "code0"], [/^(SS|STAY)/, "staysail"], [/^J\d/, "jib"],
+                     [/^G\d/, "genoa"], [/^A\d/, "asym"], [/^S\d/, "sym"]];
+  function family(name) {
+    const n = String(name || "").toUpperCase();
+    const e = ((last && last.sails) || []).find((x) => x.name === n);
+    if (e) return e.family;
+    const m = SHORTHAND.find(([rx]) => rx.test(n));
+    return m ? m[1] : "other";
+  }
+  function colour(pal, name) { return pal[family(name)] || "#888"; }
 
   let hoisted = localStorage.getItem("sr33.hoisted") || "";
   let last = null;   // last /api/sail response, for redraw on resize/theme
@@ -47,7 +60,7 @@
       const a1 = twaToAngle(z.twa_min), a2 = twaToAngle(z.twa_max);
       g.beginPath();
       g.arc(cx, cy, R, a1, a2); g.arc(cx, cy, rin, a2, a1, true); g.closePath();
-      g.fillStyle = pal[z.sail] || "#444";
+      g.fillStyle = pal[family(z.sail)] || "#444";
       g.globalAlpha = (z.sail === last.optimal_sail) ? 1 : 0.55;
       g.fill(); g.globalAlpha = 1;
       // zone label at mid-angle (keep it red in night mode for night vision)
@@ -66,7 +79,7 @@
       g.beginPath();
       g.arc(cx, cy, R, a1, a2); g.arc(cx, cy, rin, a2, a1, true); g.closePath();
       g.globalAlpha = 0.6;
-      g.fillStyle = hatch(g, pal[o.sails[0]] || "#888", pal[o.sails[1]] || "#888");
+      g.fillStyle = hatch(g, colour(pal, o.sails[0]), colour(pal, o.sails[1]));
       g.fill();
       g.restore();
       // small ≈ marker at mid-angle, outer edge
@@ -114,9 +127,33 @@
       rec.textContent = (last && last.note) || "Waiting for true wind…";
       rec.className = "sailrec";
     }
+    buttons();
     document.querySelectorAll("#sailSel button").forEach((b) =>
       b.classList.toggle("on", (b.dataset.sail || "") === hoisted));
     draw();
+  }
+
+  // The "Up:" buttons are the boat's own sails (#305), rebuilt when the list changes.
+  let shownSails = "";
+  function buttons() {
+    const list = ((last && last.sails) || []).map((x) => x.name);
+    const key = list.join(",");
+    const sel = document.getElementById("sailSel");
+    if (!sel || !list.length || key === shownSails) return;
+    shownSails = key;
+    sel.querySelectorAll("button").forEach((b) => b.remove());
+    list.concat([""]).forEach((name) => {
+      const b = document.createElement("button");
+      b.dataset.sail = name; b.textContent = name || "—";
+      b.addEventListener("click", () => pick(name));
+      sel.appendChild(b);
+    });
+  }
+
+  function pick(name) {
+    hoisted = name || "";
+    try { localStorage.setItem("sr33.hoisted", hoisted); } catch (e) { /* private mode */ }
+    if (App.lastConditions) update(App.lastConditions); else render();
   }
 
   async function update(c) {
@@ -127,7 +164,7 @@
     }
     if (!c || c.tws == null || c.twa == null) { last = { available: false, note: "No true wind yet." }; render(); return; }
     try {
-      const q = `tws=${c.tws}&twa=${c.twa}` + (hoisted ? `&hoisted=${hoisted}` : "");
+      const q = `tws=${c.tws}&twa=${c.twa}` + (hoisted ? `&hoisted=${encodeURIComponent(hoisted)}` : "");
       last = await (await apiFetch("/api/sail?" + q)).json();
     } catch (e) { last = { available: false, note: "Sail advice unavailable." }; }
     render();
@@ -136,11 +173,7 @@
   // wire selector + live updates
   window.addEventListener("DOMContentLoaded", () => {
     document.querySelectorAll("#sailSel button").forEach((b) =>
-      b.addEventListener("click", () => {
-        hoisted = b.dataset.sail || "";
-        localStorage.setItem("sr33.hoisted", hoisted);
-        if (App.lastConditions) update(App.lastConditions); else render();
-      }));
+      b.addEventListener("click", () => pick(b.dataset.sail || "")));
     render();
   });
   window.addEventListener("sr33:conditions", (e) => { App.lastConditions = e.detail; update(e.detail); });

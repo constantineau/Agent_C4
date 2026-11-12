@@ -1,0 +1,11 @@
+{
+  "title": "SR33 \"C4\"",
+  "boat_line": "Boat: SR33 *C4*, sail #CAN100 (ORC ref 03430004T3F).",
+  "source": "ORC certificate (data.orc.org SR33 'C4' CAN100, ref 03430004T3F)",
+  "note": "The cert rates an A2 the boat does not carry (left out). The crew calls the symmetric kite S1 (cert id S2-A).",
+  "carried": [
+    {"id": "J1-A", "short": "J1", "label": "Headsail/jib (J1)"},
+    {"id": "A3-A", "short": "A3", "label": "Asym A3"},
+    {"id": "S2-A", "short": "S1", "label": "Symmetric kite (S1)"}
+  ]
+}

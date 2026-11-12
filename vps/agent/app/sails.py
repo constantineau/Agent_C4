@@ -17,30 +17,61 @@ import json
 import os
 
 from shared import boat_polar as BP
+from shared import sail_vocab as SV
 from shared import units
 
 _HERE = os.path.dirname(__file__)
 _KNOWLEDGE = os.path.join(_HERE, "..", "knowledge")
 _SEED = os.path.join(_HERE, "..", "..", "db", "seed")
 
-# Friendly order + colors (hex) used by the dial, keyed by sail family prefix.
-SAIL_ORDER = ["J1", "A3", "S1"]
-SAIL_LABEL = {"J1": "Jib (J1)", "A3": "Asym A3", "S1": "Kite (S1)", "C0": "Code 0"}
-# the CREW inventory is richer than the cert: jib change-downs, the Code 0 and the staysail are
-# crew-config sails (rated bands come from the frozen boat model, not the cert)
-CREW_SAILS = ("J1", "J2", "J3", "C0", "SS", "A3", "S1")
-_CERT_EQUIV = {"J1": "J1", "J2": "J1", "J3": "J1", "A3": "A3", "S1": "S1"}
+# Sail names are the boat's own (#305): the speed guide's rows name its rated sails, the boat
+# model's `sail_inventory` the crew's (jib change-downs, a Code 0, a staysail; shared/sail_vocab.py).
+# Logic keys on each sail's family, text uses its name.
+_FAMILY_LABEL = {"jib": "Jib ({})", "genoa": "Genoa ({})", "asym": "Asym {}", "sym": "Kite ({})"}
 
 
 def _family(sail):
-    """'A3-A' -> 'A3'; tolerant of user input like 'a3', 'A3 asym'."""
+    """A guide row's sail name: 'A3-A' -> 'A3'; tolerant of input like 'a3', 'A3 asym'. None for
+    a blank or '—' cell."""
+    t = SV.token(sail)
+    return t if t and any(c.isalnum() for c in t) else None
+
+
+def _guide_sails(sections=None):
+    """The rated sails the speed guide names, in first-seen order."""
+    sections = _guide()[0] if sections is None else sections
+    out = []
+    for k in sorted(sections):
+        for r in sections[k]:
+            if r.get("sail") and r["sail"] not in out:
+                out.append(r["sail"])
+    return out
+
+
+def label(sail, boat_model=None, rated=None):
+    """The sail's display name: 'Code 0' for the boat's Code 0, the family word around a RATED
+    sail's name ('Jib (J1)', 'Asym A3'), else the name as the boat calls it."""
     if not sail:
+        return sail
+    fam = SV.family(sail, boat_model)
+    if fam == "code0":
+        return "Code 0"
+    rated = _guide_sails() if rated is None else rated
+    if sail in rated and fam in _FAMILY_LABEL:
+        return _FAMILY_LABEL[fam].format(sail)
+    return sail
+
+
+def _cert_equiv(crew, rated, boat_model=None):
+    """The rated sail a crew sail flies as: itself if rated, a jib change-down as the rated
+    headsail, a kite as the rated kite of its family. None for a Code 0 / staysail (no rating)."""
+    if not crew:
         return None
-    s = sail.strip().upper()
-    for fam in SAIL_ORDER:
-        if s.startswith(fam):
-            return fam
-    return None
+    if crew in rated:
+        return crew
+    fam = SV.family(crew, boat_model)
+    fams = SV.HEADSAILS if fam in SV.HEADSAILS else ((fam,) if fam in SV.KITES else ())
+    return next((r for r in rated if SV.family(r, boat_model) in fams), None)
 
 
 def _sections_of(guide):
@@ -156,7 +187,7 @@ def _zones(rows):
     for i, gp in enumerate(groups):
         lo = 0.0 if i == 0 else round((groups[i - 1]["hi_twa"] + gp["lo_twa"]) / 2, 1)
         hi = 180.0 if i == len(groups) - 1 else round((gp["hi_twa"] + groups[i + 1]["lo_twa"]) / 2, 1)
-        zones.append({"sail": gp["sail"], "label": SAIL_LABEL.get(gp["sail"], gp["sail"]),
+        zones.append({"sail": gp["sail"], "label": label(gp["sail"]),
                       "twa_min": lo, "twa_max": hi})
     return zones
 
@@ -165,14 +196,9 @@ def _nearest_row(rows, twa):
     return min(rows, key=lambda r: abs(r["twa"] - twa)) if rows else None
 
 
-def _crew_norm(sail):
-    if not sail:
-        return None
-    up = sail.strip().upper()
-    for fam in CREW_SAILS:
-        if up.startswith(fam):
-            return fam
-    return None
+def _crew_norm(sail, boat_model=None, rated=()):
+    """The boat's own name for the crew-set sail ('a2' -> 'A2'), or None if it has no such sail."""
+    return SV.match(sail, boat_model, extra=rated)
 
 
 def _tws_band_for(fam, a_twa):
@@ -194,9 +220,10 @@ def _fit_and_change(crew, a_twa, tws, optimal, wrong, tossup_ok, boat_model):
     bm = boat_model or {}
     if crew is None:
         return None, None
-    if crew == "SS":
+    fam = SV.family(crew, bm)
+    if fam == "staysail":
         return "no_model", None
-    if crew == "C0":
+    if fam == "code0":
         # the frozen bundle keeps the C0 band at boat_model["code0"] (synthesis.boat_model) — #227.
         # Same rule as the Lab's sailplan._code0_band: off only when enabled is False, and a band
         # missing any limit is no band at all (never guess 0–180° / 99 kn).
@@ -209,7 +236,7 @@ def _fit_and_change(crew, a_twa, tws, optimal, wrong, tossup_ok, boat_model):
         if tws > float(c0["tws_max"]):
             return "overpowered", optimal
         return "in_range", None
-    if crew in ("J1", "J2", "J3"):
+    if fam in SV.HEADSAILS:
         if wrong and not tossup_ok:            # the cert wants a different FAMILY at this angle
             return "wrong_angle", optimal
         jx = bm.get("jib_crossovers") or []
@@ -234,6 +261,26 @@ def _fit_and_change(crew, a_twa, tws, optimal, wrong, tossup_ok, boat_model):
     return "in_range", None
 
 
+def _names_src(boat_model):
+    """Where the boat's sail names come from: the frozen boat model when it lists them, else the
+    boat's profile (app/boatinfo.py). Names only: the fit verdicts read `boat_model` alone."""
+    if isinstance(boat_model, dict) and boat_model.get("sail_inventory"):
+        return boat_model
+    try:
+        from . import boatinfo
+        return boatinfo.profile() or boat_model
+    except Exception:
+        return boat_model
+
+
+def _sail_list(src, rated=()):
+    """The boat's sails for the dial's buttons and colours: [{name, family}]."""
+    inv = SV.inventory(src)
+    have = {e["name"] for e in inv}
+    inv += [{"name": r, "family": SV.family(r, src) or "other"} for r in rated if r not in have]
+    return inv
+
+
 def get_sail_advice(tws: float = None, twa: float = None, hoisted: str = None, boat_model: dict = None):
     """Sail-range advice for the dial + agent (see `_advice`), on one snapshot of the guide."""
     tok = _PINNED.set(_guide())
@@ -245,7 +292,7 @@ def get_sail_advice(tws: float = None, twa: float = None, hoisted: str = None, b
 
 def _advice(tws: float = None, twa: float = None, hoisted: str = None, boat_model: dict = None):
     """Sail-range advice for the dial + agent. tws/twa are live values; hoisted is the
-    crew-reported sail (J1/A3/S1) so we can flag flying the wrong one."""
+    crew-reported sail (the boat's own name) so we can flag flying the wrong one."""
     sections = _guide()[0]
     if not sections:
         note = BP.NO_POLAR_ABOARD
@@ -253,7 +300,10 @@ def _advice(tws: float = None, twa: float = None, hoisted: str = None, boat_mode
             from . import orinassets
             if orinassets.boat_polar() is None:
                 note = BP.NO_POLAR      # the boat being sailed has none (#320: e.g. an Other boat)
-        return {"available": False, "note": note}
+        # no sail model, but the crew-set sail is still named in the boat's own words (#305)
+        src = _names_src(boat_model)
+        return {"available": False, "note": note, "crew_sail": _crew_norm(hoisted, src),
+                "sails": _sail_list(src)}
     if tws is None or twa is None:
         return {"available": False, "note": "Need live wind speed and angle.",
                 "have": {"tws": tws, "twa": twa}}
@@ -277,8 +327,10 @@ def _advice(tws: float = None, twa: float = None, hoisted: str = None, boat_mode
         next_xover = {"at_twa": down["twa_min"], "to_sail": down["sail"],
                       "deg_away": round(down["twa_min"] - a_twa, 1), "direction": "bear away"}
     row = _nearest_row(rows, a_twa)
-    crew_sail = _crew_norm(hoisted)
-    hoisted_fam = _CERT_EQUIV.get(crew_sail) if crew_sail else _family(hoisted)
+    rated = _guide_sails(sections)
+    src = _names_src(boat_model)
+    crew_sail = _crew_norm(hoisted, src, rated)
+    hoisted_fam = _cert_equiv(crew_sail, rated, boat_model)
 
     # toss-up: sails within ~1.5% of target AT this TWA (from the crossover overlap bands). The zones are
     # winner-take-all, so a near-tied sail reads as "wrong" — but if the hoisted sail is a toss-up with the
@@ -303,16 +355,17 @@ def _advice(tws: float = None, twa: float = None, hoisted: str = None, boat_mode
     if change_now and not change_to:
         change_to = optimal              # the tile's fallback, made explicit so both agree
     # the crew's own jib when it is the right family and fits (J2 up: say J2, not "J1 is right")
-    best = crew_sail if (fit == "in_range" and _CERT_EQUIV.get(crew_sail) == optimal) else optimal
+    best = (crew_sail if (fit == "in_range" and _cert_equiv(crew_sail, rated, boat_model) == optimal)
+            else optimal)
 
-    _lbl = lambda s: SAIL_LABEL.get(s, s)
+    _lbl = lambda s: label(s, boat_model, rated)
     why = {"overpowered": "Too much wind for {}.", "underpowered": "Not enough wind for {}.",
            "wrong_angle": "{} is wrong for this angle."}
     if change_now:
         rec = f"Change to {_lbl(change_to)}. " + why[fit].format(_lbl(crew_sail))
-    elif fit == "in_range" and crew_sail == "C0":
+    elif fit == "in_range" and SV.family(crew_sail, boat_model) == "code0":
         # the cert has no Code 0, so `best` would name the cert's sail here — say the C0 is right
-        rec = f"{_lbl('C0')} is right for {round(a_twa)}° TWA, {round(tws)} kts."
+        rec = f"{_lbl(crew_sail)} is right for {round(a_twa)}° TWA, {round(tws)} kts."
     elif wrong:
         rec = f"Change to {_lbl(optimal)}. {_lbl(hoisted_fam)} is up."
     elif hoisted_ok_tossup:
@@ -332,7 +385,8 @@ def _advice(tws: float = None, twa: float = None, hoisted: str = None, boat_mode
         "overlaps": overlaps,
         "optimal_sail": optimal,
         "tossup_with": tossup_with,
-        "crew_sail": crew_sail,          # what the crew SET (sails bar) — J2/C0/SS stay distinct
+        "crew_sail": crew_sail,          # what the crew SET (sails bar), in the boat's own names
+        "sails": _sail_list(src, rated),  # the boat's sails, with families (the dial's buttons)
         "fit": fit,                       # in_range | overpowered | underpowered | wrong_angle | no_model
         "change_to": change_to,
         "hoisted_sail": hoisted_fam,

@@ -11,11 +11,14 @@ import json
 
 from shared import boat_profile
 
-DEFAULT_SAFETY_DEPTH_M = 2.63      # SR33: 7 ft draft + 0.5 m under-keel margin
+# No boat (or no draft) → no depth of its own (#305): never another boat's draft. The chart
+# builder then uses its configured draft, and "No boat selected" is said where a boat is needed.
+DEFAULT_SAFETY_DEPTH_M = None
 
 
 def safety_depth_m(boat, default=DEFAULT_SAFETY_DEPTH_M):
-    """No-go depth (draft + margin) for boat profile dict `boat`; `default` with no boat/draft."""
+    """No-go depth (draft + margin) for boat profile dict `boat`; `default` (None) with no
+    boat/draft."""
     if boat and boat.get("draft_m") is not None:
         return boat_profile.safety_depth_m(boat)
     return default
