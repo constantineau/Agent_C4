@@ -80,6 +80,71 @@ def frozen_for_current(boat_model):
     return None if known and bid != boat_model["boat_id"] else boat_model
 
 
+PLAYS_OFF = "Playbook is for {boat}. Plays off."
+# what the Orin copilot needs of the session boat to name it and read its crew thresholds (#335)
+_COPILOT_KEYS = ("boat_id", "name", "boat_class", "sail_number", "sail_inventory", "sail_families",
+                 "jib_crossovers", "code0", "main_reefs", "draft_m", "loa_m")
+
+
+def playbook_for_other_boat(boat_model):
+    """Aboard: the playbook's boat id when another boat is being sailed (#335), else None.
+
+    The same rule as frozen_for_current: a LOG session sailing Bravo with sr33's playbook loaded,
+    or an "Other boat" (known, no id), is another boat. A model with no boat_id, an unknown current
+    boat, or the shore (one boat per agent) is not."""
+    if not _onboard() or not isinstance(boat_model, dict) or not boat_model.get("boat_id"):
+        return None
+    return None if frozen_for_current(boat_model) is not None else boat_model["boat_id"]
+
+
+def boat_label(bid, boat_model=None):
+    """A boat's name in a few words for the crew: the yacht's name, else its class, else its id."""
+    from shared import boat_words
+    p = None
+    if _onboard():
+        try:
+            from . import boatlib
+            p = boatlib.boat_for(bid).get("profile")
+        except Exception:
+            p = None
+    for src in (p, boat_model):
+        if isinstance(src, dict) and src.get("boat_id") in (None, bid):
+            cls, name = boat_words.parts(src)
+            if name or cls:
+                return name or cls
+    return str(bid)
+
+
+def plays_off_note(boat_model):
+    """"Playbook is for <boat>. Plays off." when the playbook is another boat's, else None."""
+    bid = playbook_for_other_boat(boat_model)
+    return PLAYS_OFF.format(boat=boat_label(bid, boat_model)) if bid else None
+
+
+def copilot_boat():
+    """The boat being sailed, for the Orin copilot (#335): {boat_id, name, profile} with only the
+    profile bits it names the boat and reads crew thresholds from (profile None when the boat has
+    none aboard, e.g. an "Other boat"). None when nothing aboard says which boat, or on the shore:
+    the copilot then keeps the playbook's boat, as before."""
+    if not _onboard():
+        return None
+    known, bid = _current_boat()
+    if not known:
+        return None
+    try:
+        from . import boatlib
+        cur = boatlib.current_boat() or {}
+    except Exception:
+        cur = {}
+    same = cur.get("boat_id") == bid
+    prof = cur.get("profile") if same else None
+    if isinstance(prof, dict) and bid and prof.get("boat_id") == bid:
+        prof = {k: prof[k] for k in _COPILOT_KEYS if k in prof}
+    else:
+        prof = None
+    return {"boat_id": bid, "name": cur.get("name") if same else None, "profile": prof}
+
+
 def loa_m():
     """The boat's length overall in metres, or None."""
     try:

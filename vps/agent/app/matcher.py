@@ -499,10 +499,22 @@ _ORDER = {"armed": 0, "arming": 1, "quiet": 2}
 
 def get_plays(route=None):
     """The matcher read: every play in the frozen v2 bundle evaluated against the live signals,
-    armed first. `na` with no v2 playbook aboard. Deterministic — works with no Orin."""
+    armed first. `na` with no v2 playbook aboard, and off (`plays_off`) while another boat is
+    being sailed (#335). Deterministic — works with no Orin."""
     bundle = deviation._load_playbook()
     if not bundle:
         return {"available": False, "note": "No gameplan loaded."}
+    # another boat is being sailed (a practice LOG on Bravo with sr33's playbook loaded, #335):
+    # its plays are tuned to the playbook's boat, so none of them runs, said plainly
+    try:
+        from . import boatinfo
+        off = boatinfo.plays_off_note(bundle.get("boat_model"))
+    except Exception:
+        off = None
+    if off:
+        clear_state()                   # nothing half-sustained carries over when the boat comes back
+        # sail state still flows: the copilot brief reads what is flying from here (ceilings)
+        return {"available": False, "plays_off": True, "note": off, "sail_state": get_sail_state()}
     plays = bundle.get("plays") or []
     if not plays:
         return {"available": False,

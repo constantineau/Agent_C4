@@ -153,8 +153,9 @@ class Playbook:
 
 
 NOT_CONFIRMED = "Playbook not confirmed. Running without it."
+OTHER_BOAT = "Playbook is for another boat. Running without it."
 PIN_CACHE_S = 5.0
-_pin = {"at": None, "hash": None}
+_pin = {"at": None, "hash": None, "boat": None, "off": False, "err": False}
 
 
 def bundle_hash(data: dict) -> str:
@@ -170,17 +171,42 @@ def approved_hash():
     import time
     from .engine_client import EngineClient
     now = time.monotonic()
-    if _pin["hash"] is None or _pin["at"] is None or now - _pin["at"] > PIN_CACHE_S:
+    # a "none" answer is not cached (a fresh approval shows at once), except while the Pi says
+    # another boat is sailed or couldn't be asked: those hold for PIN_CACHE_S, so name lookups
+    # don't each wait on the cable (Codex on #342)
+    held = _pin["hash"] is not None or _pin.get("off") or _pin.get("err")
+    if not held or _pin["at"] is None or now - _pin["at"] > PIN_CACHE_S:
         r = EngineClient()._get("/playbook/copilot")
-        h = r.get("hash") if isinstance(r, dict) else None
-        _pin.update(at=now, hash=h if isinstance(h, str) else None)
+        r = r if isinstance(r, dict) else {}
+        now = time.monotonic()          # stamped when the answer came back: a 12 s timeout
+        #                                 mustn't leave the window already spent (Codex on #342)
+        h = r.get("hash")
+        if r.get("error") and "hash" not in r:
+            # the Pi couldn't be asked (timeout, HTTP error): no approval, but the boat being
+            # sailed is still the one it last said — one dropped request must not hand the
+            # copilot the playbook's boat back (Codex on #342)
+            _pin.update(at=now, hash=None, err=True)
+            return None
+        b = r.get("boat")
+        _pin.update(at=now, hash=h if isinstance(h, str) else None,
+                    boat=b if isinstance(b, dict) and "boat_id" in b else None,
+                    off=r.get("playbook_off") is True, err=False)
     return _pin["hash"]
+
+
+def session_boat():
+    """The boat being sailed, as the Pi said with its approval (#335): {boat_id, name, profile},
+    or None when the Pi didn't say (an engine from before #335, nothing aboard says, or the Pi
+    can't be asked). None keeps the playbook's boat, as before."""
+    approved_hash()
+    return _pin.get("boat")
 
 
 def load(path: str | None = None, confirm: bool = True) -> Playbook:
     """The playbook aboard. With `confirm` (every use), it counts only if its hash is the one the
     Pi approved under its race-log lock (frozen at the gun): a file that went live late, or that
-    the Pi never confirmed, is not used, and the copilot runs without a playbook."""
+    the Pi never confirmed, is not used, and the copilot runs without a playbook. Nor is one the Pi
+    withholds because another boat is being sailed (#335)."""
     path = (path if path is not None else config.PLAYBOOK_PATH) or ""
     if not path or not os.path.exists(path):
         return Playbook(None)
@@ -191,6 +217,7 @@ def load(path: str | None = None, confirm: bool = True) -> Playbook:
         return Playbook(None)
     if confirm and (not isinstance(data, dict) or bundle_hash(data) != approved_hash()):
         pb = Playbook(None)
-        pb.note = NOT_CONFIRMED
+        # the Pi withholds it while another boat is sailed (#335); the note never names that boat
+        pb.note = OTHER_BOAT if _pin.get("off") else NOT_CONFIRMED
         return pb
     return Playbook(data)
