@@ -538,8 +538,17 @@ hand-entered. Both halves are public, so `app/fleetimport.py` automates them:
       fetch can't read returns nothing → the note tells the user to paste the text or upload the PDF.
 - **Handicaps = the ORC public certificate DB** (`data.orc.org/public/WPub.dll?action=DownRMS&
   CountryId=<cc>&ext=json`, decoded utf-8-sig, cached `ORC_CACHE_TTL_S`): every active national cert
-  with GPH + ToT/ToD coefficients — incl. **race-specific columns** (Bayview Mackinac's
-  `US_BAYMAC_CV/SH_TOT`, picked by race+course via `_RACE_ORC_COLS`, else the generic `TMF_Offshore`).
+  with GPH + ToT/ToD coefficients, incl. race-specific columns. **Which column the race scores on is
+  in the race definition** (`rules_profile.scoring.rating_system` / `rating_column` /
+  `course_columns`, extracted from the NOR/SI, confirmed in Rules). No column named → `rating` stays
+  empty and the roster says "Rating column unknown: pick one" (#311). Countries searched: the Fleet
+  tab box, else `scoring.rating_countries`, else the venue country + entrants' sail prefixes. Rating
+  feeds sit behind `app/ratings.py` (ORC registered; PHRF/IRC get a plain "no feed yet").
+  Every imported number carries the column it was read off (`rating_col` / `tod_col`; typed ones
+  are tagged `manual`). Every save, the migration CLI and `fleet_blob` clear imported numbers that
+  are not off their boat's course column now; untagged ORC imports from before tags are cleared
+  unless the migration tags them. Set the fields on a saved race:
+  `python -m app.ratings set <race.json> --system ORC --course ID=TOT[/TOD] [--legacy-col C] [--dry-run]`.
   Matched to the entry list by **sail number → yacht name**; each entry gets a match badge, unmatched
   boats keep their identity for hand-entry.
 `POST /api/fleet/import {race_id, source: yb|both|website|orc, country?, course_id?, url?, text?}` (+

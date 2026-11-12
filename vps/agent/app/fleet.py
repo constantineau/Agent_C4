@@ -21,6 +21,8 @@ import time
 import os
 import re
 
+from shared import race_def
+
 from . import datasource, ais, tracker
 
 # corrected-time tags
@@ -77,12 +79,25 @@ def _tot_coeff(entry, scoring_method):
     r = _as_float(entry.get("rating"))
     if r:
         return r
+    if entry.get("_strict_tot"):        # the race names its column: no number = no rating (#311)
+        return None
     g = _as_float(entry.get("orc_gph") or entry.get("gph"))
     return _TOT_K / g if g else None
 
 
+def _no_rating(entry, is_tod):
+    """True when the boat has no number the race can be scored on."""
+    return (_allowance_s_per_nm(entry) if is_tod else _tot_coeff(entry, None)) is None
+
+
 def _allowance_s_per_nm(entry):
-    """ORC Time-on-Distance allowance (s/nm) = GPH. Returns None if unknown/unparseable."""
+    """ORC Time-on-Distance allowance (s/nm): the race's own ToD column when the Lab imported one
+    (`tod_allowance`, #311), else GPH. Returns None if unknown/unparseable."""
+    a = _as_float(entry.get("tod_allowance"))
+    if a:
+        return a
+    if entry.get("_strict_tod"):        # the race names its ToD column: no allowance = no rating
+        return None
     g = _as_float(entry.get("orc_gph") or entry.get("gph"))
     return g if g else None
 
@@ -187,7 +202,9 @@ def _fleet_row(entry, obj, matched_by, mconf, source, pts, origin, own, own_dtf,
         row["corrected_delta_s"] = round(cdelta)
         row["corrected_basis"] = basis
     # confidence = match × handicap-known × course-known × position-freshness (age decay; 1.0 for live)
-    hconf = 1.0 if _tot_coeff(entry, method) else 0.4
+    hconf = 0.4 if _no_rating(entry, is_tod) else 1.0
+    if _no_rating(entry, is_tod):
+        row["no_rating"] = True
     cconf = 1.0 if dtf is not None else 0.5
     posconf = obj.get("_posconf", 1.0)
     row["confidence"] = round(mconf * hconf * cconf * posconf, 2)
@@ -210,17 +227,44 @@ def get_fleet(max_range_nm: float = 40.0):
     if not method.strip() and _scoring_kind(scoring.get("system")) in ("tot", "tod"):
         method = (scoring.get("system") or "").lower()     # a system field that names the method
     kind = _scoring_kind(method)
+    # which rating the race scores on (#311): the same race-definition field the Lab import reads
+    spec = race_def.rating_spec({"rules_profile": {"scoring": scoring}, "own": own_cfg})
+    system = spec["system"]
+    if system and system != "ORC":
+        kind = None                         # only ORC math here; PHRF/IRC/one-design say so below
     is_tod = kind == "tod"
 
     gaps = []
     if not roster:
         return {"available": False, "note": "No fleet list loaded.", "fleet": [], "traffic": []}
-    if kind is None:
+    if kind is None and system and system != "ORC":
+        gaps.append(f"{system} scoring not supported, no corrected gaps")
+    elif kind is None:
         # an unsupported method (performance curve, one-design, PHRF ToD+ToT mix, ...) must not
         # be scored as ToT behind the crew's back: no corrected gaps at all, and say so.
         gaps.append(f"scoring '{scoring.get('method')}' not supported, no corrected gaps")
     elif not method.strip():
         gaps.append("no scoring set, using Time-on-Time")
+    rows = [r for r in scoring.get("course_columns") or [] if isinstance(r, dict)]
+    has_col = spec["column"] or any(r.get("column") for r in rows)
+    has_tod = scoring.get("rating_column_tod") or any(r.get("column_tod") for r in rows)
+    if kind is not None and system == "ORC" and not has_col:
+        gaps.append("rating column unknown, gaps may be off")
+    # #311: where the boat's course names a column, a boat without that number (e.g. cleared after
+    # a column switch) gets no corrected time — never a coefficient made up from GPH. The blob
+    # carries each boat's columns (race_def.fleet_blob → rating_col / tod_col); an older blob
+    # without them falls back to "any column named anywhere".
+    def _strict(e):
+        return {"_strict_tot": bool(e["rating_col"]) if "rating_col" in e else bool(has_col),
+                "_strict_tod": bool(e["tod_col"]) if "tod_col" in e else bool(has_tod)}
+    roster = [dict(e, **_strict(e)) for e in roster if isinstance(e, dict)]
+    own_cfg = dict(own_cfg, **_strict(own_cfg))
+    if kind is not None:
+        key = "_strict_tod" if is_tod else "_strict_tot"
+        n = sum(1 for e in roster if e[key] and _no_rating(e, is_tod))
+        if n:
+            gaps.append(f"{n} boat{'s' if n != 1 else ''} with no rating for the race's column, "
+                        "no corrected time for them")
 
     own = ais._own_ship()
     raw = datasource.active().ais_targets(ais.AIS_WINDOW_MIN)
@@ -341,6 +385,8 @@ def _standings(roster, fleet_rows, own_cfg, own_dtf, own_sog, method, is_tod,
         r = by_boat.get(boat.lower())
         row = {"boat": boat, "division": div,
                "our_division": bool(own_div) and div.lower() == own_div.lower()}
+        if _no_rating(e, is_tod):
+            row["no_rating"] = True
         if r:
             row.update({"source": r.get("source"), "age_s": r.get("age_s"),
                         "confidence": r.get("confidence"),

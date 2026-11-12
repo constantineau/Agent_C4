@@ -1721,43 +1721,73 @@ def _with_draft_fleet(stored, fleet):
     return dict(stored, fleet=[e for e in fleet if isinstance(e, dict)])
 
 
+def _with_draft_rating(stored, scoring=None, own=None):
+    """The stored race with the screen's unsaved scoring block and own-boat entry in place (#311):
+    a rating column picked but not saved yet must be the one the re-read uses, or Save would store
+    the new column next to ratings read off the old one. `own.division` picks the course. JSON
+    strings (the upload form) are parsed; anything that isn't a dict keeps the saved value."""
+    def _dict(v):
+        if isinstance(v, str):
+            try:
+                v = json.loads(v)
+            except ValueError:
+                return None
+        return v if isinstance(v, dict) else None
+    scoring, own = _dict(scoring), _dict(own)
+    if scoring is None and own is None:
+        return stored
+    out = dict(stored)
+    if scoring is not None:
+        rp = dict(out.get("rules_profile") or {})
+        rp["scoring"] = scoring
+        out["rules_profile"] = rp
+    if own is not None:
+        out["own"] = own
+    return out
+
+
 @app.post("/api/fleet/import")
 async def fleet_import(body: dict):
     """Build a DRAFT fleet roster from public data — the entry list (YB tracker OR a regatta-website
     URL/pasted text) + ORC cert handicaps. Returns the proposed roster (with match stats); the human
     reviews/edits in the Fleet tab and Saves via POST /api/races (nothing auto-committed). Body:
-    {race_id, source: yb|both|website|orc, country?, course_id?, url?, text?, fleet?} — fleet = the
-    draft roster on screen (see _with_draft_fleet)."""
+    {race_id, source: yb|both|website|orc, country?, course_id?, url?, text?, fleet?, scoring?, own?}
+    — fleet / scoring / own = the unsaved draft on screen (see _with_draft_fleet / _with_draft_rating)."""
     b = body or {}
     d = store.get_race(b.get("race_id")) if b.get("race_id") else None
     if not d:
         return JSONResponse({"detail": "unknown race"}, status_code=404)
-    d = _with_draft_fleet(d, b.get("fleet"))
+    d = _with_draft_rating(_with_draft_fleet(d, b.get("fleet")), b.get("scoring"), b.get("own"))
     return await run_in_threadpool(fleetimport.import_fleet, d, b.get("source", "both"),
-                                   b.get("country", "USA,CAN"), b.get("course_id"),
+                                   b.get("country") or None, b.get("course_id"),
                                    b.get("url"), b.get("text"))
 
 
 @app.post("/api/fleet/orc-candidates")
 def fleet_orc_candidates(body: dict):
-    """Fuzzy ORC-cert candidates for ONE unrated roster boat: {race_id, boat, sail?, country?}.
-    The human picks a candidate in the Fleet tab; nothing auto-applies."""
+    """Rating candidates for ONE unrated roster boat: {race_id, boat, sail?, country?}, from the
+    race's rating feed (ORC today). No country → the race definition's list. The human picks a
+    candidate in the Fleet tab; nothing auto-applies."""
     body = body or {}
     d = store.get_race(body.get("race_id")) if body.get("race_id") else None
-    return fleetimport.orc_candidates(body.get("boat"), sail=body.get("sail"),
-                                      country=body.get("country") or "USA,CAN",
-                                      definition=d, course_id=body.get("course_id"))
+    if d:
+        d = _with_draft_rating(d, body.get("scoring"), body.get("own"))
+    return fleetimport.candidates(body.get("boat"), sail=body.get("sail"),
+                                  country=body.get("country") or None,
+                                  definition=d, course_id=body.get("course_id"),
+                                  division=body.get("division"))
 
 
 @app.post("/api/fleet/import/upload")
-async def fleet_import_upload(race_id: str, country: str = "USA,CAN", course_id: str = None,
-                             file: UploadFile = File(...), fleet: str = Form(None)):
+async def fleet_import_upload(race_id: str, country: str = None, course_id: str = None,
+                             file: UploadFile = File(...), fleet: str = Form(None),
+                             scoring: str = Form(None), own: str = Form(None)):
     """Extract a fleet roster from an uploaded entry-list PDF → ORC-enrich → DRAFT for review.
     `fleet` (form field, JSON) = the draft roster on screen, for carrying seeded MMSIs over."""
     d = store.get_race(race_id)
     if not d:
         return JSONResponse({"detail": "unknown race"}, status_code=404)
-    d = _with_draft_fleet(d, fleet)
+    d = _with_draft_rating(_with_draft_fleet(d, fleet), scoring, own)
     raw = await file.read()
     r = await run_in_threadpool(fleetimport.roster_from_pdf, raw)
     if not r.get("ok"):
@@ -1900,10 +1930,14 @@ async def save_race(body: dict):
     definition = (body or {}).get("definition") or body
     if not definition.get("race_id"):
         return JSONResponse({"detail": "definition.race_id required"}, status_code=400)
-    rid = _write_race(definition, draft=bool((body or {}).get("draft")))
+    report = {}
+    rid = _write_race(definition, draft=bool((body or {}).get("draft")), report=report)
     errors, warnings = race_def.validate(definition)
-    return {"saved": True, "race_id": rid, "errors": errors, "warnings": warnings,
-            "reviewed": bool(definition.get("reviewed"))}
+    out = {"saved": True, "race_id": rid, "errors": errors, "warnings": warnings,
+           "reviewed": bool(definition.get("reviewed"))}
+    if report.get("rating_fixes"):
+        out["rating_fixes"] = report["rating_fixes"]
+    return out
 
 
 # Fields OWNED by other tabs / built up over prep — a re-ingested draft (e.g. the SIs landing
@@ -1925,7 +1959,49 @@ def _prep_empty(key, value):
     return False
 
 
-def _write_race(definition, draft=False, overrides=False):
+def _rating_fixes(definition):
+    """Clear imported ratings that no longer match their boat's column (#311, any save: a column
+    picked in Rules, a division moved, a candidate applied). Returns what the screen must take back
+    ({fleet, own, boats, note}) or None when nothing changed."""
+    hit = race_def.clear_stale_ratings(definition)
+    if not hit["boats"] and not hit["own"]:
+        return None
+    bits = []
+    if hit["boats"]:
+        n = len(hit["boats"])
+        bits.append(f"Old ratings cleared on {n} boat{'s' if n != 1 else ''}. Re-read ratings.")
+    if hit["own"]:
+        bits.append(fleetimport.OWN_REENTER + ".")
+    return {"fleet": definition.get("fleet") or [], "own": definition.get("own") or {},
+            "boats": hit["boats"], "own_cleared": hit["own"], "note": " ".join(bits)}
+
+
+def _keep_rating_config(definition, prior):
+    """A re-ingest draft that leaves the rating setup blank keeps the confirmed one (Codex on #333):
+    re-reading the NOR/SI must not wipe a column the user picked, then clear every rating against
+    the blank setup. What the new extraction does name wins."""
+    old_sc = ((prior.get("rules_profile") or {}).get("scoring")) or {}
+    if not isinstance(definition.get("rules_profile"), dict):
+        definition["rules_profile"] = {}
+    rp = definition["rules_profile"]
+    if not isinstance(rp.get("scoring"), dict):
+        rp["scoring"] = {}
+    sc = rp["scoring"]
+    # the columns go as one group: a new extraction naming any column replaces the whole old setup
+    # (an old per-course column must not outrank a new race-wide one)
+    cols = ("rating_column", "rating_column_tod", "course_columns")
+    if not any(sc.get(k) for k in cols):
+        for k in cols:
+            if old_sc.get(k):
+                sc[k] = old_sc[k]
+    for k in ("rating_system", "rating_countries"):
+        if old_sc.get(k) and not sc.get(k):
+            sc[k] = old_sc[k]
+    if prior.get("venue_country") and not definition.get("venue_country"):
+        definition["venue_country"] = prior["venue_country"]
+
+
+def _write_race(definition, draft=False, overrides=False, report=None):
     """Persist a RaceDefinition. A preserved field is restored from the stored copy when the save
     omits the key, or — for a re-ingest `draft` only — sends it empty. An ordinary save that sends
     an empty value (the user cleared the notes / emptied the roster) is stored as sent.
@@ -1951,6 +2027,11 @@ def _write_race(definition, draft=False, overrides=False):
                 continue
             if k not in definition or (draft and _prep_empty(k, definition[k])):
                 definition[k] = prior[k]
+    if prior and draft:
+        _keep_rating_config(definition, prior)
+    fixes = _rating_fixes(definition)
+    if report is not None and fixes:
+        report["rating_fixes"] = fixes
     os.makedirs(INGESTED_DIR, exist_ok=True)
     atomicio.write_json(os.path.join(INGESTED_DIR, f"{rid}.json"), definition, indent=2)
     return rid
@@ -1976,9 +2057,13 @@ async def approve_race(rid: str, body: dict):
     else:
         definition["reviewed"] = False
         definition.pop("reviewed_at", None)
-    saved_rid = _write_race(definition)
-    return {"saved": True, "race_id": saved_rid, "reviewed": approved,
-            "reviewed_at": definition.get("reviewed_at"), "errors": errors, "warnings": warnings}
+    report = {}
+    saved_rid = _write_race(definition, report=report)
+    out = {"saved": True, "race_id": saved_rid, "reviewed": approved,
+           "reviewed_at": definition.get("reviewed_at"), "errors": errors, "warnings": warnings}
+    if report.get("rating_fixes"):
+        out["rating_fixes"] = report["rating_fixes"]
+    return out
 
 
 @app.get("/favicon.ico")
