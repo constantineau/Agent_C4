@@ -2827,17 +2827,21 @@ function fleetSet(i, f, v) {
 }
 // Our boat's number is stamped with the column in force when typed, so a later column switch
 // asks for it again instead of scoring the fleet against a number for another column.
-function _fleetOwnCols() {
+// The column one boat (or our boat) scores on: same rule as race_def.rating_spec_for.
+function _fleetColsFor(entry) {
   const d = Lab.editDef, sc = (d.rules_profile || {}).scoring || {};
-  const div = ((d.own || {}).division || "").trim();
+  const div = ((entry || {}).division || "").trim();
   const dv = (d.divisions || []).find((x) => div && String(x.id || "").trim() === div);
   const rows = (sc.course_columns || []).filter((r) => r && r.column);
   let row = dv && rows.find((r) => r.course === dv.course_ref);
   // same rule as race_def.rating_spec: no course known → the only per-course column, if just one
-  if (!dv && !row && rows.length && new Set(rows.map((r) => r.column + "/" + (r.column_tod || ""))).size === 1) row = rows[0];
+  // and every course of the race has it
+  const covers = (d.courses || []).every((c) => !c || !c.id || rows.some((r) => r.course === c.id));
+  if (!dv && !row && rows.length && covers && new Set(rows.map((r) => r.column + "/" + (r.column_tod || ""))).size === 1) row = rows[0];
   return row ? { rating: row.column, tod: row.column_tod || null }
              : { rating: sc.rating_column || null, tod: sc.rating_column_tod || null };
 }
+function _fleetOwnCols() { return _fleetColsFor(Lab.editDef.own || {}); }
 function fleetOwnSet(f, v) {
   if (!Lab.editDef) return;
   if (!Lab.editDef.own) Lab.editDef.own = {};
@@ -3116,6 +3120,8 @@ function paintFleet() {
   const d = Lab.editDef, roster = d.fleet || [], own = d.own || {};
   const rp = d.rules_profile || {}, sc = rp.scoring || {}, tr = d.tracker || {};
   const inp = (val, ph, oninput, w) => `<input class="ein" style="width:${w}px" placeholder="${esc(ph)}" value="${esc(val == null ? "" : val)}" oninput="${oninput}">`;
+  // a ToD allowance box only on boats whose course scores on a named ToD column (#311)
+  const anyTod = roster.some((e) => _fleetColsFor(e).tod);
   const row = (e, i) => `<tr>
     <td>${inp(e.boat, "boat name", `fleetSet(${i},'boat',this.value)`, 140)}${fleetSrcBadge(e)}</td>
     <td>${inp(e.sail, "sail #", `fleetSet(${i},'sail',this.value)`, 70)}</td>
@@ -3124,6 +3130,7 @@ function paintFleet() {
     <td>${inp(e.owner, "owner", `fleetSet(${i},'owner',this.value)`, 110)}</td>
     <td>${inp(e.orc_gph, "GPH", `fleetSet(${i},'orc_gph',this.value)`, 56)}</td>
     <td>${inp(e.rating, "ToT", `fleetSet(${i},'rating',this.value)`, 56)}</td>
+    ${anyTod ? `<td>${_fleetColsFor(e).tod ? inp(e.tod_allowance, "s/nm", `fleetSet(${i},'tod_allowance',this.value)`, 56) : ""}</td>` : ""}
     <td>${inp(e.mmsi, "MMSI", `fleetSet(${i},'mmsi',this.value)`, 90)}</td>
     <td><button class="mini" onclick="fleetRemove(${i})" title="remove">✕</button></td></tr>`;
   const permitted = !!rp.tracker_permitted;
@@ -3198,7 +3205,7 @@ function paintFleet() {
       <details ${Lab.fleetEdit ? "open" : ""} style="margin-top:10px" ontoggle="Lab.fleetEdit=this.open">
         <summary style="cursor:pointer;font-size:13px">Edit roster ${roster.length ? `(${roster.length})` : "(add boats)"}</summary>
         ${roster.length ? `<table class="fleet-tbl" style="margin-top:8px"><thead><tr>
-          <th>Boat</th><th>Sail #</th><th>Div</th><th>Class</th><th>Owner</th><th>GPH (s/nm)</th><th>ToT</th><th>MMSI</th><th></th>
+          <th>Boat</th><th>Sail #</th><th>Div</th><th>Class</th><th>Owner</th><th>GPH (s/nm)</th><th>ToT</th>${anyTod ? "<th>ToD (s/nm)</th>" : ""}<th>MMSI</th><th></th>
           </tr></thead><tbody>${roster.map(row).join("")}</tbody></table>` : ""}
         <div style="margin-top:8px"><button class="mini" onclick="fleetAddRow()">+ Add boat</button></div>
       </details>

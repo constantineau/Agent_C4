@@ -135,6 +135,11 @@ del d["rules_profile"]["scoring"]["rating_column"]
 check("no race-wide column → unknown (not our course's)",
       R.rating_spec_for(d, {"division": "Class E"})["column"] is None)
 check("our own boat still uses its course", R.rating_spec_for(d, d["own"])["column"] == "XX_B_TOT")
+one = race(rating_system="ORC", course_columns=[{"course": "long", "column": "XX_A_TOT"}])
+check("one course's column does not stand in when another course has none",
+      R.rating_spec_for(one, {"division": "Z"})["column"] is None)
+both = race(rating_system="ORC", course_columns=[{"course": "long", "column": "X"}, {"course": "short", "column": "X"}])
+check("a column every course shares does", R.rating_spec_for(both, {"division": "Z"})["column"] == "X")
 
 print("fleet_blob (what the boat gets) never carries a stale rating:")
 d = race(rating_system="ORC", rating_column="COL_B")
@@ -153,6 +158,14 @@ check("our boat's stale rating is not shipped", blob["own"]["rating"] is None)
 check("the blob names them", blob["stale_ratings"] == ["Stale", "Legacy", "Good", "(our boat)"])
 check("the definition itself is untouched", d["fleet"][0]["rating"] == 1.1 and d["own"]["rating"] == 1.0)
 check("a clean race has no stale list", "stale_ratings" not in R.fleet_blob(race()))
+d = race(rating_system="ORC", course_columns=PER)
+d["fleet"] = [{"boat": "a", "division": "A"}, {"boat": "b", "division": "B"}, {"boat": "z", "division": "Z"}]
+d["own"] = {"boat": "Us", "division": "B"}
+blob = R.fleet_blob(d)
+cols = {e["boat"]: (e["rating_col"], e["tod_col"]) for e in blob["fleet"]}
+check("the blob carries each boat's own columns", cols == {"a": ("XX_A_TOT", "XX_A_TOD"),
+                                                         "b": ("XX_B_TOT", None), "z": (None, None)})
+check("and our boat's", (blob["own"]["rating_col"], blob["own"]["tod_col"]) == ("XX_B_TOT", None))
 # an explicit own (the Pi's /fleet/load override) is checked the same way
 blob = R.fleet_blob(race(rating_system="ORC", rating_column="COL_B"),
                     {"boat": "Us", "rating": 1.0, "rating_col": "COL_A"})

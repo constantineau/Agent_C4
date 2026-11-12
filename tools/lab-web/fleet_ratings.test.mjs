@@ -120,3 +120,29 @@ test("typing a number tags it manual", () => {
   ctx.__f(0, "rating", "0.9");
   assert.equal(e.rating_col, "manual");
 });
+
+test("each boat's columns follow its own division's course (ToD box shown per boat)", () => {
+  const ctx = { Lab: { editDef: {
+    divisions: [{ id: "A", course_ref: "a" }, { id: "B", course_ref: "b" }],
+    rules_profile: { scoring: { course_columns: [{ course: "a", column: "TA", column_tod: "DA" },
+                                                 { course: "b", column: "TB", column_tod: "" }] } },
+    own: { division: "B" } } } };
+  vm.createContext(ctx);
+  vm.runInContext(grab("_fleetColsFor") + grab("_fleetOwnCols") + "\nthis.__f = [_fleetColsFor, _fleetOwnCols];", ctx);
+  const [colsFor, ownCols] = ctx.__f;
+  assert.deepEqual(JSON.parse(JSON.stringify(colsFor({ division: "A" }))), { rating: "TA", tod: "DA" });
+  assert.deepEqual(JSON.parse(JSON.stringify(colsFor({ division: "B" }))), { rating: "TB", tod: null });
+  assert.deepEqual(JSON.parse(JSON.stringify(colsFor({ division: "Z" }))), { rating: null, tod: null });
+  assert.deepEqual(JSON.parse(JSON.stringify(ownCols())), { rating: "TB", tod: null });
+  // the roster table gets a ToD box only on a boat whose course has a ToD column
+  assert.match(src, /\$\{_fleetColsFor\(e\)\.tod \? inp\(e\.tod_allowance, "s\/nm", `fleetSet\(\$\{i\},'tod_allowance',this\.value\)`/);
+});
+
+test("a ToD allowance typed for a competitor is tagged manual", () => {
+  const e = { boat: "A", tod_allowance: 600, tod_col: "DA" };
+  const ctx = { Lab: { editDef: { fleet: [e] } } };
+  vm.createContext(ctx);
+  vm.runInContext(grab("_FLEET_TAG") + grab("fleetSet") + "\nthis.__f = fleetSet;", ctx);
+  ctx.__f(0, "tod_allowance", "615");
+  assert.deepEqual([e.tod_allowance, e.tod_col], ["615", "manual"]);
+});

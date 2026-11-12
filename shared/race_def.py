@@ -474,7 +474,13 @@ def rating_spec(definition: dict, course_id: str = None, own_course: bool = True
     rows = [r for r in (sc.get("course_columns") or []) if isinstance(r, dict) and r.get("column")]
     cid = _course_for(definition, course_id) if own_course else course_id
     row = next((r for r in rows if cid and str(r.get("course")) == str(cid)), None)
-    if row is None and not cid and len({(r["column"], r.get("column_tod") or "") for r in rows}) == 1:
+    # no course known: the per-course column stands in only when EVERY course of the race uses it
+    # (a race listing courses that have no row of their own doesn't count)
+    course_ids = {str(c.get("id")) for c in (definition or {}).get("courses") or []
+                  if isinstance(c, dict) and c.get("id")}
+    covers = course_ids <= {str(r.get("course")) for r in rows}
+    if (row is None and not cid and covers
+            and len({(r["column"], r.get("column_tod") or "") for r in rows}) == 1):
         row = rows[0]
     col = (row or {}).get("column") or sc.get("rating_column") or None
     tod = ((row or {}).get("column_tod") if row else sc.get("rating_column_tod")) or None
@@ -730,7 +736,9 @@ def fleet_blob(definition: dict, own: dict = None) -> dict:
     stale = clear_stale_ratings(definition)
     roster = []
     for e in definition.get("fleet", []) or []:
+        spec = rating_spec_for(definition, e)      # per boat: its course may or may not name columns
         roster.append({"boat": e.get("boat"), "division": e.get("division", ""),
+                       "rating_col": spec["column"], "tod_col": spec["column_tod"],
                        "cls": e.get("cls", ""), "owner": e.get("owner", ""),
                        "sail": e.get("sail", ""),
                        "orc_gph": e.get("orc_gph"), "rating": e.get("rating"),
@@ -749,7 +757,11 @@ def fleet_blob(definition: dict, own: dict = None) -> dict:
         e = _gun_epoch(v, tz_name)
         if e is not None:
             division_starts[str(k)] = e
-    out = {"fleet": roster, "scoring": scoring, "own": definition.get("own") or {},
+    own_out = dict(definition.get("own") or {})
+    if own_out:
+        ospec = rating_spec_for(definition, own_out)
+        own_out.update(rating_col=ospec["column"], tod_col=ospec["column_tod"])
+    out = {"fleet": roster, "scoring": scoring, "own": own_out,
            "tracker": tracker, "division_starts": division_starts}
     if stale["boats"] or stale["own"]:
         out["stale_ratings"] = stale["boats"] + (["(our boat)"] if stale["own"] else [])

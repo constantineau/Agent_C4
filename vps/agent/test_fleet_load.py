@@ -347,6 +347,48 @@ try:
 except Exception as e:
     ISSUE(f"crash: {type(e).__name__}: {e}")
 
+print("\n== 16. #311: strictness is per boat (its course's columns), not fleet-wide ==")
+try:
+    import copy
+    from shared import race_def as RD
+    d = {"rules_profile": {"scoring": {"method": "Time-on-Distance", "rating_system": "ORC",
+                                        "course_columns": [{"course": "a", "column": "TA", "column_tod": "DA"},
+                                                           {"course": "b", "column": "TB", "column_tod": ""}]}},
+         "courses": [{"id": "a"}, {"id": "b"}],
+         "divisions": [{"id": "A", "course_ref": "a"}, {"id": "B", "course_ref": "b"}],
+         "own": {"boat": "Us", "division": "B", "orc_gph": 600.0},
+         "fleet": [{"boat": "OnB", "mmsi": "111", "division": "B", "orc_gph": 580.0},
+                   {"boat": "OnA", "mmsi": "222", "division": "A", "orc_gph": 580.0}]}
+    blob = RD.fleet_blob(copy.deepcopy(d))
+    setup(blob, [tgt("111", 45.10, -83.00, 6.0), tgt("222", 45.10, -83.01, 6.0)])
+    f = fleet.get_fleet()
+    rows = {r["boat"]: r for r in f["fleet"]}
+    if rows["OnB"].get("corrected_delta_s") is None: ISSUE("course B (no ToD column) lost its GPH fallback")
+    elif rows["OnA"].get("corrected_delta_s") is not None: ISSUE("course A (ToD column) used GPH")
+    elif not rows["OnA"].get("no_rating") or rows["OnB"].get("no_rating"): ISSUE(f"no_rating flags: {rows}")
+    else: OK("ToD: course B keeps GPH, course A (named column) needs its allowance")
+    # same on removing course A from the race: B's delta is unchanged
+    d2 = copy.deepcopy(d); d2["fleet"] = d2["fleet"][:1]
+    d2["rules_profile"]["scoring"]["course_columns"] = d2["rules_profile"]["scoring"]["course_columns"][1:]
+    setup(RD.fleet_blob(d2), [tgt("111", 45.10, -83.00, 6.0)])
+    alone = fleet.get_fleet()["fleet"][0].get("corrected_delta_s")
+    if alone != rows["OnB"]["corrected_delta_s"]: ISSUE(f"B's delta depends on course A: {alone} vs {rows['OnB']['corrected_delta_s']}")
+    else: OK(f"B's delta is the same with or without course A ({alone} s)")
+    # ToT the same way: course a names TA, a boat on an unlisted course with no race-wide column doesn't
+    d3 = copy.deepcopy(d)
+    d3["rules_profile"]["scoring"]["method"] = "Time-on-Time"
+    d3["rules_profile"]["scoring"]["course_columns"] = [{"course": "a", "column": "TA"}]
+    d3["own"] = {"boat": "Us", "division": "A", "rating": 1.0}
+    d3["fleet"] = [{"boat": "OnA", "mmsi": "222", "division": "A", "orc_gph": 580.0},
+                   {"boat": "Elsewhere", "mmsi": "111", "division": "Z", "orc_gph": 580.0}]
+    setup(RD.fleet_blob(d3), [tgt("111", 45.10, -83.00, 6.0), tgt("222", 45.10, -83.01, 6.0)])
+    rows = {r["boat"]: r for r in fleet.get_fleet()["fleet"]}
+    if rows["OnA"].get("corrected_delta_s") is not None: ISSUE("ToT: named-column boat used GPH")
+    elif rows["Elsewhere"].get("corrected_delta_s") is None: ISSUE("ToT: boat with no named column lost GPH")
+    else: OK("ToT strictness per boat too")
+except Exception as e:
+    ISSUE(f"crash: {type(e).__name__}: {e}")
+
 print("\n" + ("ALL CLEAN — no issues found" if not issues else f"{len(issues)} ISSUE(S) FOUND:"))
 for i in issues: print("  -", i)
 sys.exit(1 if issues else 0)

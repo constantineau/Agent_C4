@@ -250,14 +250,19 @@ def get_fleet(max_range_nm: float = 40.0):
     has_tod = scoring.get("rating_column_tod") or any(r.get("column_tod") for r in rows)
     if kind is not None and system == "ORC" and not has_col:
         gaps.append("rating column unknown, gaps may be off")
-    # #311: with a named column, a boat without that number (e.g. cleared after a column switch)
-    # gets no corrected time — never a coefficient made up from GPH
-    strict = {"_strict_tot": bool(has_col), "_strict_tod": bool(has_tod)}
-    roster = [dict(e, **strict) for e in roster if isinstance(e, dict)]
-    own_cfg = dict(own_cfg, **strict)
+    # #311: where the boat's course names a column, a boat without that number (e.g. cleared after
+    # a column switch) gets no corrected time — never a coefficient made up from GPH. The blob
+    # carries each boat's columns (race_def.fleet_blob → rating_col / tod_col); an older blob
+    # without them falls back to "any column named anywhere".
+    def _strict(e):
+        return {"_strict_tot": bool(e["rating_col"]) if "rating_col" in e else bool(has_col),
+                "_strict_tod": bool(e["tod_col"]) if "tod_col" in e else bool(has_tod)}
+    roster = [dict(e, **_strict(e)) for e in roster if isinstance(e, dict)]
+    own_cfg = dict(own_cfg, **_strict(own_cfg))
     if kind is not None:
-        n = sum(1 for e in roster if _no_rating(e, is_tod))
-        if n and (strict["_strict_tod"] if is_tod else strict["_strict_tot"]):
+        key = "_strict_tod" if is_tod else "_strict_tot"
+        n = sum(1 for e in roster if e[key] and _no_rating(e, is_tod))
+        if n:
             gaps.append(f"{n} boat{'s' if n != 1 else ''} with no rating for the race's column, "
                         "no corrected time for them")
 
