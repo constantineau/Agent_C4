@@ -17,8 +17,9 @@ This module gives the matcher + the Tier-2 copilot + the dashboard ladder that s
     boat's OWN instruments ("45003 up-course 18 nm: 4 kn MORE pressure, 15° right of here").
 
 Stations come from the frozen bundle's `buoys` block (synthesis picks stations near the course —
-the homework pattern), else the BUOY_STATIONS env ("id:lat:lon:name;..."), else a curated
-Great-Lakes fallback. Fetches are cached (~10 min — the obs cadence) and best-effort: offline or
+the homework pattern; the Lab finds them for the race's area, #309), else the BUOY_STATIONS env
+("id:lat:lon:name;..."), else a curated Great-Lakes fallback — on the Great Lakes only; elsewhere
+the boat says plainly it has no stations. Fetches are cached (~10 min — the obs cadence) and best-effort: offline or
 out of season (lakes buoys are pulled in winter) → stations report stale/absent, never an error.
 """
 from __future__ import annotations
@@ -55,6 +56,11 @@ _GL_FALLBACK = [
     {"id": "45007", "lat": 42.67, "lon": -87.02, "name": "S Lake Michigan buoy"},
 ]
 
+# where that fallback applies (s, n, w, e): the Great Lakes. Anywhere else, with no bundle or env
+# list, the boat says it has no stations here — never another area's (#309).
+_GL_AREA = (40.5, 49.5, -93.0, -75.0)
+NO_STATIONS_NOTE = "No observation stations for this area. The race's playbook lists them."
+
 _CACHE: dict = {}          # station -> (fetched_at, [(epoch, tws_kn, twd_deg), ...] newest-first)
 
 
@@ -80,11 +86,21 @@ def _bearing(lat1, lon1, lat2, lon2):
 
 def stations():
     """The station list, by precedence: frozen bundle `buoys` block → BUOY_STATIONS env → the
-    curated Great-Lakes fallback."""
+    curated Great-Lakes fallback (used only on the Great Lakes, see get_buoys)."""
+    return _stations_and_origin()[0]
+
+
+def _in_gl_area(lat, lon):
+    s, n, w, e = _GL_AREA
+    return s <= lat <= n and w <= lon <= e
+
+
+def _stations_and_origin():
+    """(stations, "bundle" | "env" | "fallback")."""
     try:
         blk = (deviation._load_playbook() or {}).get("buoys") or []
         if blk:
-            return [s for s in blk if s.get("id") and s.get("lat") is not None]
+            return [s for s in blk if s.get("id") and s.get("lat") is not None], "bundle"
     except Exception:
         pass
     env = os.environ.get("BUOY_STATIONS", "").strip()
@@ -96,8 +112,8 @@ def stations():
                 out.append({"id": bits[0].strip(), "lat": float(bits[1]), "lon": float(bits[2]),
                             "name": bits[3].strip() if len(bits) > 3 else bits[0].strip()})
         if out:
-            return out
-    return list(_GL_FALLBACK)
+            return out, "env"
+    return list(_GL_FALLBACK), "fallback"
 
 
 def _fetch(url, timeout):          # seam for tests
@@ -228,7 +244,10 @@ def get_buoys(route=None):
         pass
     own_tws, own_twd = live.get("tws"), live.get("twd")
     now = time.time()
-    sts = [st for st in stations() if _hav_nm(lat, lon, st["lat"], st["lon"]) <= MAX_NM]
+    listed, origin = _stations_and_origin()
+    if origin == "fallback" and not _in_gl_area(lat, lon):
+        return {"available": False, "note": NO_STATIONS_NOTE}
+    sts = [st for st in listed if _hav_nm(lat, lon, st["lat"], st["lon"]) <= MAX_NM]
     metar_obs = _obs_metars([st["id"] for st in sts if st.get("kind") == "metar"])
     # warm the per-station cache concurrently — at course-scale radius the full bundle list is in
     # play (~20 stations) and serial cold fetches would blow the dashboard's request timeout

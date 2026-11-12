@@ -680,14 +680,12 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
     # object never leaves this function — rebuilding it later would re-parse every frame.
     buoy_promises = {}
     try:
-        from . import venue as _venue
-        n_, s_, w_, e_ = bbox
-        for st in _venue.STATIONS:
+        from . import obsarea
+        # the same area lookup and 0.6° pad as the station freeze (synthesis._buoy_stations) —
+        # a station frozen aboard without a promise series never shows its vs-forecast delta
+        for st in obsarea.find(bbox, 0.6)["stations"]:
             la, lo = st.get("lat"), st.get("lon")
-            # same 0.6° pad as the station freeze (synthesis._buoy_stations) — without it the
-            # padded-in stations (e.g. the Cove Island gate pair, just east of the course bbox)
-            # freeze aboard with obs but NO promise series, so their vs-forecast delta never shows
-            if la is None or lo is None or not (s_ - 0.6 <= la <= n_ + 0.6 and w_ - 0.6 <= lo <= e_ + 0.6):
+            if la is None or lo is None:
                 continue
             ser, t = [], float(start_epoch)
             while t <= t_end:
