@@ -124,6 +124,53 @@ def save_result(race_id, team_id, division, elapsed_s, corrected_s, tcf, rank_di
                    1 if finished else 0, status))
 
 
+def replace_fleet(race_id, setup, start_epoch, source, teams, tracks, results) -> dict:
+    """A re-import that REPLACES the race (a fleet file uploaded again, #310): its entries, tracks
+    and results become exactly the new ones, in one transaction, so a boat or a rank the new file
+    drops is gone. Runs and scores for the race are deleted (they were built from the old tracks;
+    "Score the fleet" rebuilds them). A boat's matched polar is kept only when its id, name and
+    sail are all unchanged; a removed or re-identified boat loses it. Ids must already be stable
+    (`retro.stable_ids`). Returns how much analysis was cleared."""
+    c = _conn()
+    try:
+        with c:
+            old = {r["team_id"]: (r["boat"], r["sail"]) for r in c.execute(
+                "SELECT team_id, boat, sail FROM entries WHERE race_id=?", (race_id,))}
+            new = {t.get("id"): (t.get("name"), t.get("sail")) for t in teams}
+            drop_polars = [tid for tid, ident in old.items() if new.get(tid) != ident]
+            runs = c.execute("SELECT COUNT(*) FROM runs WHERE race_id=?", (race_id,)).fetchone()[0]
+            for tbl in ("entries", "tracks", "results", "runs", "scores"):
+                c.execute(f"DELETE FROM {tbl} WHERE race_id=?", (race_id,))
+            c.executemany("DELETE FROM polars WHERE race_id=? AND team_id=?",
+                          [(race_id, tid) for tid in drop_polars])
+            c.execute("INSERT INTO races (race_id, source, start_epoch, setup_json, ingested_at) "
+                      "VALUES (?,?,?,?,?) ON CONFLICT(race_id) DO UPDATE SET "
+                      "source=excluded.source, start_epoch=excluded.start_epoch, "
+                      "setup_json=excluded.setup_json, ingested_at=excluded.ingested_at",
+                      (race_id, source, start_epoch, json.dumps(setup), time.time()))
+            c.executemany(
+                "INSERT INTO entries (race_id, team_id, boat, sail, owner, model, division, tcf, "
+                "start_epoch, finished_at, status) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                [(race_id, t.get("id"), t.get("name"), t.get("sail"), t.get("owner"),
+                  t.get("model"), t.get("division"), t.get("tcf"), t.get("start"),
+                  t.get("finishedAt"), t.get("status")) for t in teams])
+            c.executemany(
+                "INSERT INTO tracks (race_id, team_id, n_fixes, t0, t1, fixes_json) "
+                "VALUES (?,?,?,?,?,?)",
+                [(race_id, tid, len(fx), min(f["t"] for f in fx) if fx else None,
+                  max(f["t"] for f in fx) if fx else None, json.dumps(fx))
+                 for tid, fx in tracks.items()])
+            c.executemany(
+                "INSERT INTO results (race_id, team_id, division, elapsed_s, corrected_s, tcf, "
+                "rank_division, finished, status) VALUES (?,?,?,?,?,?,?,?,?)",
+                [(race_id, r["team_id"], r["division"], r.get("elapsed"), r.get("corrected"),
+                  r.get("tcf"), r.get("rank"), 1 if r.get("finished") else 0,
+                  r.get("status") or "") for r in results])
+    finally:
+        c.close()
+    return {"runs": runs, "polars": len(drop_polars)}
+
+
 def save_cert(country, refno, yacht, sail, cert):
     with _conn() as c:
         c.execute("INSERT INTO certs (country, refno, yacht, sail, cert_json, fetched_at) "

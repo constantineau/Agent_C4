@@ -73,33 +73,87 @@ def ingest_race(race_id: str, provider: str = "yb") -> dict:
     return store_fleet(race_id, p.fleet(race_id))
 
 
+RESCORE = "Old scores cleared. Score the fleet again."
+
+
 def ingest_file(race_id: str, files, definition=None) -> dict:
-    """Store an uploaded fleet file (GPX/CSV, `trackers.parse_fleet_files`) under `race_id`."""
+    """Store an uploaded fleet file (GPX/CSV, `trackers.parse_fleet_files`) under `race_id`.
+    A re-upload REPLACES the race (`rs.replace_fleet`): boats, tracks and ranks the new file
+    leaves out are gone, the race's runs and scores are cleared, and a boat keeps its id (and its
+    polar, when unchanged) whatever order the file lists it in (`stable_ids`)."""
     if not race_id:
         return {"ok": False, "note": NO_RACE}
-    return store_fleet(race_id, trackers.parse_fleet_files(files, definition))
+    fleet = trackers.parse_fleet_files(files, definition)
+    if not fleet.get("ok"):
+        return fleet
+    stable_ids(fleet, rs.get_entries(race_id))
+    cleared = rs.replace_fleet(race_id, fleet.get("setup") or {}, fleet.get("start"), "file",
+                               fleet["teams"], fleet["tracks"], fleet["results"])
+    out = _summary(race_id, fleet)
+    out["cleared"] = cleared
+    notes = [fleet.get("results_note"), RESCORE if cleared["runs"] else None]
+    if any(notes):
+        out["note"] = " ".join(n for n in notes if n)
+    return out
+
+
+def _sail_key(sail):
+    return fi._norm_sail(sail) or None
+
+
+def _name_key(name):
+    return fi._norm(name) or None
+
+
+def stable_ids(fleet: dict, existing: list) -> None:
+    """Give each uploaded boat the id it already has in the archive, matched by sail number,
+    else by name; a new boat gets the next unused id. Rewrites the fleet's teams, tracks and
+    results in place. Without this the ids follow the file's order, and a re-upload in another
+    order would hand each boat another boat's polar and scores."""
+    by_sail = {_sail_key(e.get("sail")): e["team_id"] for e in existing if _sail_key(e.get("sail"))}
+    by_name = {_name_key(e.get("boat")): e["team_id"] for e in existing if _name_key(e.get("boat"))}
+    nxt = max([e["team_id"] for e in existing] + [0]) + 1
+    used, remap = set(), {}
+    for t in fleet["teams"]:
+        tid = None
+        for key, table in ((_sail_key(t.get("sail")), by_sail), (_name_key(t.get("name")), by_name)):
+            if key and table.get(key) is not None and table[key] not in used:
+                tid = table[key]
+                break
+        if tid is None:
+            tid, nxt = nxt, nxt + 1
+        used.add(tid)
+        remap[t["id"]] = tid
+    for t in fleet["teams"]:
+        t["id"] = remap[t["id"]]
+    fleet["tracks"] = {remap[k]: v for k, v in fleet["tracks"].items()}
+    for r in fleet["results"]:
+        r["team_id"] = remap[r["team_id"]]
+
+
+def _summary(race_id, fleet):
+    results = fleet.get("results") or []
+    return {"ok": True, "race_id": race_id, "teams": len(fleet.get("teams") or []),
+            "blocks": fleet.get("blocks"), "tracks": len(fleet.get("tracks") or {}),
+            "results": len(results), "divisions": len({r["division"] for r in results}),
+            "unmatched_tracks": (fleet.get("unmatched") or [])[:20]}
 
 
 def store_fleet(race_id: str, fleet: dict) -> dict:
-    """Write a provider's normalized fleet into the retro archive."""
+    """Write a fetched provider's normalized fleet (YB) into the retro archive. Upserts, as YB
+    always did: YB team ids are the feed's own, so they stay put across re-fetches."""
     if not fleet.get("ok"):
         return fleet
     rs.upsert_race(race_id, fleet.get("setup") or {}, fleet.get("start"),
                    source=fleet.get("source") or "yb")
-    teams = fleet.get("teams") or []
-    for t in teams:
+    for t in fleet.get("teams") or []:
         rs.upsert_entry(race_id, t)
-    tracks = fleet.get("tracks") or {}
-    for tid, fixes in tracks.items():
+    for tid, fixes in (fleet.get("tracks") or {}).items():
         rs.save_track(race_id, tid, fixes)
-    results = fleet.get("results") or []
-    for r in results:
+    for r in fleet.get("results") or []:
         rs.save_result(race_id, r["team_id"], r["division"], r.get("elapsed"), r.get("corrected"),
                        r.get("tcf"), r.get("rank"), r.get("finished"), r.get("status") or "")
-    out = {"ok": True, "race_id": race_id, "teams": len(teams), "blocks": fleet.get("blocks"),
-           "tracks": len(tracks), "results": len(results),
-           "divisions": len({r["division"] for r in results}),
-           "unmatched_tracks": (fleet.get("unmatched") or [])[:20]}
+    out = _summary(race_id, fleet)
     if fleet.get("results_note"):
         out["note"] = fleet["results_note"]
     return out

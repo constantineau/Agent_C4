@@ -264,3 +264,87 @@ def test_upload_endpoint(monkeypatch, archive):
     # the debrief "Get from tracker" reads our boat from the uploaded file
     r = c.post("/api/debrief/track/fetch", headers=h, json={"race_id": "orc-na-2027", "boat": "Bravo"})
     assert r.status_code == 200 and r.json()["ok"]
+
+
+# ---- re-uploading a fleet file (Codex on #345) ---------------------------------------------
+def _csv(*rows, header="boat,sail,division,rank,time,lat,lon"):
+    out = header + "\n"
+    for boat, sail, rank in rows:
+        out += f"{boat},{sail},A,{rank},2027-11-15T16:00:00Z,26.10,-80.10\n"
+        out += f"{boat},,,,2027-11-15T16:10:00Z,26.11,-80.09\n"
+    return out.encode()
+
+
+def _ids(rid="orc-na-2027"):
+    return {e["boat"]: e["team_id"] for e in rs.get_entries(rid)}
+
+
+def _analyse(rid="orc-na-2027"):
+    """Stand-in for steps 2 and 3: a polar and a scored run per boat, tagged with its name."""
+    for boat, tid in _ids(rid).items():
+        rs.save_polar(rid, tid, None, [[boat]], "sail", 0.9)
+        run = rs.save_run(rid, tid, "gun_forecast", {}, {}, {"boat": boat})
+        rs.save_score(rid, tid, run, {"boat": boat})
+
+
+def test_reupload_in_another_order_keeps_each_boats_id():
+    d = _race()
+    retro.ingest_file("orc-na-2027", [("f.csv", _csv(("Bravo", "USA 1", 1), ("Charlie", "USA 2", 2)))], d)
+    before = _ids()
+    _analyse()
+    r = retro.ingest_file("orc-na-2027", [("f.csv", _csv(("Charlie", "USA 2", 2), ("Bravo", "USA 1", 1)))], d)
+    assert _ids() == before
+    for boat, tid in before.items():
+        assert rs.get_polar("orc-na-2027", tid) == [[boat]]          # its own polar, not the other's
+    assert rs.get_scores("orc-na-2027") == []                        # runs/scores rebuilt by a re-score
+    assert r["cleared"] == {"runs": 2, "polars": 0} and retro.RESCORE in r["note"]
+
+
+def test_reupload_matches_by_name_when_there_is_no_sail():
+    d = _race()
+    retro.ingest_file("orc-na-2027", [("fleet.gpx", GPX)], d)
+    before = _ids()
+    swapped = GPX.replace(b"<name>Bravo</name>", b"<name>TMP</name>") \
+                 .replace(b"<name>Charlie</name>", b"<name>Bravo</name>") \
+                 .replace(b"<name>TMP</name>", b"<name>Charlie</name>")
+    retro.ingest_file("orc-na-2027", [("fleet.gpx", swapped)], d)
+    assert _ids() == before
+
+
+def test_reupload_without_ranks_drops_the_old_ranks():
+    d = _race()
+    retro.ingest_file("orc-na-2027", [("f.csv", _csv(("Bravo", "USA 1", 1), ("Charlie", "USA 2", 2)))], d)
+    assert len(rs.get_results("orc-na-2027")) == 2
+    r = retro.ingest_file("orc-na-2027", [("f.csv", _csv(("Bravo", "USA 1", ""), ("Charlie", "USA 2", "")))], d)
+    assert r["results"] == 0 and rs.get_results("orc-na-2027") == []
+    assert retro.report("orc-na-2027").get("divisions") in (None, [])
+
+
+def test_reupload_without_a_boat_removes_it():
+    d = _race()
+    retro.ingest_file("orc-na-2027", [("f.csv", _csv(("Bravo", "USA 1", 1), ("Charlie", "USA 2", 2)))], d)
+    _analyse()
+    charlie = _ids()["Charlie"]
+    r = retro.ingest_file("orc-na-2027", [("f.csv", _csv(("Bravo", "USA 1", 1)))], d)
+    assert list(_ids()) == ["Bravo"] and r["cleared"]["polars"] == 1
+    assert rs.get_track("orc-na-2027", charlie) is None and rs.get_polar("orc-na-2027", charlie) is None
+    assert [e["boat"] for e in trackers.entries(d)["entries"]] == ["Bravo"]
+    assert trackers.boat_track(d, "Charlie")["ok"] is False
+
+
+def test_reupload_with_a_new_sail_drops_that_boats_polar():
+    d = _race()
+    retro.ingest_file("orc-na-2027", [("f.csv", _csv(("Bravo", "USA 1", 1), ("Charlie", "USA 2", 2)))], d)
+    _analyse()
+    ids = _ids()
+    retro.ingest_file("orc-na-2027", [("f.csv", _csv(("Bravo", "USA 11", 1), ("Charlie", "USA 2", 2)))], d)
+    assert _ids() == ids                                             # same boat, matched by name
+    assert rs.get_polar("orc-na-2027", ids["Bravo"]) is None         # its cert match may be wrong now
+    assert rs.get_polar("orc-na-2027", ids["Charlie"]) == [["Charlie"]]
+
+
+def test_new_boats_get_fresh_ids():
+    d = _race()
+    retro.ingest_file("orc-na-2027", [("f.csv", _csv(("Bravo", "USA 1", 1), ("Charlie", "USA 2", 2)))], d)
+    retro.ingest_file("orc-na-2027", [("f.csv", _csv(("Bravo", "USA 1", 1), ("Delta", "USA 3", 2)))], d)
+    assert _ids() == {"Bravo": 1, "Delta": 3}                        # Charlie's id is not reused

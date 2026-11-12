@@ -31,6 +31,10 @@ named by the race definition's `tracker.provider`. `yb` fetches as above. `file`
 per boat, or a CSV of `boat,time,lat,lon` rows (optional `sail`, `division`, `rank`). It is stored
 in the same archive under the Lab race id; the debrief's "Get from tracker" and the Fleet tab's
 tracker import then read it from there. A file gives no TCFs; results only when it has `rank`.
+Uploading again replaces the race: boats, tracks and ranks the new file leaves out are gone, and
+the race's runs and scores are cleared (score the fleet again). A boat keeps its id, matched by sail
+number, else name, whatever order the file lists it in. It keeps its ORC polar only if its name and
+sail are unchanged.
 
 ## 3. Persistence — EVERYTHING gathered is kept (user requirement)
 
