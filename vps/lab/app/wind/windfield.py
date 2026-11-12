@@ -18,7 +18,7 @@ import math
 import os
 
 from . import grib
-from .models import MODELS, DEFAULT_MODELS, ModelSource
+from .models import MODELS, DEFAULT_MODELS, NOT_HERE, ModelSource
 
 KN_PER_MS = grib.KN_PER_MS
 MAX_FRAMES_PER_MEMBER = 64        # safety cap on downloads per series
@@ -102,6 +102,20 @@ def _load_model(source, bbox, t_start, t_end, members, on_progress, parser=None,
     return series, meta
 
 
+def not_here_meta(source):
+    """The meta row for a model left out because the race is outside its area (#309)."""
+    return {"model": source.name, "cycle": None, "members": 0, "frames": 0, "expected_frames": 0,
+            "cycle_fallbacks": 0, "priority": source.priority, "kind": source.kind,
+            "skipped": NOT_HERE, "note": source.not_here_note()}
+
+
+def coverage_notes(meta):
+    """Plain notes for the models a wind field left out as outside their area, e.g.
+    "HRRR: not here (US only)." Empty when every model asked for covers the race."""
+    return [m["note"] + "." for m in (meta or [])
+            if isinstance(m, dict) and m.get("skipped") == NOT_HERE and m.get("note")]
+
+
 def build_windfield(bbox, t_start: float, t_end: float, models=DEFAULT_MODELS,
                     ensemble_members: int = 0, on_progress=None,
                     model_weights=None, model_bias=None, fallback_tries=None):
@@ -121,6 +135,12 @@ def build_windfield(bbox, t_start: float, t_end: float, models=DEFAULT_MODELS,
             # its GRIB cache); a string resolves from the live registry.
             source = MODELS.get(name) if isinstance(name, str) else name
             if source is None:
+                continue
+            inside = getattr(source, "covers_bbox", None)
+            if inside is not None and not inside(bbox):   # #309: outside the model's area (HRRR
+                meta.append(not_here_meta(source))       # off the US): no download, said plainly
+                if on_progress:
+                    on_progress(source.not_here_note())
                 continue
             if hasattr(source, "load_series"):        # API-grid source (ICON via Open-Meteo) —
                 m_series, m_meta = source.load_series(bbox, t_start, t_end, on_progress)

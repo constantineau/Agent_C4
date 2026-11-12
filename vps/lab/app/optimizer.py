@@ -1713,6 +1713,7 @@ def _optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s
     safety = route_safety(definition, cid or course_id, marks, full_path, leg_end_idx, incomplete,
                           obstacles, leg_obstacles, land_failed, from_mark=int(from_mark or 0))
     data = sea_data(cur, waves, definition, cid or course_id)
+    data["notes"] = data.get("notes", []) + wind_notes(wf)    # #309: "HRRR: not here (US only)."
     if data.get("warning"):            # tidal water routed with no current: first, not buried
         warnings.insert(0, data["warning"])
     return {
@@ -2019,6 +2020,13 @@ def _per_model_paths(definition, course_id, start_epoch, wf, obstacles, P, marks
 
 
 # --- course extent / horizon -------------------------------------------------
+def wind_notes(wf):
+    """The weather models a route's wind field left out because the race is outside their area
+    (#309), as plain notes for the `data` block."""
+    from .wind.windfield import coverage_notes
+    return coverage_notes(getattr(wf, "meta", None))
+
+
 def sea_data(cur, waves, definition, course_id=None):
     """The `data` block (#308): the current and wave sources a route used, or "none: why", the
     plain notes for what's missing, and the tidal-water warning."""

@@ -99,7 +99,9 @@ _orc_cache = {}     # cc -> (epoch, {by_sail, by_name, rows})
 
 
 def _orc_dump(country):
-    cc = (country or "USA").upper()
+    cc = str(country or "").strip().upper()
+    if not cc:                         # no country default (#310): the caller names one
+        raise ValueError(COUNTRY_UNKNOWN)
     now = time.time()
     hit = _orc_cache.get(cc)
     if hit and now - hit[0] < _ORC_TTL:

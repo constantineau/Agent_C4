@@ -435,6 +435,9 @@ def record(spec, now=None, models=None, on_progress=None, fetch=None):
             src = SOURCES.get(name)
             if src is None or src.kind != "deterministic":
                 continue
+            if not src.covers_bbox(bbox):     # #309: outside the model's area, no download
+                say(src.not_here_note())
+                continue
             have = latest_cycle(st, name)
             if have is not None and have >= src.pick_cycle(when).timestamp():
                 continue                      # nothing newer is due yet — no download
