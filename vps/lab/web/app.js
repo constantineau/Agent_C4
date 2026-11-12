@@ -264,7 +264,14 @@ function withOverrides(snap) {
 }
 // After a save resolves: only re-baseline if the same definition is still in the editor (the user
 // may have switched race or discarded while the request was in flight).
-function markSaved(snap, ed) { if (Lab.editDef === ed) markClean(snap); }
+// A save may clear imported ratings that no longer match their boat's column (#311, server side):
+// take the cleaned roster back so the screen shows what's on disk, and baseline on that.
+function markSaved(snap, ed) {
+  const fix = Lab.ratingFix; Lab.ratingFix = null;
+  if (Lab.editDef !== ed) return;
+  if (fix) { ed.fleet = fix.fleet; ed.own = fix.own; snap = JSON.stringify(ed); }
+  markClean(snap);
+}
 // Every RaceDefinition write goes through one queue: two overlapping saves (bar + in-page button)
 // then persist and resolve in the order they were sent, so the last baseline set is what's on disk.
 let saveChain = Promise.resolve();
@@ -273,7 +280,10 @@ function queueDef(fn) {
   saveChain = p.catch(() => {});
   return p;
 }
-const postDef = (path, body) => queueDef(() => apiPost(path, body).then((r) => r.json()));
+const postDef = (path, body) => queueDef(() => apiPost(path, body).then((r) => r.json()).then((r) => {
+  Lab.ratingFix = (r && r.rating_fixes) || null;   // applied by the caller's markSaved
+  return r;
+}));
 // Wait out any save still in flight (and its handler's repaint) before leaving or discarding, so a
 // late response can't repaint another tab or persist edits the user just threw away.
 async function settleSaves() {
@@ -2953,7 +2963,7 @@ async function fleetFindOrc(i) {
   Lab.fleetMsg = `Searching ORC for "${e.boat}"…`; Lab.fleetMsgErr = false; paintFleet();
   try {
     const r = await (await apiPost("/api/fleet/orc-candidates",
-      { race_id: Lab.sel, boat: e.boat, sail: e.sail, country: _fleetCC(),
+      { race_id: Lab.sel, boat: e.boat, sail: e.sail, division: e.division || "", country: _fleetCC(),
         scoring: _fleetScoring(), own: Lab.editDef.own || {} })).json();
     Lab.fleetCand = { i, list: r.candidates || [], tot_col: r.tot_col || null, tod_col: r.tod_col || null };
     Lab.fleetMsg = (r.candidates || []).length
@@ -2968,9 +2978,13 @@ function fleetApplyCand(i, ci) {
   const c = ((Lab.fleetCand || {}).list || [])[ci];
   if (!e || !c) return;
   const fc = Lab.fleetCand || {};
-  if (c.orc_gph != null) e.orc_gph = c.orc_gph;
-  if (c.rating != null) { e.rating = c.rating; e.rating_col = fc.tot_col; }
-  if (c.tod_allowance != null) { e.tod_allowance = c.tod_allowance; e.tod_col = fc.tod_col; }
+  e.orc_gph = c.orc_gph != null ? c.orc_gph : null;
+  // the picked cert's numbers replace the old ones outright, nulls too: a cert without the race's
+  // column must not leave the previous cert's rating beside its GPH (#311)
+  e.rating = c.rating != null ? c.rating : null;
+  e.tod_allowance = c.tod_allowance != null ? c.tod_allowance : null;
+  if (e.rating != null) e.rating_col = fc.tot_col; else delete e.rating_col;
+  if (e.tod_allowance != null) e.tod_col = fc.tod_col; else delete e.tod_col;
   if (!e.cls && c.cls) e.cls = c.cls;
   if (!e.sail && c.sail) e.sail = c.sail;
   e.source = (e.source || "") ? e.source + "+orc" : "orc";
@@ -3000,8 +3014,8 @@ async function fleetSave() {
   const sent = JSON.stringify(Lab.editDef), ed = Lab.editDef;
   try {
     const r = await postDef("/api/races", { definition: JSON.parse(sent) });
-    if (r.saved) { markSaved(sent, ed); ok = true; Lab.fleetMsgErr = false;
-      Lab.fleetMsg = `Saved. ${Lab.editDef.fleet.length} boat${Lab.editDef.fleet.length === 1 ? "" : "s"} in the roster.`; }
+    if (r.saved) { const fx = r.rating_fixes; markSaved(sent, ed); ok = true; Lab.fleetMsgErr = !!fx;
+      Lab.fleetMsg = `Saved. ${Lab.editDef.fleet.length} boat${Lab.editDef.fleet.length === 1 ? "" : "s"} in the roster.` + (fx ? " " + fx.note : ""); }
     else { Lab.fleetMsg = "Save failed."; Lab.fleetMsgErr = true; }
   } catch (e) { Lab.fleetMsg = "Save failed: " + e.message; Lab.fleetMsgErr = true; }
   paintFleet();
@@ -3277,7 +3291,8 @@ async function rulesSave() {
     if (r.saved) markSaved(sent, ed);
     paintRules();
     const m2 = document.getElementById("rulesMsg");
-    if (m2) m2.textContent = r.saved ? `Saved · ${(r.errors || []).length} error(s), ${(r.warnings || []).length} warning(s).` : "Save failed.";
+    if (m2) m2.textContent = r.saved ? `Saved · ${(r.errors || []).length} error(s), ${(r.warnings || []).length} warning(s).` +
+      (r.rating_fixes ? " " + r.rating_fixes.note : "") : "Save failed.";
     return !!r.saved;
   } catch (e) { const m2 = document.getElementById("rulesMsg"); if (m2) m2.textContent = "Save failed: " + e.message; return false; }
 }

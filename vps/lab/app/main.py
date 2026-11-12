@@ -1774,7 +1774,8 @@ def fleet_orc_candidates(body: dict):
         d = _with_draft_rating(d, body.get("scoring"), body.get("own"))
     return fleetimport.candidates(body.get("boat"), sail=body.get("sail"),
                                   country=body.get("country") or None,
-                                  definition=d, course_id=body.get("course_id"))
+                                  definition=d, course_id=body.get("course_id"),
+                                  division=body.get("division"))
 
 
 @app.post("/api/fleet/import/upload")
@@ -1929,10 +1930,14 @@ async def save_race(body: dict):
     definition = (body or {}).get("definition") or body
     if not definition.get("race_id"):
         return JSONResponse({"detail": "definition.race_id required"}, status_code=400)
-    rid = _write_race(definition, draft=bool((body or {}).get("draft")))
+    report = {}
+    rid = _write_race(definition, draft=bool((body or {}).get("draft")), report=report)
     errors, warnings = race_def.validate(definition)
-    return {"saved": True, "race_id": rid, "errors": errors, "warnings": warnings,
-            "reviewed": bool(definition.get("reviewed"))}
+    out = {"saved": True, "race_id": rid, "errors": errors, "warnings": warnings,
+           "reviewed": bool(definition.get("reviewed"))}
+    if report.get("rating_fixes"):
+        out["rating_fixes"] = report["rating_fixes"]
+    return out
 
 
 # Fields OWNED by other tabs / built up over prep — a re-ingested draft (e.g. the SIs landing
@@ -1954,7 +1959,24 @@ def _prep_empty(key, value):
     return False
 
 
-def _write_race(definition, draft=False, overrides=False):
+def _rating_fixes(definition):
+    """Clear imported ratings that no longer match their boat's column (#311, any save: a column
+    picked in Rules, a division moved, a candidate applied). Returns what the screen must take back
+    ({fleet, own, boats, note}) or None when nothing changed."""
+    hit = race_def.clear_stale_ratings(definition)
+    if not hit["boats"] and not hit["own"]:
+        return None
+    bits = []
+    if hit["boats"]:
+        n = len(hit["boats"])
+        bits.append(f"Old ratings cleared on {n} boat{'s' if n != 1 else ''}. Re-read ratings.")
+    if hit["own"]:
+        bits.append(fleetimport.OWN_REENTER + ".")
+    return {"fleet": definition.get("fleet") or [], "own": definition.get("own") or {},
+            "boats": hit["boats"], "own_cleared": hit["own"], "note": " ".join(bits)}
+
+
+def _write_race(definition, draft=False, overrides=False, report=None):
     """Persist a RaceDefinition. A preserved field is restored from the stored copy when the save
     omits the key, or — for a re-ingest `draft` only — sends it empty. An ordinary save that sends
     an empty value (the user cleared the notes / emptied the roster) is stored as sent.
@@ -1980,6 +2002,9 @@ def _write_race(definition, draft=False, overrides=False):
                 continue
             if k not in definition or (draft and _prep_empty(k, definition[k])):
                 definition[k] = prior[k]
+    fixes = _rating_fixes(definition)
+    if report is not None and fixes:
+        report["rating_fixes"] = fixes
     os.makedirs(INGESTED_DIR, exist_ok=True)
     atomicio.write_json(os.path.join(INGESTED_DIR, f"{rid}.json"), definition, indent=2)
     return rid
@@ -2005,9 +2030,13 @@ async def approve_race(rid: str, body: dict):
     else:
         definition["reviewed"] = False
         definition.pop("reviewed_at", None)
-    saved_rid = _write_race(definition)
-    return {"saved": True, "race_id": saved_rid, "reviewed": approved,
-            "reviewed_at": definition.get("reviewed_at"), "errors": errors, "warnings": warnings}
+    report = {}
+    saved_rid = _write_race(definition, report=report)
+    out = {"saved": True, "race_id": saved_rid, "reviewed": approved,
+           "reviewed_at": definition.get("reviewed_at"), "errors": errors, "warnings": warnings}
+    if report.get("rating_fixes"):
+        out["rating_fixes"] = report["rating_fixes"]
+    return out
 
 
 @app.get("/favicon.ico")

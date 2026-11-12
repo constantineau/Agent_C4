@@ -462,11 +462,7 @@ def _course_for(definition: dict, course_id: str = None):
     """The course a rating is read for: the one asked, else our division's course."""
     if course_id:
         return course_id
-    own_div = str(((definition or {}).get("own") or {}).get("division") or "").strip()
-    for dv in (definition or {}).get("divisions") or []:
-        if own_div and str(dv.get("id") or "").strip() == own_div:
-            return dv.get("course_ref")
-    return None
+    return course_of_division(definition, ((definition or {}).get("own") or {}).get("division"))
 
 
 def rating_spec(definition: dict, course_id: str = None) -> dict:
@@ -484,6 +480,43 @@ def rating_spec(definition: dict, course_id: str = None) -> dict:
     tod = ((row or {}).get("column_tod") if row else sc.get("rating_column_tod")) or None
     return {"system": rating_system(sc), "column": col, "column_tod": tod,
             "course": (row or {}).get("course") or cid}
+
+
+def course_of_division(definition: dict, division) -> Optional[str]:
+    """The course a division sails (divisions[].course_ref), or None when not listed."""
+    div = str(division or "").strip()
+    for dv in (definition or {}).get("divisions") or []:
+        if div and str(dv.get("id") or "").strip() == div:
+            return dv.get("course_ref")
+    return None
+
+
+def rating_spec_for(definition: dict, entry: dict, course_id: str = None) -> dict:
+    """`rating_spec` for one boat: the course asked, else the boat's division's course, else the
+    race default (our division's course / the only per-course column / the race-wide column). The
+    Lab import and the save check both use this, so they agree on every boat's column."""
+    course = course_id or course_of_division(definition, (entry or {}).get("division"))
+    return rating_spec(definition, course)
+
+
+def clear_stale_ratings(definition: dict) -> dict:
+    """On save (#311): clear any IMPORTED rating / ToD allowance whose column tag (`rating_col` /
+    `tod_col`) is not the column that boat's course scores on now. Numbers with no tag were typed
+    by hand and are kept. Mutates `definition`; returns {"boats": [names], "own": bool}."""
+    def _fix(e):
+        spec = rating_spec_for(definition, e)
+        hit = False
+        for num, tag, want in (("rating", "rating_col", spec["column"]),
+                               ("tod_allowance", "tod_col", spec["column_tod"])):
+            if tag in e and (e.get(tag) or None) != (want or None):
+                hit = hit or e.get(num) is not None
+                e[num] = None
+                e.pop(tag)
+        return hit
+    boats = [str(e.get("boat") or "?") for e in (definition.get("fleet") or [])
+             if isinstance(e, dict) and _fix(e)]
+    own = definition.get("own")
+    return {"boats": boats, "own": bool(isinstance(own, dict) and _fix(own))}
 
 
 def sail_prefix(sail) -> str:

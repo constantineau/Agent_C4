@@ -127,6 +127,13 @@ def _tod_col(definition, course_id=None):
     return race_def.rating_spec(definition or {}, course_id)["column_tod"]
 
 
+def _cols(definition, entry, course_id=None):
+    """(ToT column, ToD column) for one boat: the course asked, else its division's course, else
+    the race default. Same rule as the save check (race_def.rating_spec_for)."""
+    spec = race_def.rating_spec_for(definition or {}, entry or {}, course_id)
+    return spec["column"], spec["column_tod"]
+
+
 def drop_stale(e, tot_col, tod_col):
     """Clear an imported number read off a different column than the one asked for now (#311).
     An imported `rating` carries `rating_col`, an imported `tod_allowance` carries `tod_col`; a
@@ -215,9 +222,10 @@ def enrich_from_orc(entries, country=None, definition=None, course_id=None):
     definition's column only (see `_tot_col`); with none named, ratings stay empty and the result
     carries `note` = COLUMN_UNKNOWN plus `orc_columns` to pick from. Returns the enriched entries +
     match stats; unmatched keep their identity (the human can fill the handicap by hand)."""
-    tot_col, tod_col = _tot_col(definition, course_id), _tod_col(definition, course_id)
+    tot_col = _tot_col(definition, course_id)          # the race default, for the summary
+    cols = [_cols(definition, e, course_id) for e in entries]   # each boat's own course
     # first, whatever the lookup brings: numbers imported off another column go, matched or not
-    dropped = [e for e in entries if drop_stale(e, tot_col, tod_col)]
+    dropped = [e for e, (tc, dc) in zip(entries, cols) if drop_stale(e, tc, dc)]
     stale = len(dropped)
     countries = _countries(country, definition, entries)
     if not countries:
@@ -234,8 +242,8 @@ def enrich_from_orc(entries, country=None, definition=None, course_id=None):
     if not idxs:
         return {"ok": False, "note": f"ORC database fetch failed ({','.join(countries)})",
                 "entries": entries, "stale_cleared": stale}
-    matched, lacking, seen_cols = 0, 0, set()
-    for e in entries:
+    matched, lacking, seen_cols, lacking_cols = 0, 0, set(), set()
+    for e, (e_tot, e_tod) in zip(entries, cols):
         rec, by, cc_hit = None, None, None
         for cc, idx in idxs:
             rec = idx["by_sail"].get(_norm_sail(e.get("sail")))
@@ -249,27 +257,29 @@ def enrich_from_orc(entries, country=None, definition=None, course_id=None):
         if not rec:
             e["orc_match"] = None
             continue
-        rating = _set_numbers(e, rec, tot_col, tod_col)
+        rating = _set_numbers(e, rec, e_tot, e_tod)
         seen_cols |= _rating_keys(rec)
-        if rating is None and tot_col:
+        if rating is None and e_tot:
             lacking += 1
+            lacking_cols.add(e_tot)
         if not e.get("cls") and rec.get("Class"):
             e["cls"] = rec.get("Class")
         e["source"] = (e.get("source") or "") + "+orc" if e.get("source") else "orc"
         e["orc_match"] = {"by": by, "country": cc_hit,
                           "yacht": rec.get("YachtName"), "sail": rec.get("SailNo"),
-                          "class": rec.get("Class"), "col": tot_col}
+                          "class": rec.get("Class"), "col": e_tot}
         matched += 1
     out = {"ok": True, "entries": entries, "matched": matched, "total": len(entries),
            "orc_country": ",".join(fetched), "orc_certs": certs, "tot_col": tot_col,
-           "tod_col": tod_col,
+           "tod_col": _tod_col(definition, course_id),
            # cleared and not read again off the new column (a re-read one isn't a loss)
            "stale_cleared": sum(1 for e in dropped if e.get("rating") is None)}
-    if not tot_col:
+    if not any(tc for tc, _dc in cols) and not (tot_col and not entries):
         out["note"] = COLUMN_UNKNOWN
         out["orc_columns"] = sorted(seen_cols)
     elif lacking:
-        out["note"] = f"{lacking} boat{'s lack' if lacking != 1 else ' lacks'} {tot_col} on the cert."
+        out["note"] = (f"{lacking} boat{'s lack' if lacking != 1 else ' lacks'} "
+                       f"{', '.join(sorted(lacking_cols))} on the cert.")
     return out
 
 
@@ -277,7 +287,7 @@ def orc_candidates(boat, sail=None, country=None, definition=None, course_id=Non
     """Fuzzy ORC-cert candidates for ONE unrated boat — the human picks; nothing auto-applies.
     Scores name similarity (difflib) + an exact-sail boost across every listed country's dump."""
     import difflib
-    tot_col, tod_col = _tot_col(definition, course_id), _tod_col(definition, course_id)
+    tot_col, tod_col = _cols(definition, {}, course_id)
     target = _norm(boat or "")
     target_sail = _norm_sail(sail)
     out = []
@@ -545,8 +555,12 @@ def _feed(definition):
     return system, ratings.feed_for(system)
 
 
-def candidates(boat, sail=None, country=None, definition=None, course_id=None, limit=6):
-    """Rating candidates for one boat from the race's feed (the Fleet tab's 'find' button)."""
+def candidates(boat, sail=None, country=None, definition=None, course_id=None, limit=6,
+               division=None):
+    """Rating candidates for one boat from the race's feed (the Fleet tab's 'find' button). The
+    boat's division picks its course's column, as in the import and the save check."""
+    if not course_id and division:
+        course_id = race_def.course_of_division(definition or {}, division)
     system, feed = _feed(definition)
     if feed is None:
         return {"boat": boat, "candidates": [], "note": ratings.no_feed_note(system)}
@@ -597,8 +611,9 @@ def _refresh_own(feed, definition, course_id, country):
     own = dict((definition or {}).get("own") or {})
     if not (own.get("boat") or own.get("sail")):
         return None
-    tot_col, tod_col = _tot_col(definition, course_id), _tod_col(definition, course_id)
-    probe = {"boat": own.get("boat") or "", "sail": own.get("sail") or ""}
+    tot_col, tod_col = _cols(definition, own, course_id)
+    probe = {"boat": own.get("boat") or "", "sail": own.get("sail") or "",
+             "division": own.get("division") or ""}
     try:
         en = feed.enrich([probe], definition, course_id, country)
     except Exception:

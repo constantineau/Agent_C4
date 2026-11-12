@@ -69,6 +69,32 @@ check("a fleet with no system is flagged", "Rating system unknown: set it in sco
 _e, w = R.validate(race(rating_system="XYZ"))
 check("unknown system is flagged", any("'XYZ' unknown" in x for x in w))
 
+print("clear_stale_ratings (on save):")
+d = race(rating_system="ORC", course_columns=PER)
+d["fleet"] = [
+    {"boat": "OnA", "division": "A", "rating": 1.1, "rating_col": "XX_A_TOT",
+     "tod_allowance": 600.0, "tod_col": "XX_A_TOD"},                      # matches course long
+    {"boat": "MovedToB", "division": "B", "rating": 1.1, "rating_col": "XX_A_TOT"},   # B is short
+    {"boat": "Typed", "division": "B", "rating": 0.9},                     # no tag: hand-typed
+    {"boat": "TodOnly", "division": "B", "tod_allowance": 650.0, "tod_col": "XX_OLD"},
+]
+d["own"] = {"boat": "Us", "division": "B", "rating": 1.0, "rating_col": "XX_A_TOT"}
+hit = R.clear_stale_ratings(d)
+f = {e["boat"]: e for e in d["fleet"]}
+check("a matching import is kept", f["OnA"]["rating"] == 1.1 and f["OnA"]["tod_allowance"] == 600.0)
+check("an import off another course's column is cleared",
+      f["MovedToB"]["rating"] is None and "rating_col" not in f["MovedToB"])
+check("a hand-typed number is kept", f["Typed"]["rating"] == 0.9)
+check("a stale ToD allowance is cleared (no ToD column on B)",
+      f["TodOnly"]["tod_allowance"] is None and "tod_col" not in f["TodOnly"])
+check("our boat is checked against its own division's course",
+      d["own"]["rating"] is None and hit["own"] is True)
+check("the cleared boats are named", hit["boats"] == ["MovedToB", "TodOnly"])
+d2 = race(rating_system="ORC", rating_column="NEW")
+d2["fleet"] = [{"boat": "x", "rating": 1.0, "rating_col": "OLD"}]
+check("a race-wide column switch clears it", R.clear_stale_ratings(d2)["boats"] == ["x"])
+check("nothing to clear → empty report", R.clear_stale_ratings(race()) == {"boats": [], "own": False})
+
 print("the shipped race file carries its own columns (migrated off the code map):")
 with open(os.path.join(ROOT, "vps", "lab", "races", "bayview_mackinac_2026.json")) as f:
     shipped = json.load(f)

@@ -118,6 +118,58 @@ def test_candidates_use_the_unsaved_rating_column():
     assert r["tot_col"] == "TMF_Offshore" and r["candidates"][0]["rating"] == 1.10, r
 
 
+def test_save_clears_ratings_off_another_column():
+    # round 3: pick column B in Rules (or move a division) and Save without re-reading → the old
+    # imported A numbers are cleared on disk and the screen is told which boats
+    main.store.get_race = lambda rid: None
+    d = {"race_id": "t-save", "name": "t", "year": 2027, "courses": [{"id": "c"}],
+         "rules_profile": {"scoring": {"rating_system": "ORC", "rating_column": "COL_B"}},
+         "fleet": [{"boat": "Imported", "rating": 1.1, "rating_col": "COL_A"},
+                   {"boat": "Typed", "rating": 0.9}],
+         "own": {"boat": "Us", "rating": 1.0, "rating_col": "COL_A"}}
+    r = asyncio.run(main.save_race({"definition": d}))
+    fx = r["rating_fixes"]
+    assert fx["boats"] == ["Imported"] and fx["own_cleared"], fx
+    assert fx["note"] == "Old ratings cleared on 1 boat. Re-read ratings. Re-enter our rating for this column.", fx
+    with open(os.path.join(main.INGESTED_DIR, "t-save.json")) as f:
+        disk = json.load(f)
+    assert disk["fleet"][0]["rating"] is None and "rating_col" not in disk["fleet"][0], disk["fleet"]
+    assert disk["fleet"][1]["rating"] == 0.9 and disk["own"]["rating"] is None, disk
+    assert fx["fleet"] == disk["fleet"] and fx["own"] == disk["own"]
+    # saving again: nothing left to clear, no fixes
+    assert "rating_fixes" not in asyncio.run(main.save_race({"definition": disk}))
+
+
+def test_import_reads_each_boats_own_course_column():
+    # round 3: the import and the save check agree per boat, so a save right after an import
+    # clears nothing (a division on another course gets that course's column)
+    _setup()
+    stored = dict(STORED, divisions=[{"id": "A", "course_ref": "long"}, {"id": "B", "course_ref": "short"}],
+                  rules_profile={"scoring": {"rating_system": "ORC", "course_columns": [
+                      {"course": "long", "column": "TMF_Offshore"},
+                      {"course": "short", "column": "TMF_Inshore"}]}})
+    main.store.get_race = lambda rid: json.loads(json.dumps(stored)) if rid == "t-race" else None
+    _ORC2 = json.dumps({"rms": [
+        {"SailNo": "USA 60", "YachtName": "Il Mostro", "GPH": 500.0, "TMF_Offshore": 1.10, "TMF_Inshore": 1.2},
+        {"SailNo": "USA 5", "YachtName": "Hand Added", "GPH": 610.0, "TMF_Offshore": 0.98, "TMF_Inshore": 0.9},
+    ]}).encode("utf-8-sig")
+    fleetimport._get = lambda url: _ORC2
+    fleetimport._orc_cache.clear()
+    draft = [{"boat": "Il Mostro", "sail": "USA 60", "division": "A"},
+             {"boat": "Hand Added", "sail": "USA 5", "division": "B"}]
+    r = _import({"race_id": "t-race", "source": "orc", "country": "USA", "fleet": draft})
+    by = {e["boat"]: e for e in r["entries"]}
+    assert by["Il Mostro"]["rating"] == 1.10 and by["Il Mostro"]["rating_col"] == "TMF_Offshore", by
+    assert by["Hand Added"]["rating"] == 0.9 and by["Hand Added"]["rating_col"] == "TMF_Inshore", by
+    from shared import race_def
+    saved = dict(stored, fleet=r["entries"])
+    assert race_def.clear_stale_ratings(saved) == {"boats": [], "own": False}
+    # the find button for a division-B boat reads B's column
+    c = main.fleet_orc_candidates({"race_id": "t-race", "boat": "Hand Added", "sail": "USA 5",
+                                   "country": "USA", "division": "B"})
+    assert c["tot_col"] == "TMF_Inshore" and c["candidates"][0]["rating"] == 0.9, c
+
+
 if __name__ == "__main__":
     n = 0
     for name, fn in list(globals().items()):
