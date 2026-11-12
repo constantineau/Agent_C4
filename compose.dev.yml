@@ -93,6 +93,7 @@ services:
       DEPLOY_PI_ENGINE_URL: ${DEPLOY_PI_ENGINE_URL:-}
       DEPLOY_COPILOT_URL: ${DEPLOY_COPILOT_URL:-}     # default: the engine's host :8091/copilot
       DEPLOY_PI_HOST: ${DEPLOY_PI_HOST:-}             # ssh target shown in the manual-load commands
+      DEPLOY_PI_ENGINE: ${DEPLOY_PI_ENGINE:-http://localhost:8200}   # engine URL as seen from the Pi, for the manual-load commands
       PLUME_PUSH_URL: ${PLUME_PUSH_URL:-}
       # the boat library (#320): the Pi pulls GET /api/boats/library with its ingest token
       INGEST_TOKEN: ${INGEST_TOKEN:-dev-ingest-token}
