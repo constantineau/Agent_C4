@@ -1459,7 +1459,8 @@ async function reloadBoats() {
 const depthUnit = () => (Opt.depthUnit === "m" ? "m" : "ft");
 // metres → a number in the Lab's unit (1 decimal), "" when unknown
 function depthVal(m) {
-  if (m == null || isNaN(m)) return "";
+  if (m == null || m === "" || isNaN(m)) return "";
+  m = Number(m);                                                   // a profile may hold "2.1"
   return (depthUnit() === "m" ? m : m / 0.3048).toFixed(1);
 }
 const depthTxt = (m) => (m == null || isNaN(m) ? "?" : depthVal(m) + " " + depthUnit());

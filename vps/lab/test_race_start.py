@@ -121,8 +121,20 @@ def test_non_us_timezone_gun_converts():
     assert r["epoch"] == 1802386800.0, r
     print("PASS non-US time zone gun converts (London BST, Sydney AEDT)")
 
+def test_unreadable_own_gun_never_falls_back_to_another_division():
+    """Codex on #332: our gun is local with no zone, another division's is UTC. Don't route from theirs."""
+    d = {"division_starts": {"A": "2027-05-25T07:00:00", "B": "2027-05-25T06:00:00Z"},
+         "own": {"division": "A"}}
+    r = racestart.resolve(d, now=1.0)
+    assert r["source"] == "now_no_gun" and r["race_start"] is None
+    assert "time zone" in r["note"]
+    picked = racestart.resolve(d, start_epoch=1800000000, now=1.0)
+    assert picked["source"] == "picked" and picked["epoch"] == 1800000000
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn):
             fn()
     print("ALL PASS")
+

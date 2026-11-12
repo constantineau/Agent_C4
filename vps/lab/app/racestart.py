@@ -44,7 +44,7 @@ def resolve(definition, start_epoch=None, now=None):
     if start_epoch not in (None, "", 0):
         return {"epoch": float(start_epoch), "source": "picked", "race_start": rs,
                 "note": "Routed from the start you picked."}
-    if rs is None and race_def.timezone_issues(definition or {})[0]:
+    if race_def.timezone_issues(definition or {})[0]:   # a gun we can't read: never fall back to another division's
         return {"epoch": now, "source": "now_no_gun", "race_start": None,
                 "note": "Gun times need the race's time zone, so it routed from now. "
                         "Set the time zone in race review, or pick a Start."}
