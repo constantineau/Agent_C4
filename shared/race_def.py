@@ -174,7 +174,8 @@ class TrackerConfig:
     """Public race tracker as an over-the-horizon FLEET source (YB/TracTrac-style). Whether it may be
     used ONBOARD is gated by `rules_profile.tracker_permitted` (per-race SI), NOT by this block — this
     only carries HOW to fetch it. `provider`: 'yb'(==bycmack/ybtracking)|'generic_json'|'tractrac'|
-    'sample'. For `yb` (bycmack.com/tracking IS YB Tracking) set `race` (the yb.tl id, e.g.
+    'sample'|'file' (== upload/gpx/csv: no feed; the fleet's tracks are uploaded after the race —
+    retro, debrief and the entry list read them, see vps/lab/app/trackers.py). For `yb` (bycmack.com/tracking IS YB Tracking) set `race` (the yb.tl id, e.g.
     'bayviewmack2026') + optional `host` (default cf.yb.tl) — the GetPositions JSON endpoint is built
     from those; no field map needed (name/lat/lon/sog/cog/time are at known keys). For `generic_json`
     set `url` (the JSON/XHR endpoint behind the web UI) + optional `fields` ({name,lat,lon,sog,cog,time}
@@ -319,9 +320,11 @@ def validate(d: dict) -> tuple[list, list]:
         _yb = prov in ("yb", "ybtracking", "yellowbrick", "bycmack")
         # a yb provider is fetchable from `race` (the id) OR `url`; others need `url`.
         fetchable = prov == "sample" or bool(tr.get("url")) or (_yb and bool(tr.get("race")))
+        # a fleet file (#310) is uploaded after the race, so there is nothing to fetch
+        _file = prov in ("file", "upload", "gpx", "csv")
         if not prov:
             warnings.append("tracker block has no provider — set provider + url/race (or 'sample')")
-        elif not fetchable:
+        elif not fetchable and not _file:
             warnings.append(f"tracker provider {prov!r} not fetchable — set "
                             + ("`race` (e.g. 'bayviewmack2026')" if _yb else "`url`")
                             + " — verify the live endpoint")

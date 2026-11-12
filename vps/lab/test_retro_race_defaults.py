@@ -84,7 +84,7 @@ def test_setup_other_tracker_says_so():
     su = retro.setup_for(_channel(tracker={"provider": "tractrac", "url": "https://example.invalid"}))
     assert su["yb_id"] is None and "YB" in su["note"] and "tractrac" in su["note"]
     su = retro.setup_for(_channel(tracker={}))
-    assert su["yb_id"] is None and su["note"] == "No YB race id in this race. Type one."
+    assert su["yb_id"] is None and su["note"] == "No YB race id in this race. Type one, or upload a fleet file."
 
 
 def _stub_polars(monkeypatch, entries, dumps):
@@ -98,7 +98,7 @@ def _stub_polars(monkeypatch, entries, dumps):
     monkeypatch.setattr(fi, "_orc_dump", dump)
     monkeypatch.setattr(rs, "get_entries", lambda rid: entries)
     monkeypatch.setattr(rs, "save_cert", lambda cc, ref, *a: saved.append(cc) or len(saved))
-    monkeypatch.setattr(rs, "save_polar", lambda *a: None)
+    monkeypatch.setattr(rs, "save_polar", lambda *a, **k: True)
     monkeypatch.setattr(retro.orcpolar, "cert_polar", lambda rec: [[1, 2, 3]])
     return asked, saved
 
