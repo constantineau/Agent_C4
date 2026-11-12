@@ -128,6 +128,10 @@ def test_unreadable_own_gun_never_falls_back_to_another_division():
     r = racestart.resolve(d, now=1.0)
     assert r["source"] == "now_no_gun" and r["race_start"] is None
     assert "time zone" in r["note"]
+    # our own gun is readable: use it, whatever another division's says
+    d2 = {"division_starts": {"A": 4000000000, "B": "2027-05-25T06:00:00"}, "own": {"division": "A"}}
+    r2 = racestart.resolve(d2, now=1.0)
+    assert r2["source"] == "race_start" and r2["epoch"] == 4000000000, r2
     picked = racestart.resolve(d, start_epoch=1800000000, now=1.0)
     assert picked["source"] == "picked" and picked["epoch"] == 1800000000
 
