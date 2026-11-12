@@ -161,6 +161,10 @@ class FleetEntry:
     sail: str = ""                                    # sail number — entry-list ID + ORC-cert match key
     orc_gph: Optional[float] = None
     rating: Optional[float] = None
+    tod_allowance: Optional[float] = None             # ORC ToD allowance (s/nm) off the race's ToD
+                                                      # column; None = use GPH
+    rating_col: Optional[str] = None                  # column an imported rating was read off
+    tod_col: Optional[str] = None                     # column an imported tod_allowance came from
     mmsi: Optional[str] = None
     source: str = ""                                  # how this entry/handicap was sourced (yb/orc/manual)
 
@@ -641,6 +645,7 @@ def fleet_blob(definition: dict, own: dict = None) -> dict:
                        "cls": e.get("cls", ""), "owner": e.get("owner", ""),
                        "sail": e.get("sail", ""),
                        "orc_gph": e.get("orc_gph"), "rating": e.get("rating"),
+                       "tod_allowance": e.get("tod_allowance"),
                        "mmsi": e.get("mmsi")})
     rp = definition.get("rules_profile") or {}
     scoring = rp.get("scoring") or {}

@@ -2785,8 +2785,33 @@ async function renderFleet() {
 async function fleetPickRace(id) {
   if (!(await confirmLeave())) return paintFleet();   // Stay → repaint puts the picker back
   Lab.sel = id; Lab.editDef = null; Lab.fleetMsg = ""; Lab.fleetCols = []; renderFleet(); }
-function fleetSet(i, f, v) { if (Lab.editDef && Lab.editDef.fleet[i]) { Lab.editDef.fleet[i][f] = v; } }
-function fleetOwnSet(f, v) { if (!Lab.editDef) return; if (!Lab.editDef.own) Lab.editDef.own = {}; Lab.editDef.own[f] = v; }
+// A number typed by hand loses its import tag (#311): the Lab keeps hand-typed competitor numbers
+// across a column switch, and only clears numbers it imported off another column.
+const _FLEET_TAG = { rating: "rating_col", tod_allowance: "tod_col" };
+function fleetSet(i, f, v) {
+  const e = Lab.editDef && Lab.editDef.fleet[i];
+  if (!e) return;
+  e[f] = v;
+  if (_FLEET_TAG[f]) delete e[_FLEET_TAG[f]];
+}
+// Our boat's number is stamped with the column in force when typed, so a later column switch
+// asks for it again instead of scoring the fleet against a number for another column.
+function _fleetOwnCols() {
+  const d = Lab.editDef, sc = (d.rules_profile || {}).scoring || {};
+  const div = ((d.own || {}).division || "").trim();
+  const dv = (d.divisions || []).find((x) => div && String(x.id || "").trim() === div);
+  const row = dv && (sc.course_columns || []).find((r) => r && r.column && r.course === dv.course_ref);
+  return row ? { rating: row.column, tod: row.column_tod || null }
+             : { rating: sc.rating_column || null, tod: sc.rating_column_tod || null };
+}
+function fleetOwnSet(f, v) {
+  if (!Lab.editDef) return;
+  if (!Lab.editDef.own) Lab.editDef.own = {};
+  const own = Lab.editDef.own;
+  own[f] = v;
+  if (f === "rating") own.rating_col = _fleetOwnCols().rating;
+  if (f === "tod_allowance") own.tod_col = _fleetOwnCols().tod;
+}
 function fleetAddRow() { Lab.editDef.fleet.push({ boat: "", division: "", cls: "", owner: "", sail: "", orc_gph: null, rating: null, mmsi: "", source: "manual" }); Lab.fleetEdit = true; paintFleet(); }
 function fleetRemove(i) { Lab.editDef.fleet.splice(i, 1); paintFleet(); }
 
@@ -2814,8 +2839,11 @@ function _fleetApplyResult(r, ed) {
   if (r.seeded_mmsi) bits.push(`${r.seeded_mmsi} kept their MMSI`);
   if (r.orc_error) bits.push("ORC lookup failed: " + r.orc_error);
   if (r.rating_note) bits.push(r.rating_note);
+  if (r.stale_cleared) bits.push(`${r.stale_cleared} old rating${r.stale_cleared === 1 ? "" : "s"} cleared`);
+  if (r.own) Lab.editDef.own = r.own;
+  if (r.own_note) bits.push(r.own_note);
   Lab.fleetCols = r.orc_columns || Lab.fleetCols || [];
-  Lab.fleetMsgErr = !!(r.orc_error || r.rating_note);
+  Lab.fleetMsgErr = !!(r.orc_error || r.rating_note || r.own_note);
   Lab.fleetMsg = "Imported " + bits.join(" · ") + ". Check below, then Save.";
 }
 // An import REPLACES the draft roster. With boats already in it, ask first and say how many go.
@@ -2927,7 +2955,7 @@ async function fleetFindOrc(i) {
     const r = await (await apiPost("/api/fleet/orc-candidates",
       { race_id: Lab.sel, boat: e.boat, sail: e.sail, country: _fleetCC(),
         scoring: _fleetScoring(), own: Lab.editDef.own || {} })).json();
-    Lab.fleetCand = { i, list: r.candidates || [] };
+    Lab.fleetCand = { i, list: r.candidates || [], tot_col: r.tot_col || null, tod_col: r.tod_col || null };
     Lab.fleetMsg = (r.candidates || []).length
       ? `${r.candidates.length} ORC match(es) for "${e.boat}". Pick one below the row.`
       : (r.note || `No ORC match for "${e.boat}". Enter the handicap by hand.`);
@@ -2939,8 +2967,10 @@ function fleetApplyCand(i, ci) {
   const e = (Lab.editDef.fleet || [])[i];
   const c = ((Lab.fleetCand || {}).list || [])[ci];
   if (!e || !c) return;
+  const fc = Lab.fleetCand || {};
   if (c.orc_gph != null) e.orc_gph = c.orc_gph;
-  if (c.rating != null) e.rating = c.rating;
+  if (c.rating != null) { e.rating = c.rating; e.rating_col = fc.tot_col; }
+  if (c.tod_allowance != null) { e.tod_allowance = c.tod_allowance; e.tod_col = fc.tod_col; }
   if (!e.cls && c.cls) e.cls = c.cls;
   if (!e.sail && c.sail) e.sail = c.sail;
   e.source = (e.source || "") ? e.source + "+orc" : "orc";
@@ -2952,13 +2982,19 @@ function fleetApplyCand(i, ci) {
 
 async function fleetSave() {
   // coerce numerics so the persisted JSON is clean (orc_gph/rating numbers|null)
-  Lab.editDef.fleet = Lab.editDef.fleet.filter((e) => (e.boat || "").trim()).map((e) => ({
+  // the column tags ride along (#311): they say which column an imported number was read off
+  const tags = (e) => Object.assign({},
+    e.rating_col !== undefined ? { rating_col: e.rating_col } : {},
+    e.tod_col !== undefined ? { tod_col: e.tod_col } : {});
+  Lab.editDef.fleet = Lab.editDef.fleet.filter((e) => (e.boat || "").trim()).map((e) => Object.assign({
     boat: e.boat.trim(), division: e.division || "", cls: e.cls || "", owner: e.owner || "",
     sail: (e.sail || "").trim(), source: e.source || "manual",
-    orc_gph: fleetNum(e.orc_gph), rating: fleetNum(e.rating), mmsi: (e.mmsi || "").trim() }));
+    orc_gph: fleetNum(e.orc_gph), rating: fleetNum(e.rating), tod_allowance: fleetNum(e.tod_allowance),
+    mmsi: (e.mmsi || "").trim() }, tags(e)));
   const own = Lab.editDef.own || {};
-  Lab.editDef.own = { boat: (own.boat || "").trim(), division: own.division || "",
-    orc_gph: fleetNum(own.orc_gph), rating: fleetNum(own.rating), mmsi: (own.mmsi || "").trim() };
+  Lab.editDef.own = Object.assign({ boat: (own.boat || "").trim(), sail: (own.sail || "").trim(),
+    division: own.division || "", orc_gph: fleetNum(own.orc_gph), rating: fleetNum(own.rating),
+    tod_allowance: fleetNum(own.tod_allowance), mmsi: (own.mmsi || "").trim() }, tags(own));
   Lab.fleetMsg = "Saving…"; Lab.fleetMsgErr = false; paintFleet();
   let ok = false;
   const sent = JSON.stringify(Lab.editDef), ed = Lab.editDef;
@@ -3072,7 +3108,9 @@ function paintFleet() {
         <label>Boat ${inp(own.boat, "SR33 \"C4\"", "fleetOwnSet('boat',this.value)", 150)}</label>
         <label>Division ${inp(own.division, "div", "fleetOwnSet('division',this.value)", 70)}</label>
         <label>ORC GPH (s/nm) ${inp(own.orc_gph, "GPH", "fleetOwnSet('orc_gph',this.value)", 70)}</label>
+        <label>Sail # ${inp(own.sail, "sail #", "fleetOwnSet('sail',this.value)", 80)}</label>
         <label>ORC ToT coefficient ${inp(own.rating, "ToT", "fleetOwnSet('rating',this.value)", 80)}</label>
+        ${_fleetOwnCols().tod ? `<label>ToD allowance (s/nm) ${inp(own.tod_allowance, "s/nm", "fleetOwnSet('tod_allowance',this.value)", 70)}</label>` : ""}
         <label>MMSI ${inp(own.mmsi, "MMSI", "fleetOwnSet('mmsi',this.value)", 100)}</label>
       </div>
       <div class="muted" style="font-size:12px;margin-top:6px">Race scoring: <b>${esc(sc.method || "not set")}</b>. Set it in <a href="#rules">Rules</a>.</div>

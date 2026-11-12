@@ -122,6 +122,56 @@ def _tot_col(definition, course_id=None):
     return race_def.rating_spec(definition or {}, course_id)["column"]
 
 
+def _tod_col(definition, course_id=None):
+    """The ORC time-on-distance allowance column (s/nm) the race names, or None (then GPH)."""
+    return race_def.rating_spec(definition or {}, course_id)["column_tod"]
+
+
+def drop_stale(e, tot_col, tod_col):
+    """Clear an imported number read off a different column than the one asked for now (#311).
+    An imported `rating` carries `rating_col`, an imported `tod_allowance` carries `tod_col`; a
+    number with no such tag was typed by hand and is kept. Returns True when something was cleared."""
+    cleared = False
+    if "rating_col" in e and e.get("rating_col") != tot_col:
+        e.pop("rating_col")
+        cleared = cleared or e.get("rating") is not None
+        e["rating"] = None
+    if "tod_col" in e and e.get("tod_col") != tod_col:
+        e.pop("tod_col")
+        cleared = cleared or e.get("tod_allowance") is not None
+        e["tod_allowance"] = None
+    return cleared
+
+
+def _set_numbers(e, rec, tot_col, tod_col):
+    """Put a cert's numbers on an entry, each tagged with the column it came from. Returns the
+    rating (None when the race names no column or the cert lacks it)."""
+    gph, rating = _orc_handicap(rec, tot_col)
+    if gph is not None:
+        e["orc_gph"] = gph
+    # the race's column only: a rating read off another column (an earlier pick, a hand entry
+    # before the match) must not survive under this one
+    e["rating"] = rating
+    if rating is not None:
+        e["rating_col"] = tot_col
+    else:
+        e.pop("rating_col", None)
+    alw = _as_num(rec.get(tod_col)) if tod_col else None
+    e["tod_allowance"] = alw
+    if alw is not None:
+        e["tod_col"] = tod_col
+    else:
+        e.pop("tod_col", None)
+    return rating
+
+
+def _as_num(v):
+    try:
+        return float(v) if v is not None and not isinstance(v, bool) else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _orc_handicap(rec, tot_col):
     """(GPH, rating) off one cert. `rating` is the race's column only: None when the race names no
     column or this cert lacks it. No fallback to another number."""
@@ -165,9 +215,13 @@ def enrich_from_orc(entries, country=None, definition=None, course_id=None):
     definition's column only (see `_tot_col`); with none named, ratings stay empty and the result
     carries `note` = COLUMN_UNKNOWN plus `orc_columns` to pick from. Returns the enriched entries +
     match stats; unmatched keep their identity (the human can fill the handicap by hand)."""
+    tot_col, tod_col = _tot_col(definition, course_id), _tod_col(definition, course_id)
+    # first, whatever the lookup brings: numbers imported off another column go, matched or not
+    dropped = [e for e in entries if drop_stale(e, tot_col, tod_col)]
+    stale = len(dropped)
     countries = _countries(country, definition, entries)
     if not countries:
-        return {"ok": False, "note": COUNTRY_UNKNOWN, "entries": entries}
+        return {"ok": False, "note": COUNTRY_UNKNOWN, "entries": entries, "stale_cleared": stale}
     idxs, certs, fetched = [], 0, []
     for cc in countries:
         try:
@@ -179,8 +233,7 @@ def enrich_from_orc(entries, country=None, definition=None, course_id=None):
             print(f"[fleet] ORC dump {cc} failed ({type(e).__name__}) — skipping", flush=True)
     if not idxs:
         return {"ok": False, "note": f"ORC database fetch failed ({','.join(countries)})",
-                "entries": entries}
-    tot_col = _tot_col(definition, course_id)
+                "entries": entries, "stale_cleared": stale}
     matched, lacking, seen_cols = 0, 0, set()
     for e in entries:
         rec, by, cc_hit = None, None, None
@@ -196,13 +249,8 @@ def enrich_from_orc(entries, country=None, definition=None, course_id=None):
         if not rec:
             e["orc_match"] = None
             continue
-        gph, rating = _orc_handicap(rec, tot_col)
+        rating = _set_numbers(e, rec, tot_col, tod_col)
         seen_cols |= _rating_keys(rec)
-        if gph is not None:
-            e["orc_gph"] = gph
-        # the race's column only: a rating read off another column (an earlier pick, a hand entry
-        # before the match) must not survive under this one
-        e["rating"] = rating
         if rating is None and tot_col:
             lacking += 1
         if not e.get("cls") and rec.get("Class"):
@@ -213,7 +261,10 @@ def enrich_from_orc(entries, country=None, definition=None, course_id=None):
                           "class": rec.get("Class"), "col": tot_col}
         matched += 1
     out = {"ok": True, "entries": entries, "matched": matched, "total": len(entries),
-           "orc_country": ",".join(fetched), "orc_certs": certs, "tot_col": tot_col}
+           "orc_country": ",".join(fetched), "orc_certs": certs, "tot_col": tot_col,
+           "tod_col": tod_col,
+           # cleared and not read again off the new column (a re-read one isn't a loss)
+           "stale_cleared": sum(1 for e in dropped if e.get("rating") is None)}
     if not tot_col:
         out["note"] = COLUMN_UNKNOWN
         out["orc_columns"] = sorted(seen_cols)
@@ -226,7 +277,7 @@ def orc_candidates(boat, sail=None, country=None, definition=None, course_id=Non
     """Fuzzy ORC-cert candidates for ONE unrated boat — the human picks; nothing auto-applies.
     Scores name similarity (difflib) + an exact-sail boost across every listed country's dump."""
     import difflib
-    tot_col = _tot_col(definition, course_id)
+    tot_col, tod_col = _tot_col(definition, course_id), _tod_col(definition, course_id)
     target = _norm(boat or "")
     target_sail = _norm_sail(sail)
     out = []
@@ -245,9 +296,10 @@ def orc_candidates(boat, sail=None, country=None, definition=None, course_id=Non
             gph, rating = _orc_handicap(rec, tot_col)
             out.append({"score": round(score, 2), "country": cc,
                         "yacht": rec.get("YachtName"), "sail": rec.get("SailNo"),
-                        "cls": rec.get("Class"), "orc_gph": gph, "rating": rating})
+                        "cls": rec.get("Class"), "orc_gph": gph, "rating": rating,
+                        "tod_allowance": _as_num(rec.get(tod_col)) if tod_col else None})
     out.sort(key=lambda c: -c["score"])
-    res = {"boat": boat, "candidates": out[:limit], "tot_col": tot_col,
+    res = {"boat": boat, "candidates": out[:limit], "tot_col": tot_col, "tod_col": tod_col,
            "orc_country": ",".join(countries)}
     if not countries:
         res["note"] = COUNTRY_UNKNOWN
@@ -512,6 +564,8 @@ def pack_with_orc(entries, src, country, definition, course_id):
     if feed is None:
         out["rating_note"] = ratings.no_feed_note(system)
         return out
+    # one country list for the fleet and our boat: typed, else the race's (venue + sail prefixes)
+    country = _countries(country, definition, entries) or None
     en = feed.enrich(entries, definition, course_id, country)
     if not en.get("ok"):
         out["orc_error"] = en.get("note")                 # entry list still returned; handicap failed
@@ -523,7 +577,42 @@ def pack_with_orc(entries, src, country, definition, course_id):
             out["rating_note"] = en["note"]
         if en.get("orc_columns") is not None:
             out["orc_columns"] = en["orc_columns"]
+    if en.get("stale_cleared"):
+        out["stale_cleared"] = en["stale_cleared"]
+    own = _refresh_own(feed, definition, course_id, country)
+    if own is not None:
+        out["own"], note = own
+        if note:
+            out["own_note"] = note
     return out
+
+
+OWN_REENTER = "Re-enter our rating for this column"
+
+
+def _refresh_own(feed, definition, course_id, country):
+    """Our boat's numbers for the column asked now (#311): read off its certificate when the feed
+    finds it (by sail, then name); else anything imported or typed for another column is cleared
+    and the note asks for it again. Returns (own, note) or None when no own boat is set."""
+    own = dict((definition or {}).get("own") or {})
+    if not (own.get("boat") or own.get("sail")):
+        return None
+    tot_col, tod_col = _tot_col(definition, course_id), _tod_col(definition, course_id)
+    probe = {"boat": own.get("boat") or "", "sail": own.get("sail") or ""}
+    try:
+        en = feed.enrich([probe], definition, course_id, country)
+    except Exception:
+        en = {"ok": False}
+    if en.get("ok") and probe.get("orc_match"):
+        for k in ("orc_gph", "rating", "rating_col", "tod_allowance", "tod_col"):
+            if k in probe:
+                own[k] = probe[k]
+            else:
+                own.pop(k, None)
+        missing = tot_col and own.get("rating") is None
+        return own, (OWN_REENTER if missing else None)
+    cleared = drop_stale(own, tot_col, tod_col)
+    return own, (OWN_REENTER if cleared else None)
 
 
 def import_fleet(definition, source="both", country=None, course_id=None, url=None, text=None):

@@ -112,6 +112,96 @@ def test_reenrich_clears_a_rating_off_another_column():
     print("PASS reenrich_clears: a matched boat's rating is always the selected column's, or empty")
 
 
+def test_tod_column_imported_separately():
+    # round 2: a ToD race's own allowance column (620) is imported apart from GPH (500)
+    _fake_net()
+    _ORC_TOD = json.dumps({"rms": [
+        {"SailNo": "USA 60", "YachtName": "Il Mostro", "GPH": 500.0, "XX_TOT": 1.1, "XX_TOD": 620.0},
+    ]}).encode("utf-8-sig")
+    fleetimport._get = lambda url: _ORC_TOD
+    d = _race(rating_column="XX_TOT", rating_column_tod="XX_TOD")
+    en = fleetimport.enrich_from_orc([{"boat": "Il Mostro", "sail": "USA 60"}], country="USA", definition=d)
+    e = en["entries"][0]
+    assert e["orc_gph"] == 500.0 and e["tod_allowance"] == 620.0 and e["tod_col"] == "XX_TOD", e
+    assert e["rating"] == 1.1 and e["rating_col"] == "XX_TOT" and en["tod_col"] == "XX_TOD", e
+    c = fleetimport.candidates("Il Mostro", "USA 60", "USA", d)
+    assert c["candidates"][0]["tod_allowance"] == 620.0 and c["tod_col"] == "XX_TOD", c
+    # no ToD column named → no allowance (the engine then uses GPH)
+    en = fleetimport.enrich_from_orc([{"boat": "Il Mostro", "sail": "USA 60"}], country="USA",
+                                     definition=_race(rating_column="XX_TOT"))
+    assert en["entries"][0]["tod_allowance"] is None and "tod_col" not in en["entries"][0], en
+    # and the onboard blob carries it
+    from shared import race_def
+    blob = race_def.fleet_blob(dict(d, fleet=[e]))
+    assert blob["fleet"][0]["tod_allowance"] == 620.0 and blob["fleet"][0]["orc_gph"] == 500.0, blob
+    print("PASS tod_column: the race's ToD allowance is imported and shipped apart from GPH")
+
+
+def test_switch_clears_imported_numbers_even_when_unmatched():
+    # round 2: A → B clears an imported A rating on a boat the new lookup misses (its dump failed),
+    # but keeps a number typed by hand
+    def _get(url):
+        if "CountryId=CAN" in url:
+            raise OSError("CAN dump down")
+        return _ORC
+    fleetimport._get = _get
+    fleetimport._orc_cache.clear()
+    roster = [
+        {"boat": "Maple", "sail": "CAN 1", "rating": 1.3, "rating_col": "XX_RACE_A_TOT",
+         "tod_allowance": 610.0, "tod_col": "XX_A_TOD"},              # imported off A, now unmatched
+        {"boat": "Typed", "sail": "CAN 2", "rating": 0.88},            # typed by hand: kept
+        {"boat": "Il Mostro", "sail": "USA 60", "rating": 0.95, "rating_col": "XX_RACE_A_TOT"},
+    ]
+    en = fleetimport.enrich_from_orc(roster, country="USA,CAN",
+                                     definition=_race(rating_column="XX_RACE_B_TOT"))
+    maple, typed, mostro = en["entries"]
+    assert maple["rating"] is None and "rating_col" not in maple, maple
+    assert maple["tod_allowance"] is None and "tod_col" not in maple, maple
+    assert typed["rating"] == 0.88, typed
+    assert mostro["rating"] == 0.97 and mostro["rating_col"] == "XX_RACE_B_TOT", mostro
+    assert en["stale_cleared"] == 1, en
+    # even when EVERY dump fails, the stale import goes (and the count says so)
+    fleetimport._get = lambda url: (_ for _ in ()).throw(OSError("down"))
+    fleetimport._orc_cache.clear()
+    r2 = [{"boat": "Maple", "sail": "CAN 1", "rating": 1.3, "rating_col": "XX_RACE_A_TOT"}]
+    out = fleetimport.pack_with_orc(r2, "orc", "CAN", _race(rating_column="XX_RACE_B_TOT"), None)
+    assert out["orc_error"] and out["stale_cleared"] == 1 and r2[0]["rating"] is None, out
+    # same column again → nothing cleared
+    fleetimport._get = lambda url: _ORC
+    fleetimport._orc_cache.clear()
+    r3 = [{"boat": "Nobody", "sail": "USA 1", "rating": 1.0, "rating_col": "XX_RACE_B_TOT"}]
+    en = fleetimport.enrich_from_orc(r3, country="USA", definition=_race(rating_column="XX_RACE_B_TOT"))
+    assert r3[0]["rating"] == 1.0 and en["stale_cleared"] == 0, en
+    print("PASS switch_clears: imported numbers off another column go, matched or not; typed ones stay")
+
+
+def test_own_boat_follows_the_column():
+    # round 2: a column switch re-reads our boat too, or clears it and asks again
+    _fake_net()
+    d = _race(rating_column="TMF_Inshore")
+    d["own"] = {"boat": "Il Mostro", "rating": 1.10, "rating_col": "TMF_Offshore", "division": "A"}
+    out = fleetimport.pack_with_orc([{"boat": "Windquest", "sail": "USA 99"}], "orc", "USA", d, None)
+    assert out["own"]["rating"] == 1.20 and out["own"]["rating_col"] == "TMF_Inshore", out["own"]
+    assert out["own"]["division"] == "A" and "own_note" not in out, out
+    assert d["own"]["rating"] == 1.10                                   # the saved race not mutated
+    # not on any cert: an old number for another column is cleared, with the plain ask
+    d["own"] = {"boat": "Our Boat", "rating": 1.10, "rating_col": "TMF_Offshore"}
+    out = fleetimport.pack_with_orc([], "orc", "USA", d, None)
+    assert out["own"]["rating"] is None and out["own_note"] == "Re-enter our rating for this column", out
+    # typed for this very column → kept, no note
+    d["own"] = {"boat": "Our Boat", "rating": 0.9, "rating_col": "TMF_Inshore"}
+    out = fleetimport.pack_with_orc([], "orc", "USA", d, None)
+    assert out["own"]["rating"] == 0.9 and "own_note" not in out, out
+    # on a cert that lacks the column → empty, ask again
+    d2 = _race(rating_column="XX_RACE_B_TOT")
+    d2["own"] = {"boat": "Windquest", "rating": 1.0, "rating_col": "XX_RACE_A_TOT"}
+    out = fleetimport.pack_with_orc([], "orc", "USA", d2, None)
+    assert out["own"]["rating"] is None and out["own_note"] == "Re-enter our rating for this column", out
+    # no own boat set → nothing about it
+    assert "own" not in fleetimport.pack_with_orc([], "orc", "USA", _race(rating_column="X"), None)
+    print("PASS own_boat: our rating follows the column (re-read, or cleared with 'Re-enter our rating')")
+
+
 def test_missing_column_no_guess():
     _fake_net()
     entries = fleetimport.roster_from_yb({"tracker": {"provider": "yb", "race": "demo2026"}})["entries"]
@@ -376,6 +466,8 @@ def _live():
 if __name__ == "__main__":
     test_roster_from_yb(); test_orc_match_and_race_col(); test_course_column_follows_course()
     test_reenrich_clears_a_rating_off_another_column()
+    test_tod_column_imported_separately(); test_switch_clears_imported_numbers_even_when_unmatched()
+    test_own_boat_follows_the_column()
     test_missing_column_no_guess(); test_non_us_orc_race(); test_other_rating_system_has_no_feed()
     test_candidates_use_race_column(); test_set_fields_cli(); test_import_fleet_both()
     test_website_source(); test_yachtscoring_parse(); test_regatta_network_parse()

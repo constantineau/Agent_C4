@@ -84,7 +84,11 @@ def _tot_coeff(entry, scoring_method):
 
 
 def _allowance_s_per_nm(entry):
-    """ORC Time-on-Distance allowance (s/nm) = GPH. Returns None if unknown/unparseable."""
+    """ORC Time-on-Distance allowance (s/nm): the race's own ToD column when the Lab imported one
+    (`tod_allowance`, #311), else GPH. Returns None if unknown/unparseable."""
+    a = _as_float(entry.get("tod_allowance"))
+    if a:
+        return a
     g = _as_float(entry.get("orc_gph") or entry.get("gph"))
     return g if g else None
 

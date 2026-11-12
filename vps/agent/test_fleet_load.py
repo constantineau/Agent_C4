@@ -283,6 +283,24 @@ try:
 except Exception as e:
     ISSUE(f"crash: {type(e).__name__}: {e}")
 
+print("\n== 14. #311: a race's own ToD allowance column beats GPH ==")
+try:
+    if fleet._allowance_s_per_nm({"orc_gph": 600.0, "tod_allowance": 620.0}) != 620.0: ISSUE("tod_allowance ignored")
+    elif fleet._allowance_s_per_nm({"orc_gph": 600.0, "tod_allowance": None}) != 600.0: ISSUE("no GPH fallback")
+    else: OK("allowance = tod_allowance, else GPH")
+    def _delta(them, us):
+        blob = {"scoring": {"method": "Time-on-Distance", "rating_system": "ORC", "rating_column_tod": "XX_TOD"},
+                "own": us, "fleet": [dict({"boat": "Fast", "mmsi": "111"}, **them)]}
+        setup(blob, [tgt("111", 45.10, -83.00, 6.0)])
+        return fleet.get_fleet()["fleet"][0].get("corrected_delta_s")
+    gph_only = _delta({"orc_gph": 580.0}, {"orc_gph": 600.0})
+    with_col = _delta({"orc_gph": 580.0, "tod_allowance": 560.0}, {"orc_gph": 600.0, "tod_allowance": 620.0})
+    if gph_only is None or with_col is None: ISSUE(f"ToD not scored: {gph_only} {with_col}")
+    elif gph_only == with_col: ISSUE("tod_allowance made no difference to the corrected gap")
+    else: OK(f"corrected gap uses the race's ToD column ({gph_only} s on GPH vs {with_col} s)")
+except Exception as e:
+    ISSUE(f"crash: {type(e).__name__}: {e}")
+
 print("\n" + ("ALL CLEAN — no issues found" if not issues else f"{len(issues)} ISSUE(S) FOUND:"))
 for i in issues: print("  -", i)
 sys.exit(1 if issues else 0)
