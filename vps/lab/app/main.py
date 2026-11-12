@@ -1976,6 +1976,27 @@ def _rating_fixes(definition):
             "boats": hit["boats"], "own_cleared": hit["own"], "note": " ".join(bits)}
 
 
+_RATING_KEYS = ("rating_system", "rating_column", "rating_column_tod", "course_columns", "rating_countries")
+
+
+def _keep_rating_config(definition, prior):
+    """A re-ingest draft that leaves the rating setup blank keeps the confirmed one (Codex on #333):
+    re-reading the NOR/SI must not wipe a column the user picked, then clear every rating against
+    the blank setup. What the new extraction does name wins."""
+    old_sc = ((prior.get("rules_profile") or {}).get("scoring")) or {}
+    if not isinstance(definition.get("rules_profile"), dict):
+        definition["rules_profile"] = {}
+    rp = definition["rules_profile"]
+    if not isinstance(rp.get("scoring"), dict):
+        rp["scoring"] = {}
+    sc = rp["scoring"]
+    for k in _RATING_KEYS:
+        if old_sc.get(k) and not sc.get(k):
+            sc[k] = old_sc[k]
+    if prior.get("venue_country") and not definition.get("venue_country"):
+        definition["venue_country"] = prior["venue_country"]
+
+
 def _write_race(definition, draft=False, overrides=False, report=None):
     """Persist a RaceDefinition. A preserved field is restored from the stored copy when the save
     omits the key, or — for a re-ingest `draft` only — sends it empty. An ordinary save that sends
@@ -2002,6 +2023,8 @@ def _write_race(definition, draft=False, overrides=False, report=None):
                 continue
             if k not in definition or (draft and _prep_empty(k, definition[k])):
                 definition[k] = prior[k]
+    if prior and draft:
+        _keep_rating_config(definition, prior)
     fixes = _rating_fixes(definition)
     if report is not None and fixes:
         report["rating_fixes"] = fixes
