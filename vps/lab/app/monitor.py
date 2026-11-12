@@ -81,12 +81,30 @@ def freshness(fixes, now=None):
     return {"newest_fix_time": newest, "newest_age_s": round(age), "freshness": state}
 
 
-def _sample_fleet():
+def _course_centre(definition):
+    """Mean lat/lon of the race's first course marks (start, marks, finish), or None (#312)."""
+    try:
+        marks, _skip, _cid = race_def.course_to_marks(definition or {})
+    except Exception:
+        return None
+    ll = [(m[2], m[3]) for m in marks if m[2] is not None and m[3] is not None]
+    if not ll:
+        return None
+    return sum(a for a, _ in ll) / len(ll), sum(b for _, b in ll) / len(ll)
+
+
+# demo boats as offsets (deg) from the course centre: never a fixed venue (#312)
+_SAMPLE = [("Il Mostro", 0.00, -0.10, 7.1, 18), ("Windquest", 0.12, 0.05, 6.4, 25),
+           ("Natalie J", -0.08, -0.20, 5.9, 12), ("Equation", 0.25, 0.18, 7.8, 30)]
+
+
+def _sample_fleet(definition=None):
+    centre = _course_centre(definition)
+    if centre is None:
+        return []
     now = time.time()
-    boats = [("Il Mostro", 43.30, -82.20, 7.1, 18), ("Windquest", 43.42, -82.05, 6.4, 25),
-             ("Natalie J", 43.18, -82.35, 5.9, 12), ("Equation", 43.55, -81.92, 7.8, 30)]
-    return [{"name": n, "lat": la, "lon": lo, "sog": s, "cog": c, "time": now - 900, "dtf_nm": None}
-            for (n, la, lo, s, c) in boats]
+    return [{"name": n, "lat": round(centre[0] + dla, 4), "lon": round(centre[1] + dlo, 4), "sog": s,
+             "cog": c, "time": now - 900, "dtf_nm": None} for (n, dla, dlo, s, c) in _SAMPLE]
 
 
 def _norm(name):
@@ -123,7 +141,9 @@ def _fleet(definition, demo=False):
                                   if isinstance(rp.get("tracker_permitted"), bool) else None),
             "reason": ""}
     if demo or (cfg.get("provider") or "").lower() == "sample":
-        base.update(fixes=_sample_fleet(), provider="sample", reason="demo fixture")
+        fixes = _sample_fleet(definition)
+        base.update(fixes=fixes, provider="sample",
+                    reason="demo fixture" if fixes else "demo needs a course with positions")
         return base
     prov = (cfg.get("provider") or "").lower()
     if prov not in _YB_PROVIDERS:

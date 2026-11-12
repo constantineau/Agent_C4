@@ -205,7 +205,7 @@ class RaceDefinition:
     start_area: str = ""
     region: str = ""
     timezone: str = ""             # IANA tz name of the race venue (e.g. "America/Detroit");
-                                   # lets the optimizer accept a race-local start time. "" = enter UTC.
+                                   # needed for any local gun time (#312). "" = gun times as epochs only.
     divisions: list = field(default_factory=list)      # [Division]
     courses: list = field(default_factory=list)        # [Course]
     zones: list = field(default_factory=list)          # [Zone]
@@ -249,6 +249,9 @@ def validate(d: dict) -> tuple[list, list]:
     for key in ("race_id", "name", "year", "courses", "rules_profile"):
         if not d.get(key):
             errors.append(f"missing required field: {key}")
+    _tz_err, _tz_warn = timezone_issues(d)
+    errors += _tz_err
+    warnings += _tz_warn
     course_ids = {c.get("id") for c in d.get("courses", [])}
     for div in d.get("divisions", []):
         if div.get("course_ref") not in course_ids:
@@ -551,10 +554,59 @@ def course_hash(definition: dict, course_id: str = None) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
 
+def valid_timezone(name) -> bool:
+    """True when `name` is an IANA time zone this host knows (e.g. "Europe/London")."""
+    if not name or not isinstance(name, str):
+        return False
+    try:
+        from zoneinfo import ZoneInfo
+        ZoneInfo(name.strip())
+        return True
+    except Exception:
+        return False
+
+
+def _is_local_time(v) -> bool:
+    """A gun/start value that needs the venue time zone to mean anything: an ISO datetime string
+    with no offset. Epoch numbers and strings with an offset (or Z) stand on their own."""
+    if v is None or isinstance(v, (int, float)):
+        return False
+    s = str(v).strip()
+    try:
+        float(s)
+        return False
+    except ValueError:
+        pass
+    try:
+        from datetime import datetime
+        return datetime.fromisoformat(s.replace("Z", "+00:00")).tzinfo is None
+    except ValueError:
+        return False
+
+
+def timezone_issues(d: dict) -> tuple[list, list]:
+    """(errors, warnings) for the venue time zone (#312). A local gun time with no valid time zone
+    is an error: guessing UTC starts the route hours off."""
+    errors, warnings = [], []
+    tz = (d or {}).get("timezone") or ""
+    ok = valid_timezone(tz)
+    if tz and not ok:
+        errors.append(f"time zone {tz!r} is not a known zone (want e.g. 'Europe/London')")
+    if not ok:
+        local = [k for k, v in ((d or {}).get("division_starts") or {}).items() if _is_local_time(v)]
+        if local:
+            errors.append(f"gun times for {', '.join(map(str, local))} are local but the race has "
+                          f"no valid time zone — set one")
+        elif not tz and (d or {}).get("start_date"):
+            warnings.append("no time zone set — set the venue's time zone")
+    return errors, warnings
+
+
 def _gun_epoch(v, tz_name=""):
-    """A division gun as epoch seconds. Accepts an epoch number (the Lab guns card) or an ISO
-    local datetime string (the SI extraction), interpreted in the race venue's timezone when the
-    definition carries one (zoneinfo; naive/UTC fallback otherwise)."""
+    """A division gun as epoch seconds. Accepts an epoch number (the Lab guns card), an ISO
+    datetime with an offset, or an ISO local datetime (the SI extraction) read in the race venue's
+    time zone. A local time with no valid zone is None, never a UTC guess (#312); `validate` says
+    so in race review."""
     if v is None:
         return None
     try:
@@ -562,17 +614,13 @@ def _gun_epoch(v, tz_name=""):
     except (TypeError, ValueError):
         pass
     try:
-        from datetime import datetime, timezone as _tz
+        from datetime import datetime
         dt = datetime.fromisoformat(str(v).strip().replace("Z", "+00:00"))
         if dt.tzinfo is None:
-            if tz_name:
-                try:
-                    from zoneinfo import ZoneInfo
-                    dt = dt.replace(tzinfo=ZoneInfo(tz_name))
-                except Exception:
-                    dt = dt.replace(tzinfo=_tz.utc)
-            else:
-                dt = dt.replace(tzinfo=_tz.utc)
+            if not valid_timezone(tz_name):
+                return None
+            from zoneinfo import ZoneInfo
+            dt = dt.replace(tzinfo=ZoneInfo(tz_name.strip()))
         return dt.timestamp()
     except (TypeError, ValueError):
         return None

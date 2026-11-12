@@ -470,7 +470,6 @@ def test_fleet_ratings_say_which_number():
     assert res["entries"][0].get("rating") is None, res["entries"]   # no guessed offshore number
 
 
-@xfail("#312", "a local gun time with no time zone is read as UTC, no note")
 def test_gun_without_timezone_is_flagged():
     d = copy.deepcopy(RACE)
     d.pop("timezone")
