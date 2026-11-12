@@ -2,13 +2,17 @@
 
 The facts and their generic defaults are shared/boat_hardware.py. This module only finds the profile:
 
-  * Aboard (`DATA_SOURCE=onboard`): the current boat (boatlib.current_boat: the session's boat,
-    else the last used, else the Deploy push / library aboard). An "Other boat" (a name only) has
-    no profile: generic defaults. A profile carried from a Lab older than #313 has no `hardware`
-    block; the same boat's copy in the library aboard (or the push) that has one is used, then the
-    Lab's bundled seed when a checkout carries it (the replay rig, tests). Never another boat's.
-  * On the shore: the profile named by `BOAT_ID` (`knowledge/boats/<boat>.json` in the image, the
-    Lab's bundled seed in a checkout).
+  * Aboard (`DATA_SOURCE=onboard`): the current boat (boatlib.current: the session's boat, else
+    the last used, else the Deploy push / library aboard). Of that boat's stored copies (the
+    Deploy push, the library entry) the NEWEST is its kit, whether or not it carries a polar:
+    boatlib.boat_for prefers a copy with a polar, which is right for the polar and wrong for the
+    kit (a newer push saying "no Orin" must not lose to an older library entry). An "Other boat"
+    (a name only) has no profile: generic defaults.
+  * A stored copy from before #313 has no `hardware` block. Then the same boat's other stored
+    copy that has one, else the hardware seed baked into the image for that boat id
+    (`knowledge/boat_hardware/<boat>.json`, see shared/boat_hardware.seed_files), else the
+    bundled profile (boatinfo.bundled: the agent image, a checkout). Never another boat's.
+  * On the shore: the bundled profile named by `BOAT_ID` (boatinfo).
 
 Sensor priority: importing this module installs the current boat's as `source_policy`'s provider.
 On the shore the cloud's priority is the `source_priority` table (datasource.load_priority), as
@@ -22,9 +26,10 @@ from shared import boat_hardware as BH
 from shared import boat_polar as BP
 from shared import source_policy
 
+from . import boatinfo
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_PROFILE_DIRS = (os.path.join(_HERE, "..", "knowledge", "boats"),
-                 os.path.join(_HERE, "..", "..", "lab", "boats"))
+SEED_DIRS = [os.path.join(_HERE, "..", "knowledge", "boat_hardware")]
 TTL_S = 5.0                       # the priority is read on every instrument pick: keep it cheap
 _MEMO = {"key": None, "at": 0.0, "val": None}
 
@@ -37,69 +42,64 @@ def clear_cache():
     _MEMO.update(key=None, at=0.0, val=None)
 
 
-def _bundled(bid):
-    """Boat `bid`'s bundled profile file, or None (the Pi image carries none)."""
+def _seed(bid):
+    """Boat `bid`'s hardware block from the image's seed, else its bundled profile, or None."""
     if not bid or not BP.name_ok(f"{bid}.json"):
         return None
-    for d in _PROFILE_DIRS:
+    for d in SEED_DIRS:
         path = os.path.join(d, f"{bid}.json")
         if os.path.exists(path):
             try:
                 with open(path) as f:
-                    p = json.load(f)
+                    s = json.load(f)
             except (OSError, ValueError):
-                return None
-            return p if isinstance(p, dict) and p.get("boat_id") == bid else None
-    return None
+                continue
+            if isinstance(s, dict) and s.get("boat_id") == bid and isinstance(s.get("hardware"), dict):
+                return s["hardware"]
+    b = boatinfo.bundled(bid)
+    return b["hardware"] if b and isinstance(b.get("hardware"), dict) else None
 
 
-def _with_hardware(bid, prof):
-    """`prof`, or, when it carries no `hardware` block, the same boat's copy that does."""
-    if isinstance(prof, dict) and "hardware" in prof:
-        return prof
-    cands = []
-    if _onboard():
-        try:
-            from . import boatlib
-            cands.append((boatlib.entries().get(bid) or {}).get("profile"))
-            pushed = boatlib._pushed() or {}
-            if pushed.get("boat_id") == bid:
-                cands.append(pushed.get("profile"))
-        except Exception:  # noqa: BLE001 — an unreadable store: the bundled seed, else none
-            pass
-    cands.append(_bundled(bid))
-    for c in cands:
-        if isinstance(c, dict) and c.get("boat_id") == bid and isinstance(c.get("hardware"), dict):
-            return dict(prof or {}, hardware=c["hardware"]) if prof else c
-    return prof if isinstance(prof, dict) else None
+def _stored(bid):
+    """Boat `bid`'s stored copies aboard, newest first: [(at, profile)]."""
+    out = []
+    try:
+        from . import boatlib
+        pushed = boatlib._pushed() or {}
+        if pushed.get("boat_id") == bid and isinstance(pushed.get("profile"), dict):
+            out.append((float(pushed.get("at") or 0), 1, pushed["profile"]))
+        lib = boatlib.entries().get(bid) or {}
+        if isinstance(lib.get("profile"), dict):
+            out.append((float(lib.get("got_at") or 0), 0, lib["profile"]))
+    except Exception:  # noqa: BLE001 — an unreadable store: the seed, else none
+        return []
+    out.sort(key=lambda c: (c[0], c[1]), reverse=True)       # a tie goes to the Deploy push
+    return [(at, p) for at, _k, p in out if p.get("boat_id") in (bid, None)]
 
 
 def profile_for(bid):
-    """Boat `bid`'s profile with its hardware block, or None."""
+    """Boat `bid`'s profile for its kit (see the module doc), or None."""
     if not bid:
         return None
-    prof = None
+    stored = _stored(bid) if _onboard() else []
+    prof = stored[0][1] if stored else None
+    if isinstance(prof, dict) and "hardware" in prof:
+        return prof
+    hw = next((p["hardware"] for _at, p in stored[1:] if isinstance(p.get("hardware"), dict)),
+              None) or _seed(bid)
+    if hw is None:
+        return prof
+    return dict(prof or {"boat_id": bid}, hardware=hw)
+
+
+def _current_id():
     if _onboard():
         try:
             from . import boatlib
-            prof = boatlib.boat_for(bid).get("profile")
+            return (boatlib.current() or {}).get("boat_id")
         except Exception:  # noqa: BLE001
-            prof = None
-    return _with_hardware(bid, prof)
-
-
-def _current():
-    """(boat_id, profile) of the boat being sailed. boat_id None = an Other boat / none known."""
-    if _onboard():
-        try:
-            from . import boatlib
-            cur = boatlib.current_boat() or {}
-        except Exception:  # noqa: BLE001
-            return None, None
-        bid = cur.get("boat_id")
-        return bid, (_with_hardware(bid, cur.get("profile")) if bid else None)
-    bid = (os.environ.get("BOAT_ID") or "").strip() or None
-    return bid, _with_hardware(bid, None) if bid else None
+            return None
+    return boatinfo._boat_id()
 
 
 def _memo_key():
@@ -113,12 +113,12 @@ def _memo_key():
 
 
 def profile():
-    """The current boat's profile (with its hardware block when any copy has one), or None.
-    Memoised for TTL_S and until the boat or the boat files change."""
+    """The current boat's profile for its kit, or None (an Other boat, none known). Memoised for
+    TTL_S and until the boat or the boat files change."""
     key, now = _memo_key(), time.monotonic()
     if _MEMO["key"] == key and now - _MEMO["at"] < TTL_S:
         return _MEMO["val"]
-    _bid, prof = _current()
+    prof = profile_for(_current_id())
     _MEMO.update(key=key, at=now, val=prof)
     return prof
 

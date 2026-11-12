@@ -16,7 +16,7 @@ BUNDLED_DIR = os.environ.get("BOATS_DIR", "/srv/boats")
 EDITED_DIR = os.path.join(os.environ.get("INGESTED_DIR", "/srv/ingested"), "boats")
 ACTIVE_KEY = "active_boat"
 # profile fields added after edited copies existed (#305): a copy without one takes its seed's
-SEED_CONSTANTS = ("loa_m", "tack_cost_s", "sail_families")
+SEED_CONSTANTS = ("loa_m", "tack_cost_s", "sail_families", "hardware")  # hardware: #313
 
 
 def _files():
@@ -85,12 +85,6 @@ def get_boat(bid):
                 seed = _bundled(bid)
                 if seed and isinstance(seed.get("polar_files"), dict) and seed["polar_files"]:
                     d["polar_files"] = dict(seed["polar_files"])
-            if "hardware" not in d and os.path.dirname(f) != BUNDLED_DIR:
-                # an edited copy saved before the profile carried the boat's kit (#313): its
-                # bundled seed's, until the owner sets their own. Never another boat's.
-                seed = _bundled(bid)
-                if seed and isinstance(seed.get("hardware"), dict):
-                    d["hardware"] = seed["hardware"]
             return d
     return None
 

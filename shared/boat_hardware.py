@@ -156,3 +156,40 @@ def errors(profile) -> list:
                 errs.append(f"hardware.plotter.max_route_waypoints must be between 2 and "
                             f"{PROTOCOL_MAX_WAYPOINTS}")
     return errs
+
+
+# ---- the hardware seed baked into the Pi engine image -------------------------------------------
+# The Pi image carries no boat data (#304), but a profile stored aboard before #313 has no hardware
+# block, and without one the boat's calibrated sensor priority would silently go. So the image
+# carries each bundled boat's hardware block ONLY, one file per boat id ({boat_id, hardware}), used
+# for a stored profile of that same boat id that has no block. Never another boat's.
+def seed_files(src_dir, out_dir):
+    """Write `<out_dir>/<boat_id>.json` = {boat_id, hardware} for each profile in `src_dir` that
+    has a hardware block. Returns the boat ids written."""
+    import glob
+    import json
+    import os
+    os.makedirs(out_dir, exist_ok=True)
+    out = []
+    for path in sorted(glob.glob(os.path.join(src_dir, "*.json"))):
+        try:
+            with open(path) as f:
+                p = json.load(f)
+        except (OSError, ValueError):
+            continue
+        bid = p.get("boat_id") if isinstance(p, dict) else None
+        if not isinstance(bid, str) or not bid or "/" in bid or bid.startswith("."):
+            continue
+        if not isinstance(p.get("hardware"), dict) or errors(p):
+            continue
+        with open(os.path.join(out_dir, f"{bid}.json"), "w") as f:
+            json.dump({"boat_id": bid, "hardware": p["hardware"]}, f, indent=1, sort_keys=True)
+        out.append(bid)
+    return out
+
+
+if __name__ == "__main__":         # python3 -m shared.boat_hardware <boats dir> <out dir>
+    import sys
+    if len(sys.argv) != 3:
+        raise SystemExit("usage: python3 -m shared.boat_hardware <boats dir> <out dir>")
+    print("hardware seed:", ", ".join(seed_files(sys.argv[1], sys.argv[2])) or "none")
