@@ -168,5 +168,11 @@ d0 = {"current": "x"}
 check("Bayview data untouched", synthesis._with_station_notes(d0, {}, "c") is d0)
 optimizer.course_bbox = real_bbox
 
+reset()
+far = obsarea.nearest(25.591 - 60.6 / 60.0, -80.097, "ndbc", 60)   # Fowey Rocks 60.6 nm away
+near = obsarea.nearest(25.591 - 59.0 / 60.0, -80.097, "ndbc", 60)
+check("nearest keeps to its radius (60.6 nm is out, 59 nm is in)",
+      far is None and near and near["id"].upper() == "FWYF1", (far, near))
+
 print("RESULT:", "PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)

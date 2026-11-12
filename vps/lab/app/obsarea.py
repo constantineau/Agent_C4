@@ -184,9 +184,9 @@ def nearest(lat, lon, kind, max_nm):
         got = src.find(box)
     except Exception:          # noqa: BLE001
         return None
-    best, bd = None, max_nm + 1
+    best, bd = None, None
     for st in got:
         d = venue._haversine_nm(lat, lon, st["lat"], st["lon"])
-        if d < bd:
+        if d <= max_nm and (bd is None or d < bd):      # within the promised radius (Codex #343)
             best, bd = st, d
     return dict(best, dist_nm=round(bd, 1), source=src.name) if best else None
