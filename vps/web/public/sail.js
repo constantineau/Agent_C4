@@ -188,7 +188,7 @@
     // the boat's sails on a fresh page, before any wind arrives
     update(typeof App !== "undefined" ? App.lastConditions : null);
   });
-  window.addEventListener("sr33:conditions", (e) => { App.lastConditions = e.detail; update(e.detail); });
+  window.addEventListener("c4:conditions", (e) => { App.lastConditions = e.detail; update(e.detail); });
   window.addEventListener("resize", draw);
   // redraw on theme change (palette swap)
   new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });

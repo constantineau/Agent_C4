@@ -241,7 +241,7 @@ const Plot = (function () {
   }
 
   // ---- wire ----
-  window.addEventListener("sr33:conditions", (e) => {
+  window.addEventListener("c4:conditions", (e) => {
     const c = e.detail;
     if (typeof c.lat === "number" && typeof c.lon === "number") {
       // A magnetic heading is ~7-9° off true here: point the arrow along it only when it is true,
@@ -255,7 +255,7 @@ const Plot = (function () {
     }
     if (Date.now() - lastNav > 3000) { lastNav = Date.now(); loadNav(); } else { draw(); }
   });
-  window.addEventListener("sr33:mode", () => { fetchRoute(); loadNav(); });  // show/hide tactics+route
+  window.addEventListener("c4:mode", () => { fetchRoute(); loadNav(); });  // show/hide tactics+route
   setInterval(() => { if (routeOn && !racing()) fetchRoute(); }, 20000);     // refresh route
   window.addEventListener("resize", draw);
   new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });

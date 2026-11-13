@@ -31,7 +31,11 @@ PI_REPO=${PI_REPO:-Agent_C4}                  # relative to the Pi user's home
 BACKUPS=${BACKUPS:-deploy-backups}            # relative to the Pi user's home
 EXPECT_BASE=${EXPECT_BASE:-b3c30a1}           # what the Pi's clone should be on
 VERIFY_TIMEOUT_S=${VERIFY_TIMEOUT_S:-3600}    # quick_check of the 24 GB archive on the SD card took 39 min on 2026-10-28
-COMPOSE="docker compose -f compose.pi.yml"
+# The Pi's compose project: images <project>-<svc>, containers <project>-<svc>-1 (same variable as
+# record-deployed.sh). Passed to compose with -p so names here and there always agree.
+export COMPOSE_PROJECT=${COMPOSE_PROJECT:-sr33-pi}   # exported: record-deployed.sh reads it too
+COMPOSE="docker compose -p $COMPOSE_PROJECT -f compose.pi.yml"
+ENGINE_C=$COMPOSE_PROJECT-engine-1 ARCHIVER_C=$COMPOSE_PROJECT-archiver-1 UPLINK_C=$COMPOSE_PROJECT-uplink-1
 
 apply=0 rollback="" expect_rotation=0 allow_open=0
 while [[ $# -gt 0 ]]; do
@@ -51,7 +55,7 @@ say()  { printf '\n=== %s\n' "$*"; }
 pi()   { ssh -o ConnectTimeout=15 "$PI_HOST" "$@"; }
 # Read-only look inside the archive volume, through the engine container (it mounts the volume
 # read-only), so no new container is started on the Pi just to list a directory.
-archive_ls() { pi "docker exec sr33-pi-engine-1 ls -la --time-style=+%FT%T /var/lib/sr33/archive"; }
+archive_ls() { pi "docker exec $ENGINE_C ls -la --time-style=+%FT%T /var/lib/sr33/archive"; }
 run() { if [[ $apply -eq 1 ]]; then echo "+ $*"; "$@"; else echo "(dry run) would run: $*"; fi; }
 
 # The files that make up the data path. Tests are not shipped; they run in `make ci` here.
@@ -64,15 +68,15 @@ inventory() {
   pi "cd ~/$PI_REPO && echo \"branch: \$(git branch --show-current)  head: \$(git log -1 --format='%h %ad %s' --date=short)\" \
       && echo 'local changes:' && git status --short | sed 's/^/  /'; \
       echo; docker ps -a --format '{{.Names}}\t{{.Status}}' | sort; \
-      echo; echo -n 'archiver restarts: '; docker inspect -f '{{.RestartCount}}' sr33-pi-archiver-1 2>/dev/null || echo '?'; \
+      echo; echo -n 'archiver restarts: '; docker inspect -f '{{.RestartCount}}' $ARCHIVER_C 2>/dev/null || echo '?'; \
       echo; df -h / | tail -1; free -h | sed -n 2p"
   echo; echo "archive volume:"; archive_ls | sed 's/^/  /'
-  echo; echo "archiver log tail:"; pi "docker logs --tail 4 sr33-pi-archiver-1 2>&1" | sed 's/^/  /'
+  echo; echo "archiver log tail:"; pi "docker logs --tail 4 $ARCHIVER_C 2>&1" | sed 's/^/  /'
 }
 
 # Effective retention as the running archiver sees it, and whether the Pi's .env overrides it.
 retention_now() {
-  pi "docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' sr33-pi-archiver-1 | sed -n 's/^ARCHIVE_RETAIN_DAYS=//p'"
+  pi "docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' $ARCHIVER_C | sed -n 's/^ARCHIVE_RETAIN_DAYS=//p'"
 }
 retention_env() { pi "cd ~/$PI_REPO && sed -n 's/^ARCHIVE_RETAIN_DAYS=//p' .env"; }
 
@@ -81,7 +85,7 @@ retention_env() { pi "cd ~/$PI_REPO && sed -n 's/^ARCHIVE_RETAIN_DAYS=//p' .env"
 # ever appears the check refuses to guess rather than open it in a mode that writes beside it.
 # Prints "OPEN <id> <hours> <name>" lines and DONE.
 open_sessions() {
-  pi "docker exec -i sr33-pi-engine-1 python3 -" <<'PY'
+  pi "docker exec -i $ENGINE_C python3 -" <<'PY'
 import os, sqlite3, time
 p = "/var/lib/sr33/engine/engine.db"
 if os.path.exists(p + "-wal"):
@@ -104,17 +108,17 @@ restart_engine() {
   pi "cd ~/$PI_REPO && $COMPOSE restart engine"
   local i
   for i in $(seq 1 12); do
-    if pi "docker exec sr33-pi-engine-1 python3 -c \"import urllib.request as u; print(u.urlopen('http://localhost:8200/health', timeout=5).read().decode())\"" 2>/dev/null; then
+    if pi "docker exec $ENGINE_C python3 -c \"import urllib.request as u; print(u.urlopen('http://localhost:8200/health', timeout=5).read().decode())\"" 2>/dev/null; then
       # /series reads the ARCHIVE (last 10 min of true wind), so it shows which file the engine
       # is on. /conditions comes from the live Signal K cache and would look fine either way.
       echo "engine archive read (/series, last 10 min):"
-      pi "docker exec sr33-pi-engine-1 python3 -c \"import json, time, urllib.request as u; d = json.load(u.urlopen('http://localhost:8200/series?minutes=10', timeout=30)); p = d.get('points') or []; print('  newest archived wind %.0f s old, %d points' % (time.time() - p[-1]['t'], len(p)) if p else '  no archived wind in the last 10 min (inconclusive: true wind may simply not be reporting) - ' + str(d.get('note')))\"" \
-        || echo "!! /series did not answer — look at: docker logs sr33-pi-engine-1"
+      pi "docker exec $ENGINE_C python3 -c \"import json, time, urllib.request as u; d = json.load(u.urlopen('http://localhost:8200/series?minutes=10', timeout=30)); p = d.get('points') or []; print('  newest archived wind %.0f s old, %d points' % (time.time() - p[-1]['t'], len(p)) if p else '  no archived wind in the last 10 min (inconclusive: true wind may simply not be reporting) - ' + str(d.get('note')))\"" \
+        || echo "!! /series did not answer — look at: docker logs $ENGINE_C"
       return 0
     fi
     sleep 5
   done
-  echo "!! the engine did not answer /health within 60 s after its restart — look at: docker logs sr33-pi-engine-1"
+  echo "!! the engine did not answer /health within 60 s after its restart — look at: docker logs $ENGINE_C"
   return 1
 }
 
@@ -126,8 +130,8 @@ if [[ -n $rollback ]]; then
   cmd="set -e; cd ~/$PI_REPO \
     && tar -xf ~/$bdir/files.tar \
     && if [ -s ~/$bdir/new-files.txt ]; then xargs -r rm -f < ~/$bdir/new-files.txt; fi \
-    && docker tag sr33-pi-archiver:pre-$rollback sr33-pi-archiver \
-    && if docker image inspect sr33-pi-uplink:pre-$rollback >/dev/null 2>&1 && grep -q '^uplink$' ~/$bdir/rebuilt.txt; then docker tag sr33-pi-uplink:pre-$rollback sr33-pi-uplink && $COMPOSE up -d --no-deps --no-build uplink; fi \
+    && docker tag $COMPOSE_PROJECT-archiver:pre-$rollback $COMPOSE_PROJECT-archiver \
+    && if docker image inspect $COMPOSE_PROJECT-uplink:pre-$rollback >/dev/null 2>&1 && grep -q '^uplink$' ~/$bdir/rebuilt.txt; then docker tag $COMPOSE_PROJECT-uplink:pre-$rollback $COMPOSE_PROJECT-uplink && $COMPOSE up -d --no-deps --no-build uplink; fi \
     && $COMPOSE up -d --no-deps --no-build archiver \
     && { echo \"rollback \$(date -u +%FT%TZ): restored ~/$bdir (files + :pre-$rollback images), undoing deploy $rollback\"; echo; } >> ~/DEPLOYED"
   if [[ $apply -eq 1 ]]; then pi "$cmd"; restart_engine || true
@@ -261,7 +265,7 @@ backup="set -e; mkdir -p ~/$bdir && cd ~/$PI_REPO \
   && printf '%s\n' ${new[*]:-} > ~/$bdir/new-files.txt \
   && printf '%s\n' ${rebuild[*]} > ~/$bdir/rebuilt.txt \
   && { echo \"backup $stamp of \$(git log -1 --format='%h %s')\"; echo 'changed: ${changed[*]:-}'; echo 'new: ${new[*]:-}'; } > ~/$bdir/manifest.txt"
-for svc in "${rebuild[@]}"; do backup+=" && docker tag sr33-pi-$svc sr33-pi-$svc:pre-$stamp"; done
+for svc in "${rebuild[@]}"; do backup+=" && docker tag $COMPOSE_PROJECT-$svc $COMPOSE_PROJECT-$svc:pre-$stamp"; done
 if [[ $apply -eq 1 ]]; then pi "$backup"; else echo "(dry run) would run on the Pi: $backup"; fi
 
 # -------------------------------------------------------------------------------------- 4. copy
@@ -297,7 +301,7 @@ fi
 say "Verify (up to ${VERIFY_TIMEOUT_S}s for the startup check of the archive)"
 start=$(date +%s); seen=""
 while (( $(date +%s) - start < VERIFY_TIMEOUT_S )); do
-  log=$(pi "docker logs --since '$((($(date +%s) - start) + 60))s' sr33-pi-archiver-1 2>&1" || true)
+  log=$(pi "docker logs --since '$((($(date +%s) - start) + 60))s' $ARCHIVER_C 2>&1" || true)
   wrote=$(grep -c '+[0-9]* rows (total' <<<"$log" || true)
   if [[ $expect_rotation -eq 0 ]]; then
     # A normal deploy: a healthy open is expected; success is the archiver writing.
@@ -310,7 +314,7 @@ while (( $(date +%s) - start < VERIFY_TIMEOUT_S )); do
   fi
   sleep 20
 done
-pi "docker logs --since 40m sr33-pi-archiver-1 2>&1 | grep -E 'unusable|count\(\*\) failed|CORRUPT|ready \(|disk guard|!!!' | tail -8"
+pi "docker logs --since 40m $ARCHIVER_C 2>&1 | grep -E 'unusable|count\(\*\) failed|CORRUPT|ready \(|disk guard|!!!' | tail -8"
 if [[ -z $seen ]]; then
   if [[ $expect_rotation -eq 1 ]]; then what="rotation + first write"; else what="open + first write"; fi
   echo "!! no $what seen within ${VERIFY_TIMEOUT_S}s — check the log above"; exit 1
@@ -324,14 +328,14 @@ echo; echo "archive volume:"
 [[ $expect_rotation -eq 1 ]] && echo "(expect archive.corrupt-<stamp>.db = the old 24 GB file, and a small new archive.db)"
 archive_ls | sed 's/^/  /'
 db_bytes() {   # archive.db + its WAL (fresh writes sit in the WAL until a checkpoint)
-  pi "docker exec sr33-pi-engine-1 sh -c 'stat -c %s /var/lib/sr33/archive/archive.db /var/lib/sr33/archive/archive.db-wal 2>/dev/null; true'" \
+  pi "docker exec $ENGINE_C sh -c 'stat -c %s /var/lib/sr33/archive/archive.db /var/lib/sr33/archive/archive.db-wal 2>/dev/null; true'" \
     | awk '{s += $1} END {print s + 0}'
 }
 s1=$(db_bytes); sleep 60; s2=$(db_bytes)
 echo "archive (db + wal): $s1 -> $s2 bytes in 60 s"; (( s2 > s1 )) || echo "!! not growing"
-echo; echo "status file:"; pi "docker exec sr33-pi-engine-1 cat /var/lib/sr33/archive/archiver-status.json" || echo "!! no status file yet"
+echo; echo "status file:"; pi "docker exec $ENGINE_C cat /var/lib/sr33/archive/archiver-status.json" || echo "!! no status file yet"
 echo; echo -n "uplink sends in the last 2 min: "
-pi "docker logs --since 2m sr33-pi-uplink-1 2>&1 | grep -c 'sent'" || echo "!! uplink quiet"
-echo -n "archiver restarts since recreate: "; pi "docker inspect -f '{{.RestartCount}}' sr33-pi-archiver-1"
+pi "docker logs --since 2m $UPLINK_C 2>&1 | grep -c 'sent'" || echo "!! uplink quiet"
+echo -n "archiver restarts since recreate: "; pi "docker inspect -f '{{.RestartCount}}' $ARCHIVER_C"
 echo "retention in the running archiver: $(retention_now)"
 say "Deployed. Backup stamp: $stamp  (rollback: $0 --rollback $stamp --apply)"

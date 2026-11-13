@@ -14,7 +14,7 @@ Frames are parsed once into memory and served one at a time, so the browser neve
 whole ~30 MB timeline and scrubbing costs a localhost round trip.
 
 Usage:
-    python tools/replay/server.py --timeline /home/constantineau/backups/replay-jul18/timeline
+    python tools/replay/server.py --timeline <replay dir>/timeline
     # then open http://localhost:8110/
 """
 import argparse
@@ -120,7 +120,7 @@ class Handler(BaseHTTPRequestHandler):
         if p == "/sun.js":
             return self._file(os.path.join(ROOT, "vps", "web", "public", "sun.js"))
         if p == "/config.js":
-            return self._send("window.SR33_ONBOARD = true;", MIME[".js"])
+            return self._send("window.C4_ONBOARD = true;", MIME[".js"])
 
         if p == "/replay/index":
             return self._send({

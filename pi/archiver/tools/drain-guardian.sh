@@ -14,7 +14,9 @@
 #
 # Run detached (setsid) so it outlives the shell that started it.
 LOG=${GUARDIAN_LOG:-$HOME/backups/drain-guardian.log}
-PSQL="docker exec sr33-dev-timescaledb-1 psql -U sr33 -d sr33_dev -tAc"
+# The VPS Postgres the drain lands in: its container, user and db (the dev stack's by default).
+DB_CONTAINER=${DB_CONTAINER:-sr33-dev-timescaledb-1}
+PSQL="docker exec $DB_CONTAINER psql -U ${POSTGRES_USER:-sr33} -d ${POSTGRES_DB:-sr33_dev} -tAc"
 # the boat's Pi as an ssh target (user@host). No default in code (#314).
 PI=${PI_HOST:-}
 if [ -z "$PI" ]; then

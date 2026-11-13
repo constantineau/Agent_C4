@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate fake SR33 telemetry and POST it through the ingestion API.
+"""Generate fake boat telemetry and POST it through the ingestion API.
 
 Exercises the real path (ingestion `/ingest/raw` -> TimescaleDB `telemetry_raw`) with no
 boat and no extra deps — stdlib only. Simulates a boat working upwind on Lake Huron with

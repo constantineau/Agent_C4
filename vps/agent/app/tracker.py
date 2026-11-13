@@ -167,7 +167,7 @@ def _fetch(cfg, centre=None):
     else:
         return [], f"unknown tracker provider {provider!r}"
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "SR33-AI-Navigator/1.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "Agent-C4-Navigator/1.0"})
         with urllib.request.urlopen(req, timeout=_TIMEOUT_S) as resp:
             payload = json.loads(resp.read().decode("utf-8", "replace"))
     except Exception as e:                       # best-effort like GRIB — never break the fleet view

@@ -1,4 +1,4 @@
-/* SR33 Crew Dashboard — onboard copilot iPad surface (Phase 1 prototype).
+/* C4 Crew Dashboard — onboard copilot iPad surface (Phase 1 prototype).
    Design: docs/COPILOT_DASHBOARD.md. A FIXED grid of status tiles that never relocate;
    the copilot scores each tile; status is encoded in >=3 independent channels so colour is
    never load-bearing (accessible BY CONSTRUCTION — no toggle); two themes, day + night,

@@ -21,6 +21,9 @@ from the original file. Every script prints what it verified.
 | `delete_archived.sh` | deletes named files only after BOTH proofs, at delete time: the local copy still hashes to the manifest, AND the GCS object, read back in full and decompressed, hashes to the same sha256 (#243; an object merely existing is not enough). Skips loudly, exits 1 if anything was kept, never guesses |
 | `cut_jul15_race.sh` | lifts the Jul 15 race out of the 8.5 G delivery salvage at full resolution so the salvage could be deleted without losing the race |
 
+Paths and buckets come from env vars (`SRC`, `STAGE`, `DEST`, `BUCKET`, `MAN`, `PULL`, `OUT`), with
+no defaults: each script says which it needs at the top, and stops at once if one is unset (#314).
+
 ## What is deliberately still on disk
 
 - `backups/c4-boat-pull-2026-08-30/work/archive-backfill.db` (2.9 G) — `harness.py`'s default
@@ -111,6 +114,7 @@ gsutil ls -L -b gs://constantineau-c4-nightly | grep -iE 'storage class|location
 cd /home/constantineau/Agent_C4 && git pull
 sudo install -m 644 tools/backup/systemd/c4-lab-backup.service tools/backup/systemd/c4-lab-backup.timer /etc/systemd/system/
 sudo install -m 600 tools/backup/systemd/c4-lab-backup.env.example /etc/c4-lab-backup.env
+sudoedit /etc/c4-lab-backup.env    # set C4_BACKUP_DEST (the bucket) and C4_REPO (this checkout's path)
 sudo systemctl daemon-reload
 
 # 3. first real run (~10 min), then a restore drill from the bucket (~30 min)

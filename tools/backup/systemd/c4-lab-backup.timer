@@ -1,7 +1,7 @@
-# 02:15 UTC: clear of the DreamCRM backup (03:00, which also dumps sr33_dev) and Tramp's
+# 02:15 UTC: clear of the DreamCRM backup (03:00, which also dumps the dev database) and Tramp's
 # off-site copy (04:30). Persistent: a run missed while the VPS was down happens at boot.
 [Unit]
-Description=Nightly Agent C4 Lab + sr33_dev backup
+Description=Nightly Agent C4 Lab + dev database backup
 
 [Timer]
 OnCalendar=*-*-* 02:15:00 UTC

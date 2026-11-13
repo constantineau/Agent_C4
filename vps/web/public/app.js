@@ -1,4 +1,4 @@
-/* SR33 Navigator — iPad crew companion shell (5.0).
+/* C4 Navigator — iPad crew companion shell (5.0).
    WebSocket chat + live polling, automatic day/night, race/practice mode, fatigue chip,
    and the all-channels slide-over. Later steps (5.1–5.4) hang the sail dial, course plot,
    navigator and routing onto this shell. Vanilla JS, no build step. */
@@ -14,7 +14,7 @@ const App = {
   // Onboard race console (pi/console): the iPad talks ONLY to the Pi engine over boat-local
   // Wi-Fi — no cloud, no auth, no LLM chat, and every panel available (the boat's own
   // computer is legal in-race, so the RRS-41 race gate doesn't apply here). Set by config.js.
-  onboard: !!window.SR33_ONBOARD,
+  onboard: !!window.C4_ONBOARD,
 };
 
 /* ---------- gate (server-side shared-password auth) ---------- */
@@ -138,13 +138,13 @@ function applyMode() {
     const btn = document.getElementById('modeBtn');
     btn.classList.remove('on'); btn.onclick = null; btn.title = 'On-boat engine (Pi) — no cloud';
     document.body.dataset.mode = 'practice';   // panels un-gated (engine is legal in-race)
-    window.dispatchEvent(new CustomEvent('sr33:mode', { detail: 'practice' }));
+    window.dispatchEvent(new CustomEvent('c4:mode', { detail: 'practice' }));
     return;
   }
   document.getElementById('modeLbl').textContent = App.mode.toUpperCase();
   document.getElementById('modeBtn').classList.toggle('on', App.mode === 'race');
   document.body.dataset.mode = App.mode;   // tactical/routing panels read this (RRS 41 gate)
-  window.dispatchEvent(new CustomEvent('sr33:mode', { detail: App.mode }));
+  window.dispatchEvent(new CustomEvent('c4:mode', { detail: App.mode }));
 }
 function tacticsAllowed() { return App.onboard || App.mode !== 'race'; }
 
@@ -201,7 +201,7 @@ async function refresh() {
     }
     setFatigue(c.fatigue, c.fatigue_level);
     App.lastConditions = c;
-    window.dispatchEvent(new CustomEvent('sr33:conditions', { detail: c }));  // for later panels
+    window.dispatchEvent(new CustomEvent('c4:conditions', { detail: c }));  // for later panels
   } catch (e) { document.getElementById('link').className = 'dot down'; }
 }
 function setFatigue(index, level) {

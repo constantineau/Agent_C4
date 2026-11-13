@@ -1,4 +1,4 @@
-"""SR33 onboard deterministic engine service (Phase 9.1) — runs ON THE BOAT (Pi 4).
+"""Onboard deterministic engine service (Phase 9.1) — runs ON THE BOAT (Pi 4).
 
 This is the in-race-legal half of the three-tier architecture. It serves the SAME REST
 endpoints the iPad already uses against the cloud, but computed ONBOARD from the boat's own
