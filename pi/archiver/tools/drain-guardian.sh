@@ -21,7 +21,7 @@ LOG=${GUARDIAN_LOG:-$HOME/backups/drain-guardian.log}
 envpin() {   # envpin NAME DEFAULT: exported, else the .env value, else DEFAULT
   local v=${!1:-}
   [[ -n $v ]] || v=$(sed -n "s/^$1=//p" "${C4_ENV_FILE:-$(dirname "$0")/../../../.env}" 2>/dev/null \
-                     | tail -1 | tr -d "\"'")
+                     | tail -1 | sed -E 's/[[:space:]]+#.*$//' | tr -d "\"'")
   echo "${v:-$2}"
 }
 DB_CONTAINER=${DB_CONTAINER:-$(envpin C4_DEV_PROJECT c4-dev)-timescaledb-1}

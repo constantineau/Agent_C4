@@ -36,7 +36,7 @@ def _dev_project():
         return os.environ["C4_DEV_PROJECT"]
     try:
         with open(os.environ.get("C4_ENV_FILE") or os.path.join(ROOT, ".env")) as f:
-            found = [l.split("=", 1)[1].strip().strip("'\"") for l in f
+            found = [re.sub(r"\s+#.*$", "", l.split("=", 1)[1]).strip().strip("'\"") for l in f
                      if l.startswith("C4_DEV_PROJECT=")]
         if found and found[-1]:
             return found[-1]

@@ -11,7 +11,7 @@
 set -euo pipefail
 
 if [[ -z ${SRC:-} && -z ${C4_BENCH_PROJECT:-} && -f "$(dirname "$0")/../../.env" ]]; then
-  C4_BENCH_PROJECT=$(sed -n 's/^C4_BENCH_PROJECT=//p' "$(dirname "$0")/../../.env" | tail -1 | tr -d "\"'")
+  C4_BENCH_PROJECT=$(sed -n 's/^C4_BENCH_PROJECT=//p' "$(dirname "$0")/../../.env" | tail -1 | sed -E 's/[[:space:]]+#.*$//' | tr -d "\"'")
 fi
 SRC=${SRC:-/var/lib/docker/volumes/${C4_BENCH_PROJECT:-c4-bench}_sk_archive/_data/archive.db}
 STAGE=${STAGE:?set STAGE to a local staging directory}

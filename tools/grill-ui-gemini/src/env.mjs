@@ -18,7 +18,11 @@ export function readDotenv(text, name) {
   let value;
   for (const line of text.split(/\r?\n/)) {
     const m = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
-    if (m && m[1] === name) value = m[2].replace(/^(['"])(.*)\1$/, "$2");
+    if (!m || m[1] !== name) continue;
+    const raw = m[2].trim();
+    const q = raw.match(/^(['"])(.*)\1$/);
+    // quoted: as is; unquoted: " #..." is a comment, as compose reads it
+    value = q ? q[2] : raw.replace(/\s+#.*$/, "");
   }
   return value || undefined;
 }

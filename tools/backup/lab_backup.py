@@ -80,7 +80,10 @@ def stack_pin(name, default, env=None, env_file=None):
             for line in f:
                 m = re.match(r"\s*(?:export\s+)?([A-Za-z_]\w*)\s*=\s*(.*?)\s*$", line)
                 if m and m.group(1) == name:
-                    value = re.sub(r"^(['\"])(.*)\1$", r"\2", m.group(2))
+                    v = m.group(2)
+                    q = re.match(r"^(['\"])(.*)\1$", v)
+                    # quoted: as is; unquoted: " #..." is a comment, as compose reads it
+                    value = q.group(2) if q else re.sub(r"\s+#.*$", "", v)
     except OSError:
         pass
     return value or default

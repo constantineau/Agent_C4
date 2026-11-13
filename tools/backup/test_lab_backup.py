@@ -678,6 +678,12 @@ with tempfile.TemporaryDirectory() as tmp:
           lb.stack_pin("POSTGRES_DB", "c4_dev", env={}, env_file=envf) == "c4_dev"
           and lb.stack_pin("C4_DEV_PROJECT", "c4-dev", env={},
                            env_file=os.path.join(tmp, "missing")) == "c4-dev")
+    with open(envf, "w") as f:
+        f.write("C4_DEV_PROJECT=sr33-dev   # keep the live stack\nPOSTGRES_DB='a #b'\n")
+    check("an inline comment after an unquoted pin is dropped, as compose reads it",
+          lb.stack_pin("C4_DEV_PROJECT", "c4-dev", env={}, env_file=envf) == "sr33-dev")
+    check("a # inside quotes is kept",
+          lb.stack_pin("POSTGRES_DB", "c4_dev", env={}, env_file=envf) == "a #b")
 
 print("\nALL OK" if ok else "\nFAILURES")
 sys.exit(0 if ok else 1)
