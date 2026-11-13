@@ -82,7 +82,8 @@ def etopo_tiles() -> list:
             tile = f"{'N' if top >= 0 else 'S'}{abs(top):02d}{'E' if left >= 0 else 'W'}{abs(left):03d}"
             out.append({"name": f"etopo_{tile.lower()}", "label": "ETOPO world grid (coarse)",
                         "navigational": False, "bbox": [top, top - 15, left, left + 15],
-                        "url": _ETOPO.format(tile=tile), "z": "elevation", "version": "2022v1"})
+                        "url": _ETOPO.format(tile=tile), "z": "elevation", "version": "2022v1",
+                        "fallback": True})
     return out
 
 
@@ -125,13 +126,17 @@ class GridSource:
         self.name = str(spec["name"])
         self.label = str(spec.get("label") or self.name)
         self.navigational = bool(spec.get("navigational", False))
+        # a world grid with heights from sea level: fills only water no other grid covers, and
+        # never a lake above sea level (obstacles._apply_grids)
+        self.fallback = bool(spec.get("fallback", False))
         self.bbox = tuple(float(v) for v in spec["bbox"])
         self.file_id = hashlib.sha1(repr((spec.get("url"), spec.get("member"),
                                           spec.get("version"))).encode()).hexdigest()[:10]
         # everything that changes what the grid says or how a leg is labelled: in the cell and
         # mask cache keys, so a corrected catalog entry never reuses an old result (Codex on #300)
         meaning = hashlib.sha1(repr((self.file_id, (spec.get("z") or "elevation").lower(),
-                                     self.navigational, self.label)).encode()).hexdigest()[:10]
+                                     self.navigational, self.label,
+                                     self.fallback)).encode()).hexdigest()[:10]
         self.data_version = f"{GRID_DATA_VERSION}:{self.name}:{spec.get('version', '')}:{meaning}"
 
     def covers(self, bbox) -> bool:

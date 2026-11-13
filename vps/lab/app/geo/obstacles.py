@@ -775,6 +775,9 @@ def _fully_charted(field, chart_polys):
     return out
 
 
+FALLBACK_DRY_M = 2.0   # a fallback-grid cell higher than this above sea level is a lake, not data
+
+
 def _apply_grids(field, grids, safety_depth, cache_dir, chart_polys=()) -> bool:
     """Fill the water no chart covers from the depth grids (#292). Per cell, everywhere but the
     cells the chart covers whole (`_fully_charted`: at the chart's edge both apply, so a shoal in
@@ -800,13 +803,19 @@ def _apply_grids(field, grids, safety_depth, cache_dir, chart_polys=()) -> bool:
     charted = _fully_charted(field, chart_polys)
     shoal = 0
     any_depth = False
+    primary = [t for t in got if not getattr(t[0], "fallback", False)]
+    backup = [t for t in got if getattr(t[0], "fallback", False)]
     for i in range(field.nx * field.ny):
         if charted[i]:
             continue
         best, who = None, None                  # shallowest anywhere / its grid, if it is full
-        for g, depths, full in got:
+        # a fallback grid (a world grid, heights from sea level) speaks only where no other grid
+        # has a value, and not for a cell well above sea level: that is a lake whose surface
+        # isn't at sea level, so its bed height is not a depth (Codex on #350)
+        use = primary if any(depths[i] is not None for _g, depths, _f in primary) else backup
+        for g, depths, full in use:
             d = depths[i]
-            if d is None:
+            if d is None or (use is backup and d < -FALLBACK_DRY_M):
                 continue
             any_depth = True
             if best is None or d < best:

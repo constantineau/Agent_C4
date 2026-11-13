@@ -263,5 +263,35 @@ finally:
     (coastline.ensure_global, coastline.layers_in_bbox, coastline.active_source,
      enc.ensure_bbox, enc.layers_in_bbox) = _orig
 
+print("6) a fallback world grid (ETOPO: heights from sea level) vs a lake grid (Codex on #350)")
+from types import SimpleNamespace as _NS  # noqa: E402
+
+
+def _grid(name, depths, fallback=False):
+    return _NS(name=name, label=name, navigational=False, fallback=fallback,
+               cells=lambda *a, **k: (list(depths), [1] * len(depths)))
+
+
+def _field(n):
+    return _NS(bbox=(1, 0, 0, 1), s=0, w=0, res=1, nx=n, ny=1, nodepth=bytearray(b"\x01" * n),
+               mask=bytearray(n), layers={}, active=False, depth_gaps=[])
+
+
+# cells: [lake grid 40 m, world grid says 170 m ABOVE sea level (the lake bed)]
+#        [no lake grid, world grid 30 m deep] [no lake grid, world grid 50 m above sea level]
+#        [no lake grid, world grid 1 m above sea level: a drying bank]
+lake = _grid("lake", [40.0, None, None, None])
+world = _grid("etopo_x", [-170.0, 30.0, -50.0, -1.0], fallback=True)
+fl = _field(4)
+OB._apply_grids(fl, [lake, world], 2.0, None)
+check("the lake grid wins where it has a value: open, not blocked by the world grid", fl.mask[0] == 0)
+check("open sea with only the world grid: its depth counts", fl.mask[1] == 0 and fl.nodepth[1] == 0)
+check("well above sea level in the world grid: a lake, so no depth data, not a shoal",
+      fl.mask[2] == 0 and fl.nodepth[2] == 1)
+check("a drying bank just above sea level still blocks", fl.mask[3] == 1)
+check("the fallback flag is in the grid's cache key",
+      D.GridSource(dict(SPEC, fallback=True)).data_version != D.GridSource(SPEC).data_version)
+check("ETOPO tiles are fallback grids", all(t["fallback"] for t in D.etopo_tiles()))
+
 print("\nALL OK" if ok else "\nSOME CHECKS FAILED")
 raise SystemExit(0 if ok else 1)
