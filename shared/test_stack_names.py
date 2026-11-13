@@ -170,9 +170,12 @@ for f, db in (("compose.dev.yml", "c4_dev"), ("compose.prod.yml", "c4_prod")):
     env = services["timescaledb"]["environment"]
     check(f"{f}: new install user c4, database {db}",
           interpolate(env["POSTGRES_USER"], {}) == "c4" and interpolate(env["POSTGRES_DB"], {}) == db)
-    check(f"{f}: the pinned user and database win",
-          interpolate(env["POSTGRES_DB"], PINS["vps"]) == "sr33_dev"
-          and interpolate(env["POSTGRES_USER"], PINS["vps"]) == "sr33")
+    # dev and prod read the same POSTGRES_DB/USER: a prod box's .env pins its own (sr33_prod)
+    live_db = db.replace("c4_", "sr33_")
+    pin = {**PINS["vps"], "POSTGRES_DB": live_db}
+    check(f"{f}: the pinned user and database win ({live_db})",
+          interpolate(env["POSTGRES_DB"], pin) == live_db
+          and interpolate(env["POSTGRES_USER"], pin) == "sr33")
     with open(os.path.join(ROOT, f)) as fh:
         doc = yaml.safe_load(fh)
     check(f"{f}: no project name hard-coded (each file reads its own C4_*_PROJECT, not "

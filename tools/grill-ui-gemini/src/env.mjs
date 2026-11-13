@@ -20,7 +20,7 @@ export function readDotenv(text, name) {
     const m = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
     if (!m || m[1] !== name) continue;
     const raw = m[2].trim();
-    const q = raw.match(/^(['"])(.*)\1$/);
+    const q = raw.match(/^(['"])(.*?)\1(?:\s+#.*)?$/);
     // quoted: as is; unquoted: " #..." is a comment, as compose reads it
     value = q ? q[2] : raw.replace(/\s+#.*$/, "");
   }
