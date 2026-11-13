@@ -881,7 +881,14 @@ function stDirty() {
 }
 // drop unsaved ticks: back to the saved picks (the rows found stay listed)
 function stDiscard() {
-  const rows = St.rows, p = stationPicks(Lab.editDef);
+  const p = stationPicks(Lab.editDef);
+  // saved picks missing from the list (saved elsewhere since it was found) join it, so they show
+  // and a later save keeps them (Codex on #346)
+  const have = new Set((St.rows || []).map(stKey));
+  if (p && p.some((s) => !have.has(stKey(s))))
+    St.rows = (St.rows || []).concat(p.filter((s) => !have.has(stKey(s))).map((s) => Object.assign({}, s)));
+  const rows = St.rows;
+  St.base = JSON.stringify(p);
   St.changed = false; St.msg = ""; St.ticked = {};
   if (p) p.forEach((s) => { St.ticked[stKey(s)] = true; });
   else (rows || []).filter((s) => s.auto).forEach((s) => { St.ticked[stKey(s)] = true; });

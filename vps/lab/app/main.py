@@ -1056,8 +1056,11 @@ def race_stations_check(rid: str, body: dict):
     """Live check: has each station reported wind in the last few hours (what the playbook freeze
     keeps)? Body {stations: [{id, kind}]}, at most 30. Returns {live: {id: bool}}."""
     from . import synthesis
+    rows = (body or {}).get("stations") or []
+    if not isinstance(rows, list):
+        return JSONResponse({"detail": "stations must be a list."}, status_code=422)
     sts = [{"id": str(s.get("id") or "").upper(), "kind": s.get("kind")}
-           for s in ((body or {}).get("stations") or [])[:30] if isinstance(s, dict) and s.get("id")]
+           for s in rows[:30] if isinstance(s, dict) and s.get("id")]
     return {"live": synthesis.probe_live(sts)}
 
 

@@ -225,6 +225,8 @@ r = client.post("/api/races/fll-race/stations/check", headers=TEAM,
                                    {"id": "FWYF1", "kind": "ndbc"}]})
 check("check: live per station", r.json() == {"live": {"KFLL": True, "KFXE": False, "FWYF1": True}},
       r.json())
+r = client.post("/api/races/fll-race/stations/check", headers=TEAM, json={"stations": {"id": "KFLL"}})
+check("check: a non-list is refused (422, not 500)", r.status_code == 422, r.text)
 r = client.post("/api/races/fll-race/stations", headers=TEAM,
                 json={"picked": [{"id": "kfll", "kind": "metar", "lat": 26.079, "lon": -80.162, "name": "FLL"},
                                  {"id": "bad", "kind": "nope", "lat": 0, "lon": 0}]})

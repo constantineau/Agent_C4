@@ -237,3 +237,19 @@ test("a reload of the same race takes picks saved elsewhere; unsaved ticks say t
   assert.equal(ctx.St.changed, true, "unsaved ticks kept");
   assert.match(ctx.St.msg, /Picks changed elsewhere\. Saving replaces them\./);
 });
+
+test("discard after picks changed elsewhere lists those picks, so a later save keeps them", () => {
+  const def = RACE();
+  def.stations = { picked: [{ id: "KFLL", kind: "metar", lat: 26.08, lon: -80.16, name: "FLL" }] };
+  const { ctx } = harness(def);
+  ctx.detailStationsCard(def);
+  ctx.stTick(0, false);                                     // unsaved edit
+  const fresh = RACE();
+  fresh.stations = { picked: [{ id: "KPBI", kind: "metar", lat: 26.68, lon: -80.1, name: "PBI" }] };
+  ctx.Lab.editDef = fresh;
+  ctx.detailStationsCard(fresh);                            // dirty: ticks kept, warned
+  ctx.stDiscard();
+  assert.ok(ctx.St.rows.some((s) => s.id === "KPBI"), "the newer pick is listed");
+  assert.equal(ctx.St.ticked["metar:KPBI"], true);
+  assert.equal(ctx.St.changed, false);
+});
