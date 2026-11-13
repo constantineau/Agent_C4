@@ -11,10 +11,10 @@ from app import buoys, matcher
 ok = True
 
 
-def check(name, cond):
+def check(name, cond, extra=""):
     global ok
     ok = ok and bool(cond)
-    print(f"  [{'OK ' if cond else 'FAIL'}] {name}")
+    print(f"  [{'OK ' if cond else 'FAIL'}] {name}" + (f"  — {extra}" if extra and not cond else ""))
 
 
 def rt2(rows):
@@ -205,6 +205,124 @@ stub(boat=(26.1, -80.0), nav_brg=0.0, stations=FL, feeds={"LKWF1": rt2([(20, 6.2
 r = buoys.get_buoys()
 check("off Fort Lauderdale with a bundle: the bundle's stations",
       r["available"] and [s["id"] for s in r["stations"]] == ["LKWF1"])
+
+print("9) ERDDAP buoy networks (#309): Irish buoys from a frozen playbook, read by kind")
+import urllib.parse as _up
+from shared import erddap as _erddap
+
+
+def _iso(mins_ago):
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - mins_ago * 60))
+
+
+def ie_csv(rows, unit="knots"):
+    """ERDDAP .csv: header, units row, then rows = [(station, minutes_ago, speed, dir, qc)]."""
+    out = ["station_id,time,WindSpeed,WindDirection,QC_Flag", f",UTC,{unit},degrees true,"]
+    out += [f"{sid},{_iso(m)},{spd},{d},{qc}" for sid, m, spd, d, qc in rows]
+    return "\n".join(out)
+
+
+IE_SENT = []
+
+
+def ie_fetch(answer):
+    def f(url, timeout):
+        IE_SENT.append((url, timeout))
+        if "erddap.marine.ie" not in url:
+            raise AssertionError("unexpected fetch " + url)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+    return f
+
+
+# off SW Ireland, M3 20 nm due north (up-course), M5 well east; wind here 300 @ 8 kn
+IE = [{"id": "M3", "lat": 51.55, "lon": -10.5, "name": "M3", "kind": "ie_buoy"},
+      {"id": "M5", "lat": 51.69, "lon": -6.70, "name": "M5", "kind": "ie_buoy"}]
+IE_ROWS = [("M3", 20, 12.0, 315.0, 0), ("M3", 80, 10.0, 310.0, 1),
+           ("M3", 40, 99.0, 200.0, 9),                 # missing-flagged: dropped
+           ("M3", 50, "NaN", 312.0, 0), ("M3", 60, "", 312.0, 0),   # unreadable: dropped
+           ("M5", 30, 9.0, 250.0, 0)]
+stub(boat=(51.217, -10.5), nav_brg=0.0, stations=IE)
+IE_SENT.clear()
+buoys._fetch = ie_fetch(ie_csv(IE_ROWS))
+r = buoys.get_buoys()
+by = {s["id"]: s for s in r["stations"]}
+q = _up.unquote(IE_SENT[0][0]) if IE_SENT else ""
+check("ie_buoy is a registered ERDDAP network", _erddap.network("ie_buoy") is not None)
+check("one call for the whole network, short timeout", len(IE_SENT) == 1
+      and IE_SENT[0][1] == buoys.FETCH_TIMEOUT, IE_SENT)
+check("the query names both stations and a recent window",
+      'station_id=~"(M3|M5)"' in q and "time>=" in q and "/tabledap/IWBNetwork.csv?" in q, q)
+check("latest M3 reading (knots kept), not the missing-flagged one",
+      by["M3"].get("tws_kn") == 12.0 and by["M3"].get("twd_deg") == 315, by["M3"])
+check("trend from the readable rows", by["M3"].get("trend")
+      and by["M3"]["trend"]["tws_kn_per_h"] > 0, by["M3"].get("trend"))
+check("M3 is up-course and leads the headline, over water",
+      r["upcourse"] and r["upcourse"]["station"] == "M3" and not r["upcourse"]["shore"], r["upcourse"])
+check("M5 read too", by["M5"].get("tws_kn") == 9.0)
+check("kind kept on the row, source named", by["M3"]["kind"] == "ie_buoy"
+      and "erddap_buoys" in r["based"])
+buoys._fetch = ie_fetch(AssertionError("cached"))
+check("cached ~10 min: no second call", buoys.get_buoys()["stations"][0].get("tws_kn") == 12.0)
+
+stub(boat=(51.217, -10.5), nav_brg=0.0, stations=IE)
+buoys._fetch = ie_fetch(ie_csv(IE_ROWS, unit="m/s"))
+check("m/s converted to knots",
+      {s["id"]: s.get("tws_kn") for s in buoys.get_buoys()["stations"]}["M3"] == round(12.0 * 1.943844, 1))
+stub(boat=(51.217, -10.5), nav_brg=0.0, stations=IE)
+buoys._fetch = ie_fetch(ie_csv(IE_ROWS, unit="furlongs"))
+r = buoys.get_buoys()
+check("a unit we don't know: no reading, never a guess",
+      all(s["tws_kn"] is None and s["note"] == "no recent reading" for s in r["stations"]))
+
+stub(boat=(51.217, -10.5), nav_brg=0.0, stations=IE)
+buoys._fetch = ie_fetch(ie_csv([("M3", 20, 12.0, 315.0, 0)]))
+by = {s["id"]: s for s in buoys.get_buoys()["stations"]}
+check("a station not reporting: plain note, no error",
+      by["M5"]["tws_kn"] is None and by["M5"]["note"] == "no recent reading" and by["M3"]["tws_kn"] == 12.0)
+
+stub(boat=(51.217, -10.5), nav_brg=0.0, stations=IE)
+buoys._fetch = ie_fetch(OSError("Your query produced no matching results. (404)"))
+r = buoys.get_buoys()
+check("offline / nothing in the window: every station noted, no error",
+      r["available"] and all(s["note"] == "no recent reading" for s in r["stations"]))
+stub(boat=(51.217, -10.5), nav_brg=0.0, stations=IE)
+buoys._fetch = ie_fetch("<html>Service Unavailable</html>")
+check("a page that isn't a table: no readings",
+      all(s["tws_kn"] is None for s in buoys.get_buoys()["stations"]))
+
+stub(boat=(51.217, -10.5), nav_brg=0.0, stations=IE[:1])
+buoys._fetch = ie_fetch(ie_csv([("M3", 120, 12.0, 315.0, 0), ("M3", 180, 11.0, 310.0, 0)]))
+st = buoys.get_buoys()["stations"][0]
+check("an hourly network posting late: a 2 h old reading still counts (its own stale limit)",
+      st["stale"] is False and st.get("delta") is not None and st["age_min"] == 120, st)
+buoys._fetch = ie_fetch(ie_csv([("M3", 170, 12.0, 315.0, 0)]))
+buoys.clear_cache()
+st = buoys.get_buoys()["stations"][0]
+check("...but not one older than that", st["stale"] is True and "delta" not in st, st)
+
+print("10) the id as the server spells it; a kind with no reader")
+LOW = [{"id": "AB1", "src_id": "ab1", "lat": 51.55, "lon": -10.5, "name": "AB1", "kind": "ie_buoy"}]
+stub(boat=(51.217, -10.5), nav_brg=0.0, stations=LOW)
+IE_SENT.clear()
+buoys._fetch = ie_fetch(ie_csv([("ab1", 20, 7.0, 90.0, 0)]))
+st = buoys.get_buoys()["stations"][0]
+check("asks the server for src_id, files the reading under the frozen id",
+      'station_id="ab1"' in _up.unquote(IE_SENT[0][0]) and st["id"] == "AB1" and st["tws_kn"] == 7.0,
+      (IE_SENT, st))
+ODD = [{"id": "X1", "lat": 51.55, "lon": -10.5, "name": "X1", "kind": "uk_buoy"}]
+stub(boat=(51.217, -10.5), nav_brg=0.0, stations=ODD)
+buoys._fetch = lambda url, timeout: (_ for _ in ()).throw(AssertionError("fetched " + url))
+st = buoys.get_buoys()["stations"][0]
+check("a kind the boat can't read: listed with a plain note, never fetched from NDBC",
+      st["tws_kn"] is None and st["note"] == buoys.NO_READER_NOTE, st)
+_os.environ["BUOY_STATIONS"] = "M3:51.55:-10.5:M3 buoy:ie_buoy;45003:45.3:-82.5"
+stub(boat=(51.217, -10.5), nav_brg=0.0)
+got = buoys.stations()
+_os.environ.pop("BUOY_STATIONS", None)
+check("BUOY_STATIONS takes an optional kind", got[0].get("kind") == "ie_buoy"
+      and "kind" not in got[1], got)
 
 print("RESULT:", "PASS" if ok else "FAIL")
 raise SystemExit(0 if ok else 1)

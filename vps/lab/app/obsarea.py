@@ -28,8 +28,10 @@ uses: the picks when the race has them, else `find()`.
 
 Adding a source (e.g. a UK buoy network): subclass StationSource with `kind`, `label`, `coverage`,
 `find(box)` and `lookup(sid)`, then `register()` it. The finder, the automatic list and the Lab card
-pick it up with no other change. The boat reads only the kinds in READABLE_KINDS live; a new kind
-needs a reader aboard (vps/agent/app/buoys.py) and a live probe (synthesis) before it is frozen.
+pick it up with no other change. The boat reads only the kinds in READABLE_KINDS live, and only
+those are frozen. A buoy network on an ERDDAP server is readable once its `shared.erddap.Network`
+is registered there (the boat's reader and the freeze's live probe go by kind); any other new kind
+needs a reader aboard (vps/agent/app/buoys.py) and a live probe (synthesis) first.
 """
 from __future__ import annotations
 
@@ -38,6 +40,8 @@ import math
 import time
 import urllib.request
 import xml.etree.ElementTree as ET
+
+from shared import erddap
 
 from . import venue
 
@@ -51,7 +55,9 @@ PAD_DEG = 0.6             # around the course box: catches the stations just off
 MAX_PER_KIND = 10         # found (not curated) stations kept per kind, nearest the course first
 FINDER_PER_SOURCE = 15    # the Lab's finder lists a few more per source than the automatic pick
 MAX_PICKS = 20            # stations a race can pick
-READABLE_KINDS = ("metar", "ndbc")    # kinds the boat reads live (and the freeze can probe)
+# kinds the boat reads live (and the freeze can probe): METAR, NDBC, and every ERDDAP buoy network
+# registered in shared.erddap (the boat's buoys.py reads those by kind)
+READABLE_KINDS = ("metar", "ndbc") + tuple(erddap.NETWORKS)
 _cache: dict = {}
 
 

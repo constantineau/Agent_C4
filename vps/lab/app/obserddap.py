@@ -1,11 +1,12 @@
 """Buoy networks served from an ERDDAP server (#309): station list and observed wind, no key.
 
 ERDDAP is the data server many ocean institutes run, with the same query language everywhere, so
-one class reads any of their buoy networks. Each network is one `ErddapBuoySource(...)` with its
-server, dataset, variable names and coverage box, registered with `obsarea.register()`. Its
-stations then show in the race station lookup, the Lab's finder and the venue study, and model
-skill scores against their wind (`observed`). The boat does not read these live (obsarea's
-READABLE_KINDS), so they never go into the frozen station list.
+one class reads any of their buoy networks. The network itself (server, dataset, variable names)
+is a `shared.erddap.Network`, which the boat reads live too. Here it gets a label and a coverage
+box: one `ErddapBuoySource(...)` registered with `obsarea.register()`. Its stations then show in
+the race station lookup, the Lab's finder and the venue study, model skill scores against their
+wind (`observed`), and their live stations are frozen into the playbook (a network registered in
+shared.erddap is in obsarea.READABLE_KINDS).
 
 Registered here:
   - Marine Institute (Ireland) weather buoys, dataset IWBNetwork on erddap.marine.ie: M2-M6 and
@@ -17,57 +18,27 @@ dropped, not converted.
 """
 from __future__ import annotations
 
-import csv
-import datetime as dt
-import io
-import math
 import time
-import urllib.parse
+
+from shared import erddap
 
 from . import obsarea
 
 ACTIVE_DAYS = 30           # "active": reported in the last 30 days (the automatic pick, add by id)
-_KN = {"knots": 1.0, "knot": 1.0, "kn": 1.0, "kt": 1.0, "kts": 1.0,
-       "m/s": 1.943844, "m s-1": 1.943844, "m.s-1": 1.943844, "meters/second": 1.943844}
-
-
-def _rows(text):
-    """ERDDAP .csv: a header row, a units row, then data. Returns (header, units, rows)."""
-    rd = list(csv.reader(io.StringIO(text or "")))
-    if len(rd) < 2:
-        return [], [], []
-    return [h.strip() for h in rd[0]], [u.strip() for u in rd[1]], rd[2:]
-
-
-def _float(v):
-    try:
-        f = float(v)
-    except (TypeError, ValueError):
-        return None
-    return f if math.isfinite(f) else None
-
-
-def _epoch(iso):
-    try:
-        return dt.datetime.strptime(iso.strip(), "%Y-%m-%dT%H:%M:%SZ").replace(
-            tzinfo=dt.timezone.utc).timestamp()
-    except (AttributeError, ValueError):
-        return None
+_rows, _float = erddap.rows, erddap.to_float
 
 
 class ErddapBuoySource(obsarea.StationSource):
     """One buoy network on an ERDDAP server (a tabledap dataset with one row per station-time)."""
 
-    def __init__(self, name, label, server, dataset, coverage, coverage_label, id_var="station_id",
-                 speed_var="WindSpeed", dir_var="WindDirection", qc_var=None, qc_bad=()):
-        self.name = self.kind = name
+    def __init__(self, network, label, coverage, coverage_label):
+        self.network = network
+        self.name = self.kind = network.kind
         self.label = label
-        self.server = server.rstrip("/")
-        self.dataset = dataset
+        self.server, self.dataset = network.server, network.dataset
         self.coverage = coverage
         self.coverage_label = coverage_label
-        self.id_var, self.speed_var, self.dir_var = id_var, speed_var, dir_var
-        self.qc_var, self.qc_bad = qc_var, {str(q) for q in qc_bad}
+        self.id_var = network.id_var
         self._ids = {}
 
     # outside its own water a regional network stays quiet: the race hears about the networks that
@@ -75,8 +46,12 @@ class ErddapBuoySource(obsarea.StationSource):
     quiet_outside = True
 
     def _url(self, query):
-        return (f"{self.server}/tabledap/{self.dataset}.csv?"
-                + urllib.parse.quote(query, safe="&="))
+        return self.network.url(query)
+
+    def server_id(self, sid):
+        """The station id as the server spells it (ids are upper case here), or None."""
+        self._safe_stations()
+        return self._ids.get(str(sid).upper())
 
     def stations(self):
         """Every station the dataset has ever had: [{id, kind, lat, lon, name, end}], at its
@@ -95,10 +70,10 @@ class ErddapBuoySource(obsarea.StationSource):
                     continue
                 sid = r[ci].strip()
                 la, lo = _float(r[cla]), _float(r[clo])
-                if not sid or len(sid) > 16 or la is None or lo is None \
+                if not sid or la is None or lo is None \
                         or not (-90 <= la <= 90 and -180 <= lo <= 180):
                     continue
-                if not all(c.isalnum() or c in "-_" for c in sid):
+                if not erddap.safe_id(sid):
                     continue
                 self._ids[sid.upper()] = sid          # ids are upper case here, as-is on the server
                 out.append({"id": sid.upper(), "kind": self.kind, "lat": la, "lon": lo,
@@ -119,36 +94,17 @@ class ErddapBuoySource(obsarea.StationSource):
         """Observed wind at station `sid` over [sd, ed] (YYYY-MM-DD, UTC days, inclusive):
         {epoch: (tws_kn, twd_deg)}. {} when the network has nothing (ERDDAP answers an empty
         window with an error) or can't be read."""
-        self._safe_stations()
-        src_id = self._ids.get(str(sid).upper())
+        src_id = self.server_id(sid)
         if src_id is None:
             return {}
-        cols = ["time", self.speed_var, self.dir_var] + ([self.qc_var] if self.qc_var else [])
-        q = (",".join(cols) + f'&{self.id_var}="{src_id}"'
+        net = self.network
+        q = (",".join(["time"] + net.wind_cols()) + f'&{self.id_var}="{src_id}"'
              + f"&time>={sd}T00:00:00Z&time<={ed}T23:59:59Z")
         try:
-            header, units, rows = _rows(obsarea._get(self._url(q), timeout=60))
-            ct, cs, cd = (header.index(c) for c in cols[:3])
+            got = net.parse_wind(obsarea._get(self._url(q), timeout=60))
         except Exception:          # noqa: BLE001 — no data in the window, or the server is down
             return {}
-        k = _KN.get(units[cs].lower() if cs < len(units) else "")
-        if k is None:
-            return {}              # wind in a unit we don't know: dropped, never guessed
-        cq = header.index(self.qc_var) if self.qc_var and self.qc_var in header else None
-        out = {}
-        for r in rows:
-            if len(r) <= max(ct, cs, cd, cq or 0):
-                continue
-            if cq is not None and r[cq].strip() in self.qc_bad:
-                continue
-            ep, spd, wd = _epoch(r[ct]), _float(r[cs]), _float(r[cd])
-            if ep is None or spd is None or wd is None:
-                continue
-            spd *= k
-            if not (0 <= spd <= 150 and 0 <= wd <= 360):
-                continue
-            out[ep] = (spd, wd % 360)
-        return out
+        return {ep: (spd, wd) for _sid, ep, spd, wd in got}
 
     def _safe_stations(self):
         try:
@@ -158,8 +114,6 @@ class ErddapBuoySource(obsarea.StationSource):
 
 
 MARINE_IE = obsarea.register(ErddapBuoySource(
-    name="ie_buoy", label="Irish buoys (Marine Institute)",
-    server="https://erddap.marine.ie/erddap", dataset="IWBNetwork",
+    erddap.MARINE_IE, label="Irish buoys (Marine Institute)",
     # the buoys sit 5.4-15.9 W, 51.2-55 N; the box is their water, the Celtic and Irish Seas
-    coverage=(49.5, 56.5, -18.0, -4.5), coverage_label="Irish waters only",
-    qc_var="QC_Flag", qc_bad=(9,)))      # 0 unknown (all data since 2018), 1 good, 9 missing
+    coverage=(49.5, 56.5, -18.0, -4.5), coverage_label="Irish waters only"))
