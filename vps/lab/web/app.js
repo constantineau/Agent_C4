@@ -259,6 +259,8 @@ function withOverrides(snap) {
       if (!(c.id in have)) continue;
       if (have[c.id]) c.chart_overrides = have[c.id]; else delete c.chart_overrides;
     }
+    // the weather-station picks are the server's too (only their own route changes them)
+    if (Lab.editDef.stations) b.stations = Lab.editDef.stations; else delete b.stations;
     return JSON.stringify(b);
   } catch (e) { return snap; }
 }
@@ -332,6 +334,9 @@ const DIRTY_SOURCES = [
   // the boat model's crew thresholds (jib change-downs, Code 0, reefs) — not part of any race
   { tabs: ["learnings", "gameplan"], dirty: () => bmDirty(), label: () => "boat model",
     save: () => saveBoatModel(), discard: () => bmDiscard() },
+  // the race's weather-station ticks (Races > Weather stations), saved by their own route
+  { tabs: ["races"], dirty: () => stDirty(), label: () => "weather stations",
+    save: () => stSave(false), discard: () => stDiscard() },
 ];
 const dirtySources = () => DIRTY_SOURCES.filter((s) => s.tabs.includes(activeSec) && s.dirty());
 function editDirty() { return dirtySources().length > 0; }
@@ -659,10 +664,12 @@ function paintDetail() {
   if (!d) { box.innerHTML = raceDetailEmpty(); return; }
   box.innerHTML = detailActions(d, v) + detailBanner(v) + detailHead(d) +
     (d.courses || []).map((c, i) => detailCourseCard(c, i)).join("") +
+    detailStationsCard(d) +
     detailDelegated(d) +
     detailWatchCard(d) +
     detailProvenance(d.provenance || {});
   growAllTa();
+  stDrawMap();
   syncDirty();
 }
 function detailBanner(v) {
@@ -767,6 +774,210 @@ function detailDelegated(d) {
       <div class="dep-row"><a href="#fleet">Fleet →</a> <span class="muted">${fleet} boat${fleet === 1 ? "" : "s"} and handicaps</span></div>
       <div class="dep-row"><a href="#course">Course &amp; Marks →</a> <span class="muted">marks on a map</span></div>
     </div></div>`;
+}
+
+/* WEATHER STATIONS (#309): the observed-wind stations the race's playbook freezes for the boat.
+   Automatic (the stations near the course) until the race picks its own here. Stored on the race
+   as `stations: {picked: [{id, kind, lat, lon, name}]}` (absent = automatic, `picked: []` = none).
+   Saved by its own route, never by the race's Save (like chart overrides), so a re-ingest or
+   another tab's save can't undo it. Ticks are local until "Save picks". */
+const St = { rid: null, rows: null, notes: [], ticked: {}, live: {}, changed: false, busy: "", msg: "" };
+const stKey = (s) => s.kind + ":" + s.id;
+const stationPicks = (d) => (d && d.stations && Array.isArray(d.stations.picked) ? d.stations.picked : null);
+// a new station kind (a new source in obsarea) shows as its own name, no UI change needed
+function stKind(k) { return k === "metar" ? "Airport" : k === "ndbc" ? "Buoy / coast" : String(k || ""); }
+function stReset(d) {
+  const p = stationPicks(d);
+  Object.assign(St, { rid: d.race_id, base: JSON.stringify(p), notes: [], live: {}, changed: false,
+    busy: "", msg: "", rows: p ? p.map((s) => Object.assign({}, s)) : null, ticked: {} });
+  (p || []).forEach((s) => { St.ticked[stKey(s)] = true; });
+}
+function detailStationsCard(d) {
+  // a reload of the same race can carry picks saved elsewhere (another browser): take them unless
+  // this card has unsaved ticks, which then say so (Codex on #346)
+  if (St.rid !== d.race_id) stReset(d);
+  else if (JSON.stringify(stationPicks(d)) !== St.base) {
+    if (!St.changed) stReset(d);
+    else { St.base = JSON.stringify(stationPicks(d)); St.msg = "Picks changed elsewhere. Saving replaces them."; }
+  }
+  return `<div class="card" id="stCard">${stCardHtml(d)}</div>`;
+}
+function stCardHtml(d) {
+  if (Lab.isDraft) return `<h3>Weather stations</h3><div class="muted">Save the race first.</div>`;
+  const p = stationPicks(d), rows = St.rows || [];
+  const using = p ? (p.length ? `Your picks (${p.length}).` : "None. The playbook gets no stations.")
+    : "Automatic: the stations near the course.";
+  const live = (s) => { const v = St.live[s.id]; return v == null ? "" : v ? "wind now" : '<span class="muted">no wind</span>'; };
+  const trs = rows.map((s, i) => `<tr>
+      <td><label class="echk"><input type="checkbox" ${St.ticked[stKey(s)] ? "checked" : ""} ${St.busy ? "disabled" : ""} onchange="stTick(${i}, this.checked)"
+        aria-label="Use ${attr(s.id)}"></label></td>
+      <td>${esc(s.id)}${s.auto ? ' <span class="pill" title="Picked automatically">auto</span>' : ""}</td>
+      <td>${esc(s.name || "")}</td><td>${esc(stKind(s.kind))}</td>
+      <td>${s.dist_nm != null ? esc(s.dist_nm) + " nm" : ""}</td><td>${live(s)}</td></tr>`).join("");
+  const notes = (St.notes || []).map((n) => `<div class="muted" style="font-size:12px">${esc(n)}</div>`).join("");
+  const busy = !!St.busy;
+  return `<h3>Weather stations</h3>
+    <div class="muted" style="margin-bottom:8px">Using: ${esc(using)}</div>
+    <div class="dep-row">
+      <button class="mini" onclick="stFind()" ${busy ? "disabled" : ""}>${St.busy === "find" ? "Looking…" : "Find stations"}</button>
+      <input id="stAddId" placeholder="Station id" style="width:110px" onkeydown="if(event.key==='Enter')stAdd()">
+      <button class="mini" onclick="stAdd()" ${busy ? "disabled" : ""}>Add</button>
+      ${rows.length ? `<button class="mini" onclick="stCheck()" ${busy ? "disabled" : ""}>${St.busy === "check" ? "Checking…" : "Check live"}</button>` : ""}
+    </div>
+    ${notes}
+    ${trs ? `<div class="vs-scroll"><table class="legs" style="margin-top:8px"><thead><tr><th></th><th>ID</th>
+      <th>Name</th><th>Type</th><th>Away</th><th>Live</th></tr></thead><tbody>${trs}</tbody></table></div>
+      <div id="stMap" class="coursemap" style="height:280px;margin-top:10px"></div>` : ""}
+    <div class="dep-row" style="margin-top:8px">
+      ${rows.length ? `<button class="mini" onclick="stSave(false)" ${busy || !St.changed ? "disabled" : ""}>Save picks</button>` : ""}
+      ${p ? `<button class="mini" onclick="stSave(true)" ${busy ? "disabled" : ""}>Use automatic</button>` : ""}
+      <span id="stMsg" class="muted" style="font-size:12px">${esc(St.msg || (St.changed ? "Not saved yet." : ""))}</span>
+    </div>`;
+}
+function stPaint() {
+  const el = document.getElementById("stCard");
+  if (!el || !Lab.editDef || Lab.editDef.race_id !== St.rid) return;
+  el.innerHTML = stCardHtml(Lab.editDef);
+  stDrawMap();
+}
+// the course with the listed stations: ticked ones solid and labelled, the rest hollow
+function stDrawMap() {
+  const d = Lab.editDef;
+  if (!d || !document.getElementById("stMap") || typeof drawCourseMap !== "function") return;
+  const course = (d.courses || [])[0] || {};
+  drawCourseMap("stMap", course, (St.rows || []).map((s) => Object.assign({}, s, { on: !!St.ticked[stKey(s)] })), true);
+}
+const stBase = () => "/api/races/" + encodeURIComponent(St.rid) + "/stations";
+async function stFind() {
+  const rid = St.rid;
+  if (!rid || Lab.isDraft) return;
+  St.busy = "find"; St.msg = ""; stPaint();
+  try {
+    const r = await jsonOrFriendly(await apiPost(stBase() + "/find", {}));
+    if (St.rid !== rid) return;
+    if (r.detail) throw new Error(r.detail);
+    const rows = r.stations || [], have = new Set(rows.map(stKey));
+    // keep the saved picks and anything ticked here that this search didn't list (added by id)
+    const keep = (r.picked || []).concat((St.rows || []).filter((s) => St.ticked[stKey(s)]));
+    keep.forEach((s) => { if (!have.has(stKey(s))) { have.add(stKey(s)); rows.push(Object.assign({}, s)); } });
+    if (!St.changed) {
+      St.ticked = {};
+      (r.picked || rows.filter((s) => s.auto)).forEach((s) => { St.ticked[stKey(s)] = true; });
+    }
+    St.rows = rows; St.notes = r.notes || [];
+    St.msg = rows.length ? "" : "No stations found. Add one by id.";
+  } catch (e) { if (St.rid === rid) St.msg = "Couldn't look: " + (e.message || e); }
+  if (St.rid === rid) { St.busy = ""; stPaint(); }
+}
+function stTick(i, on) {
+  const s = (St.rows || [])[i];
+  if (!s || St.busy) return;          // no tick changes while a find/add/check/save runs
+  St.ticked[stKey(s)] = !!on; St.changed = true; St.msg = "";
+  stPaint(); syncDirty();
+}
+// unsaved ticks on the open race: in the Save bar and the leave prompt like any other edit
+function stDirty() {
+  return !!(St.changed && !Lab.isDraft && Lab.editDef && Lab.editDef.race_id === St.rid);
+}
+// drop unsaved ticks: back to the saved picks (the rows found stay listed)
+function stDiscard() {
+  const p = stationPicks(Lab.editDef);
+  // saved picks missing from the list (saved elsewhere since it was found) join it, so they show
+  // and a later save keeps them (Codex on #346)
+  const have = new Set((St.rows || []).map(stKey));
+  if (p && p.some((s) => !have.has(stKey(s))))
+    St.rows = (St.rows || []).concat(p.filter((s) => !have.has(stKey(s))).map((s) => Object.assign({}, s)));
+  const rows = St.rows;
+  St.base = JSON.stringify(p);
+  St.changed = false; St.msg = ""; St.ticked = {};
+  if (p) p.forEach((s) => { St.ticked[stKey(s)] = true; });
+  else (rows || []).filter((s) => s.auto).forEach((s) => { St.ticked[stKey(s)] = true; });
+  stPaint();
+}
+const stTickSig = () => JSON.stringify(Object.keys(St.ticked).filter((k) => St.ticked[k]).sort());
+async function stAdd() {
+  const rid = St.rid, inp = document.getElementById("stAddId");
+  const id = ((inp && inp.value) || "").trim();
+  if (!rid || !id) return;
+  St.busy = "add"; stPaint();
+  try {
+    const res = await apiPost(stBase() + "/lookup", { id });
+    const r = await jsonOrFriendly(res);
+    if (St.rid !== rid) return;
+    if (!res.ok || !r.station) throw new Error(r.detail || "No station with that id.");
+    const s = r.station;
+    St.rows = St.rows || [];
+    if (!St.rows.some((x) => stKey(x) === stKey(s))) St.rows.push(s);
+    St.ticked[stKey(s)] = true; St.changed = true; syncDirty();
+    St.msg = `Added ${s.id}${s.dist_nm != null ? " (" + s.dist_nm + " nm)" : ""}. Not saved yet.`;
+  } catch (e) { if (St.rid === rid) St.msg = String(e.message || e); }
+  if (St.rid === rid) { St.busy = ""; stPaint(); }
+}
+async function stCheck() {
+  const rid = St.rid, rows = (St.rows || []).slice(0, 30);
+  if (!rid || !rows.length) return;
+  St.busy = "check"; stPaint();
+  try {
+    const r = await jsonOrFriendly(await apiPost(stBase() + "/check",
+      { stations: rows.map((s) => ({ id: s.id, kind: s.kind })) }));
+    if (St.rid !== rid) return;
+    St.live = r.live || {};
+    St.msg = "Live = wind in the last 3 h. The playbook keeps only those.";
+  } catch (e) { if (St.rid === rid) St.msg = "Couldn't check: " + (e.message || e); }
+  if (St.rid === rid) { St.busy = ""; stPaint(); }
+}
+async function stSave(auto) {
+  const rid = St.rid;
+  if (!rid || Lab.isDraft) return false;
+  const picked = auto ? null : (St.rows || []).filter((s) => St.ticked[stKey(s)])
+    .map((s) => ({ id: s.id, kind: s.kind, lat: s.lat, lon: s.lon, name: s.name, source: s.source }));
+  const sentSig = stTickSig();
+  St.busy = "save"; stPaint();
+  let r;
+  try {
+    // through the race-definition save queue, so it can't interleave with a tab's own save
+    r = await queueDef(async () => {
+      const res = await apiPost(stBase(), { picked });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j.detail || "error " + res.status);
+      return j;
+    });
+  } catch (e) {
+    if (St.rid === rid) { St.busy = ""; St.msg = "Not saved: " + (e.message || e); stPaint(); }
+    return false;
+  }
+  syncStations(rid, r.stations);
+  if (St.rid !== rid) return true;
+  St.base = JSON.stringify(stationPicks({ stations: r.stations }));   // what's saved now
+  St.busy = "";
+  if (auto) {
+    St.changed = false; St.ticked = {};
+    (St.rows || []).filter((s) => s.auto).forEach((s) => { St.ticked[stKey(s)] = true; });
+    St.msg = "Back to automatic. Build the playbook again to use them.";
+  } else if (stTickSig() !== sentSig) {
+    St.changed = true;                  // ticks moved while the save ran: those are still unsaved
+    St.msg = "Changed while saving. Not saved yet.";
+  } else {
+    St.changed = false;
+    St.msg = "Saved. Build the playbook again to use them.";
+  }
+  stPaint(); syncDirty();
+  return true;
+}
+// The saved picks into every copy of the race the Lab holds: the editor's (and its clean baseline,
+// so they don't read as an unsaved edit) and the Gameplan's.
+function syncStations(rid, block) {
+  const apply = (d) => {
+    if (!d || d.race_id !== rid) return;
+    if (block) d.stations = block; else delete d.stations;
+  };
+  if (Lab.editDef && Lab.editDef.race_id === rid) {
+    apply(Lab.editDef);
+    if (Lab.cleanDef) {
+      try { const b = JSON.parse(Lab.cleanDef); apply(b); Lab.cleanDef = JSON.stringify(b); } catch (e) {}
+    }
+  }
+  if (typeof Opt !== "undefined") apply(Opt.def);   // top-level const: not on window (Codex on #346)
 }
 
 /* WATCH PLAN (crew rotation) — authored here, delivered aboard with the homework (seeds the
@@ -971,7 +1182,7 @@ function paintCourse() {
     ${(d.courses || []).map((c, i) => courseEditCard(c, i)).join("")}
     <button id="saveCourseBtn" onclick="saveCourse()">Save course</button>
     <button class="mini" onclick="saveAndGameplan()">Save and route →</button>`;
-  (d.courses || []).forEach((c, i) => drawCourseMap("map" + i, c));
+  (d.courses || []).forEach((c, i) => drawCourseMap("map" + i, c, stationPicks(d)));
   syncDirty();
 }
 function courseEditCard(c, ci) {
@@ -1163,7 +1374,9 @@ async function saveCourse() {
 // Course & Marks chart — a real slippy map (OSM + OpenSeaMap seamarks) so geocoded marks can be
 // sanity-checked against actual geography (issue #26). Labeled markers per start/mark/gate/finish,
 // island disks (with the rounding side), gate/finish lines, auto-fit to the course.
-function drawCourseMap(id, course) {
+// stations (optional): weather stations as small purple dots, labelled by id; `on: false` = hollow,
+// label on hover only. fitStations: frame them too (the stations card), else just the course.
+function drawCourseMap(id, course, stations, fitStations) {
   const el = document.getElementById(id);
   if (!el || !window.L) return;
   Lab._courseMaps = Lab._courseMaps || {};
@@ -1198,6 +1411,19 @@ function drawCourseMap(id, course) {
   const fp = (Array.isArray(fpRaw) ? fpRaw : []).filter((p) => p && p.lat != null && p.lon != null);
   if (fp.length === 2) L.polyline([[fp[0].lat, fp[0].lon], [fp[1].lat, fp[1].lon]], { color: "#f5c451", weight: 3 }).addTo(map);
   fp.forEach((p, k) => pin(p.lat, p.lon, k === 0 ? "Finish" : "Finish (2)", "#f5c451", k === 0 ? 1 : 3));
+  (stations || []).forEach((s) => {
+    if (!s || s.lat == null || s.lon == null) return;
+    const on = s.on !== false;
+    const mk = L.circleMarker([s.lat, s.lon], { radius: 4, color: "#5b2bb5", weight: 1.5,
+      fillColor: on ? "#b48cff" : "#ffffff", fillOpacity: on ? 1 : 0.5 })
+      .bindTooltip(esc(s.id), { permanent: on, direction: "right", className: "cm-pin cm-station" }).addTo(map);
+    if (on) {
+      mk.on("mouseover click", () => { const t = mk.getTooltip(); t && t.getElement() && t.getElement().classList.add("cm-force"); });
+      mk.on("mouseout", () => { const t = mk.getTooltip(); t && t.getElement() && t.getElement().classList.remove("cm-force"); });
+      mk._cmPrio = 4; pins.push(mk);
+    }
+    if (fitStations) pts.push([s.lat, s.lon]);
+  });
   // Declutter: in priority order (start, finish, marks in course order, 2nd finish/gate points) each
   // label goes right of its pin, else left, else is hidden until hovered/tapped. Re-run after every
   // zoom/pan so zooming in brings labels back.
@@ -1928,7 +2154,9 @@ function renderOptResult(r) {
       </details>
       ${optModelSkill(r)}
     </aside></div>`;
-  MapView.render("optMap", r);
+  // the race's picked weather stations, when the picked race is the one this result routed
+  const stDef = Opt.def && (!r.race_id || Opt.def.race_id === r.race_id) ? Opt.def : null;
+  MapView.render("optMap", r, { stations: stationPicks(stDef) || [] });
 }
 function optLegRow(l, i) {
   const w = l.wind || {};

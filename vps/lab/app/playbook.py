@@ -681,9 +681,10 @@ def build_playbook(definition, course_id, start_epoch, models, ensemble_members=
     buoy_promises = {}
     try:
         from . import obsarea
-        # the same area lookup and 0.6° pad as the station freeze (synthesis._buoy_stations) —
-        # a station frozen aboard without a promise series never shows its vs-forecast delta
-        for st in obsarea.find(bbox, 0.6)["stations"]:
+        # the same stations and 0.6° pad as the station freeze (synthesis._buoy_stations): the
+        # race's picks, else the area lookup — a station frozen aboard without a promise series
+        # never shows its vs-forecast delta
+        for st in obsarea.race_stations(definition, bbox, 0.6)["stations"]:
             la, lo = st.get("lat"), st.get("lon")
             if la is None or lo is None:
                 continue

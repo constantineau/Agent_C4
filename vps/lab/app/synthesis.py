@@ -340,6 +340,20 @@ def _probe_metars(ids, timeout=12):
         return set()
 
 
+def probe_live(stations, workers=6):
+    """{id: True/False}: has each station reported wind in the last few hours? METARs in one
+    batched call, NDBC feeds in parallel. Used by the freeze and the Lab's "Check live"."""
+    from concurrent.futures import ThreadPoolExecutor
+    metars = [st["id"] for st in stations if st.get("kind") == "metar"]
+    ndbc = [st["id"] for st in stations if st.get("kind") == "ndbc"]
+    live_metars = _probe_metars(metars) if metars else set()
+    out = {sid: sid in live_metars for sid in metars}
+    if ndbc:
+        with ThreadPoolExecutor(max_workers=max(1, min(workers, len(ndbc)))) as ex:
+            out.update(zip(ndbc, ex.map(_probe_ndbc, ndbc)))
+    return out
+
+
 def _buoy_stations(definition, course_id, promises=None, pad_deg=0.6):
     """Freeze the race's observed-wind station list into the bundle (the homework pattern):
     every station the area lookup finds — NDBC-feed buoys/lights AND shore METARs — within the
@@ -349,20 +363,21 @@ def _buoy_stations(definition, course_id, promises=None, pad_deg=0.6):
     boat needs no network to know its stations. Each frozen station carries `kind`, a `shore` flag (METAR
     anemometers under-read the over-water gradient — direction/trend indicators, not pressure)
     and, when the playbook sampled them, the blended field's `promise` series so the boat can
-    compare actuals against the forecast the plan routed on. Best-effort — omitted when none."""
+    compare actuals against the forecast the plan routed on. A race with stations picked in the
+    Lab freezes those instead (still live-probed). Best-effort — omitted when none."""
     try:
         from . import optimizer as _opt
         from . import obsarea
         bbox = _opt.course_bbox(definition, course_id)
         if not bbox:
             return None
-        cands = [st for st in obsarea.find(bbox, pad_deg)["stations"]
-                 if st.get("kind") in ("ndbc", "metar")]
-        live_metars = _probe_metars([st["id"] for st in cands if st["kind"] == "metar"])
+        # the race's own picks (Lab > Races > Weather stations) when it has them, else the lookup
+        cands = [st for st in obsarea.race_stations(definition, bbox, pad_deg)["stations"]
+                 if st.get("kind") in obsarea.READABLE_KINDS]
+        live = probe_live(cands)
         out = []
         for st in cands:
-            alive = st["id"] in live_metars if st["kind"] == "metar" else _probe_ndbc(st["id"])
-            if not alive:
+            if not live.get(st["id"]):
                 continue
             row = {"id": st["id"], "lat": st["lat"], "lon": st["lon"], "name": st.get("name"),
                    "kind": st["kind"], "shore": st["kind"] == "metar"}
@@ -381,7 +396,8 @@ def _station_notes(definition, course_id):
     try:
         from . import optimizer as _opt
         from . import obsarea
-        return obsarea.find(_opt.course_bbox(definition, course_id))["notes"]
+        # picked stations are the user's choice: no notes about the automatic search
+        return obsarea.race_stations(definition, _opt.course_bbox(definition, course_id))["notes"]
     except Exception:
         return []
 
