@@ -340,10 +340,40 @@ def _probe_metars(ids, timeout=12):
         return set()
 
 
+def _erddap_src_id(kind, sid):
+    """A station id as its ERDDAP server spells it (the Lab upper-cases ids)."""
+    from . import obsarea
+    try:
+        return obsarea.source_for_kind(kind).server_id(sid) or sid
+    except Exception:          # noqa: BLE001 — no such source, or its list won't load
+        return sid
+
+
+def _probe_erddap(kind, ids, timeout=12):
+    """The subset of `ids` (one ERDDAP network, `kind`) with a fresh wind report: one call, the
+    same query the boat makes (shared.erddap)."""
+    from shared import erddap
+    from . import obsarea
+    net = erddap.network(kind)
+    if net is None or not ids:
+        return set()
+    url = net.recent_url([_erddap_src_id(kind, sid) for sid in ids],
+                         time.time() - _PROBE_FRESH_H * 3600)
+    if url is None:
+        return set()
+    try:
+        by_id = net.parse_recent(obsarea._get(url, timeout=timeout))
+    except Exception:          # noqa: BLE001 — no report in the window (ERDDAP 404) or down
+        return set()
+    return {sid for sid in ids if by_id.get(str(sid).upper())}
+
+
 def probe_live(stations, workers=6):
     """{id: True/False}: has each station reported wind in the last few hours? METARs in one
-    batched call, NDBC feeds in parallel. Used by the freeze and the Lab's "Check live"."""
+    batched call, NDBC feeds in parallel, one call per ERDDAP buoy network. Used by the freeze
+    and the Lab's "Check live". A kind the boat can't read is not live."""
     from concurrent.futures import ThreadPoolExecutor
+    from shared import erddap
     metars = [st["id"] for st in stations if st.get("kind") == "metar"]
     ndbc = [st["id"] for st in stations if st.get("kind") == "ndbc"]
     live_metars = _probe_metars(metars) if metars else set()
@@ -351,6 +381,10 @@ def probe_live(stations, workers=6):
     if ndbc:
         with ThreadPoolExecutor(max_workers=max(1, min(workers, len(ndbc)))) as ex:
             out.update(zip(ndbc, ex.map(_probe_ndbc, ndbc)))
+    for kind in {st.get("kind") for st in stations} - {"metar", "ndbc"}:
+        ids = [st["id"] for st in stations if st.get("kind") == kind]
+        live = _probe_erddap(kind, ids) if erddap.network(kind) else set()
+        out.update({sid: sid in live for sid in ids})
     return out
 
 
@@ -381,6 +415,10 @@ def _buoy_stations(definition, course_id, promises=None, pad_deg=0.6):
                 continue
             row = {"id": st["id"], "lat": st["lat"], "lon": st["lon"], "name": st.get("name"),
                    "kind": st["kind"], "shore": st["kind"] == "metar"}
+            if st["kind"] not in ("metar", "ndbc"):
+                src_id = _erddap_src_id(st["kind"], st["id"])
+                if src_id != st["id"]:
+                    row["src_id"] = src_id      # the id as the buoy network's server spells it
             p = (promises or {}).get(st["id"])
             if p:
                 row["promise"] = p
