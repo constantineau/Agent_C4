@@ -27,6 +27,7 @@ if [[ ${1:-} == --box ]]; then
   # ---- runs ON the box (fed over ssh): STAMP LABEL COMMIT REPO BACKUPS PROJECT FILE... -- SVC...
   shift
   stamp=$1 label=$2 commit=$3 repo=$4 backups=$5 project=$6; shift 6
+  [[ $project == - ]] && project=""   # "-" = unset (ssh drops an empty argument)
   files=() services=()
   while [[ $# -gt 0 && $1 != -- ]]; do files+=("$1"); shift; done
   [[ ${1:-} == -- ]] && shift
@@ -70,7 +71,7 @@ files=() services=()
 while [[ $# -gt 0 && $1 != -- ]]; do files+=("$1"); shift; done
 [[ ${1:-} == -- ]] && shift
 services=("$@")
-for x in "${files[@]}" "${services[@]}"; do
+for x in "${files[@]}" "${services[@]}" ${COMPOSE_PROJECT:+"$COMPOSE_PROJECT"}; do
   [[ $x =~ ^[A-Za-z0-9._/@+-]+$ ]] || { echo "unsafe name (spaces or shell characters): $x" >&2; exit 2; }
 done
 
@@ -80,7 +81,7 @@ commit=$(git rev-parse --short HEAD)
 if [[ ${#files[@]} -gt 0 && -n $(git status --porcelain -- "${files[@]}") ]]; then commit+="+uncommitted"; fi
 
 out=$(ssh -o ConnectTimeout=15 "$host" bash -s -- --box "$stamp" "$label" "$commit" \
-        "${REMOTE_REPO:-Agent_C4}" "${BACKUPS:-deploy-backups}" "${COMPOSE_PROJECT:-}" \
+        "${REMOTE_REPO:-Agent_C4}" "${BACKUPS:-deploy-backups}" "${COMPOSE_PROJECT:--}" \
         "${files[@]}" -- "${services[@]}" < "$script") \
   || { echo "!! could not record the deploy on $host" >&2; exit 1; }
 echo "$out"

@@ -37,9 +37,10 @@ def write(path, text, mode=None):
 tmp = tempfile.mkdtemp()
 here, box, bin_ = (os.path.join(tmp, d) for d in ("checkout", "box", "bin"))
 X = 0o755
-# ssh: drop the options and the host, run the rest locally with the box as $HOME.
+# ssh: drop the options and the host, then run the rest the way sshd does: joined by spaces into
+# one string for the remote shell, so an empty argument disappears, as it does over real ssh.
 write(f"{bin_}/ssh", '#!/bin/bash\nwhile [[ $1 == -o ]]; do shift 2; done\nshift\n'
-      f'HOME={box} exec "$@"\n', X)
+      f'HOME={box} exec bash -c "$*"\n', X)
 # git: only what the script asks. The checkout is clean; the box has no git repo.
 write(f"{bin_}/git", '#!/bin/bash\ncase "$*" in\n'
       f'  "rev-parse --show-toplevel") echo {here} ;;\n'

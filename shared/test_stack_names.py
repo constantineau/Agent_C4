@@ -132,7 +132,9 @@ def compose_config(files, env):
     finally:
         os.unlink(ef.name)
     if r.returncode != 0:
-        return None
+        if "is not a docker command" in r.stderr or "unknown command" in r.stderr:
+            return None   # docker without the compose plugin
+        raise SystemExit(f"docker compose config failed for {files}:\n{r.stderr}")
     cfg = json.loads(r.stdout)
     return cfg["name"], sorted(v["name"] for v in (cfg.get("volumes") or {}).values())
 
