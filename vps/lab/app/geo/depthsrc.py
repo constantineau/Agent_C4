@@ -24,8 +24,8 @@ Grid sources come from a catalog, `DEPTH_GRIDS`: a comma list of
 or "none" (no grids). A new region is a catalog entry: {"name", "label", "navigational",
 "bbox": [n, s, w, e], "url", "member" (the GeoTIFF inside a .tar.gz/.zip, or omitted for a bare
 .tif), "z": "elevation" (up is +) | "depth" (down is +), "version", "fallback" (optional: true
-for a world grid with heights from sea level, which fills only water no other grid covers and
-skips cells more than 2 m above sea level, as those are lakes)}. The file must be a north-up
+for a world grid with heights from sea level, which is ignored where another grid covers a
+cell whole and on the shoreline's lakes, whose surface isn't at sea level)}. The file must be a north-up
 lon/lat GeoTIFF with real depth values: an image of the grid (8-bit, scaled for display, e.g. an
 ERDDAP .geotif) is not one. GDAL (`gdalwarp`) is a prep-time tool here as for ENC; the router only
 reads the cached per-cell result.

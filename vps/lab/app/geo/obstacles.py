@@ -775,9 +775,6 @@ def _fully_charted(field, chart_polys):
     return out
 
 
-FALLBACK_DRY_M = 2.0   # a fallback-grid cell higher than this above sea level is a lake, not data
-
-
 def _apply_grids(field, grids, safety_depth, cache_dir, chart_polys=()) -> bool:
     """Fill the water no chart covers from the depth grids (#292). Per cell, everywhere but the
     cells the chart covers whole (`_fully_charted`: at the chart's edge both apply, so a shoal in
@@ -804,18 +801,21 @@ def _apply_grids(field, grids, safety_depth, cache_dir, chart_polys=()) -> bool:
     shoal = 0
     any_depth = False
     primary = [t for t in got if not getattr(t[0], "fallback", False)]
+    lake = getattr(field, "lake", None)
     for i in range(field.nx * field.ny):
         if charted[i]:
             continue
         best, who = None, None                  # shallowest anywhere / its grid, if it is full
         # a fallback grid (a world grid, heights from sea level) is ignored where another grid
-        # covers the WHOLE cell, and never speaks for a cell well above sea level: that is a lake
-        # whose surface isn't at sea level, so its bed height is not a depth. Where other grids
-        # cover only part of the cell its shoals still count (Codex on #350)
+        # covers the WHOLE cell, and on lake water (the shoreline's lakes): a lake's surface isn't
+        # at sea level, so its bed height is not a depth. Where other grids cover only part of
+        # the cell its shoals still count; on the coast its rocks and drying banks still block
+        # (Codex on #350)
         whole = any(depths[i] is not None and full[i] for _g, depths, full in primary)
-        for g, depths, full in (primary if whole else got):
+        on_lake = lake is not None and lake[i]
+        for g, depths, full in (primary if whole or on_lake else got):
             d = depths[i]
-            if d is None or (getattr(g, "fallback", False) and d < -FALLBACK_DRY_M):
+            if d is None:
                 continue
             any_depth = True
             if best is None or d < best:
@@ -866,6 +866,13 @@ def _fill_global_backstop(field, cache_dir):
         field._fill_polygon(poly, 0, "coastline")        # carve lakes back to water
     for poly in layers.get("islands", []):
         field._fill_polygon(poly, 1, "coastline")        # re-add islands inside lakes
+    # which cells are lake water: a world grid's heights are from sea level, wrong on a lake
+    # whose surface isn't (_apply_grids, Codex on #350)
+    field.lake = bytearray(field.nx * field.ny)
+    for poly in layers.get("lakes", []):
+        field._fill_polygon(poly, 1, "lake", mask=field.lake)
+    for poly in layers.get("islands", []):
+        field._fill_polygon(poly, 0, "lake", mask=field.lake)
     _overlay(field, "land_rings", layers.get("land", []) + layers.get("islands", []))
     return layers
 

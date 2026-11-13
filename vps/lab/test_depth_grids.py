@@ -272,30 +272,50 @@ def _grid(name, depths, fallback=False, full=None):
                cells=lambda *a, **k: (list(depths), list(full or [1] * len(depths))))
 
 
-def _field(n):
+def _field(n, lake=None):
     return _NS(bbox=(1, 0, 0, 1), s=0, w=0, res=1, nx=n, ny=1, nodepth=bytearray(b"\x01" * n),
-               mask=bytearray(n), layers={}, active=False, depth_gaps=[])
+               mask=bytearray(n), layers={}, active=False, depth_gaps=[],
+               lake=bytearray(lake or [0] * n))
 
 
 # cells: [lake grid 40 m, world grid says 170 m ABOVE sea level (the lake bed)]
-#        [no lake grid, world grid 30 m deep] [no lake grid, world grid 50 m above sea level]
-#        [no lake grid, world grid 1 m above sea level: a drying bank]
-lake = _grid("lake", [40.0, None, None, None])
-world = _grid("etopo_x", [-170.0, 30.0, -50.0, -1.0], fallback=True)
-fl = _field(4)
+#        [no lake grid, world grid 30 m deep]
+#        [no lake grid, on a shoreline lake, world grid 50 m above sea level]
+#        [no lake grid, coast, world grid 1 m above sea level: a drying bank]
+#        [no lake grid, coast, world grid 5 m above sea level: exposed rock beside shallow water]
+lake = _grid("lake", [40.0, None, None, None, None])
+world = _grid("etopo_x", [-170.0, 30.0, -50.0, -1.0, -5.0], fallback=True)
+fl = _field(5, lake=[1, 0, 1, 0, 0])
 OB._apply_grids(fl, [lake, world], 2.0, None)
 check("the lake grid wins where it has a value: open, not blocked by the world grid", fl.mask[0] == 0)
 check("open sea with only the world grid: its depth counts", fl.mask[1] == 0 and fl.nodepth[1] == 0)
-check("well above sea level in the world grid: a lake, so no depth data, not a shoal",
+check("a shoreline lake with only the world grid: no depth data, not a shoal",
       fl.mask[2] == 0 and fl.nodepth[2] == 1)
-check("a drying bank just above sea level still blocks", fl.mask[3] == 1)
+check("a drying bank on the coast still blocks", fl.mask[3] == 1)
+check("exposed coastal rock still blocks", fl.mask[4] == 1)
+
 # a regional grid covering only PART of the cell: the world grid's shoal in the rest still blocks
 part = _grid("lake", [40.0, 40.0], full=[0, 0])
 w2 = _grid("etopo_x", [1.0, -170.0], fallback=True)
-fp = _field(2)
+fp = _field(2, lake=[0, 1])
 OB._apply_grids(fp, [part, w2], 2.6, None)
 check("part-covered by the regional grid: the world grid's 1 m shoal still blocks", fp.mask[0] == 1)
-check("part-covered, world grid well above sea level: still not a shoal", fp.mask[1] == 0)
+check("part-covered, on a lake: the world grid's lake bed is not a shoal", fp.mask[1] == 0)
+_cl = (coastline.ensure_global, coastline.layers_in_bbox)
+coastline.ensure_global = lambda cache_dir=None: None
+coastline.layers_in_bbox = lambda bbox, cache_dir=None: {
+    "land": [], "islands": [[[(0.4, 0.4), (0.6, 0.4), (0.6, 0.6), (0.4, 0.6)]]],
+    "lakes": [[[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]]]}
+try:
+    lf = OB.ObstacleField((1.0, 0.0, 0.0, 2.0), res_deg=0.1)
+    OB._fill_global_backstop(lf, None)
+
+    def _lk(lat, lon):
+        return lf.lake[int((lat - lf.s) / lf.res) * lf.nx + int((lon - lf.w) / lf.res)]
+    check("the shoreline's lakes are marked as lake water, its islands and the rest are not",
+          _lk(0.15, 0.15) == 1 and _lk(0.55, 0.55) == 0 and _lk(0.55, 1.55) == 0)
+finally:
+    coastline.ensure_global, coastline.layers_in_bbox = _cl
 check("the fallback flag is in the grid's cache key",
       D.GridSource(dict(SPEC, fallback=True)).data_version != D.GridSource(SPEC).data_version)
 check("ETOPO tiles are fallback grids", all(t["fallback"] for t in D.etopo_tiles()))
