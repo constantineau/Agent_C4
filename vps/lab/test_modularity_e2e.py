@@ -858,19 +858,29 @@ def test_lab_prompts_never_say_sr33(route, bundle, scored):
                 "decision_spread_min": b.get("decision_spread_min"), "n_scenarios": 1,
                 "variants": [{"side": v["id"], "label": v["name"], "total_hours": v.get("total_hours")}
                              for v in b["variants"]]}
-        synthesis._opus_synthesis(pb2a, RACE, "c", RACE["name"])
+        made = {}
+
+        def run(name, fn, *a):
+            n0 = len(sent)
+            fn(*a)
+            made[name] = len(sent) - n0
+
+        run("variants", synthesis._opus_synthesis, pb2a, RACE, "c", RACE["name"])
         plays = [p for p in b.get("plays") or [] if p.get("divergence") and "params" in p]
-        if plays:
-            synthesis._play_synthesis([dict(p, narrative_seed=p.get("narrative_seed") or "")
-                                       for p in plays], b.get("corridor") or {}, "reaching",
-                                      RACE["name"])
-        optimizer.briefing(route[0], RACE["name"])
-        judge._critique({"race_name": RACE["name"], "tactics_available": False,
-                         "actual_track": scored[0]})
+        # a fixed play if the bundle has none, so the plays prompt is always built and checked
+        plays = plays or [{"id": "p1", "name": "Wind shifts right early", "params": {"shift_deg": 10},
+                           "divergence": {"delta_eta_min": 6.0, "xte_mean_nm": 1.2},
+                           "favored_side": "right"}]
+        run("plays", synthesis._play_synthesis,
+            [dict(p, narrative_seed=p.get("narrative_seed") or "") for p in plays],
+            b.get("corridor") or {}, "reaching", RACE["name"])
+        run("briefing", optimizer.briefing, route[0], RACE["name"])
+        run("critique", judge._critique, {"race_name": RACE["name"], "tactics_available": False,
+                                          "actual_track": scored[0]})
     finally:
         llm.complete = real
         for m, k in keys.items():
             m.API_KEY = k
-    assert len(sent) >= 3, len(sent)
+    assert all(made.get(k) for k in ("variants", "plays", "briefing", "critique")), made
     for text in sent:
         assert not re.search(r"sr33|\bC4\b|bayview", text, re.I), text[:400]
