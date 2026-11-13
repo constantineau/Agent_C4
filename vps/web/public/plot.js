@@ -4,9 +4,17 @@
    /api/course and /api/navigator; boat state from the live conditions event. */
 "use strict";
 const Plot = (function () {
+  // #314 transition: a browser may run this file with a cached older app.js (no C4Store, the
+  // old event names and storage keys). Follow whichever app.js is loaded. Remove after 2027-04.
+  const NEW_APP = typeof C4Store !== "undefined";
+  const LEGACY_KEY = "sr33.", LEGACY_EVT = "sr33:";
+  const Store = NEW_APP ? C4Store : { local: {
+    get: (k) => { try { return localStorage.getItem(LEGACY_KEY + k); } catch (e) { return null; } },
+    set: (k, v) => { try { localStorage.setItem(LEGACY_KEY + k, v); } catch (e) { /* quota */ } } } };
+  const EVT = NEW_APP ? "c4:" : LEGACY_EVT;
   const R2D = 180 / Math.PI, D2R = Math.PI / 180;
-  let route = localStorage.getItem("sr33.route") || "default";
-  let orient = localStorage.getItem("sr33.orient") || "north";   // north | course
+  let route = Store.local.get("route") || "default";
+  let orient = Store.local.get("orient") || "north";   // north | course
   let course = null, nav = null, boat = null, tactics = null, routeData = null;
   let routeOn = false;                             // boat = {lat,lon,hdg}
   const track = [];                                // recent {lat,lon}
@@ -16,7 +24,7 @@ const Plot = (function () {
   // legal in-race, so navigator/tactics/route stay available.
   function racing() { return (typeof App !== "undefined" && !App.onboard && App.mode === "race"); }
 
-  function setRoute(r) { route = r; localStorage.setItem("sr33.route", r);
+  function setRoute(r) { route = r; Store.local.set("route", r);
     document.getElementById("routeName").textContent = r; loadCourse(); }
 
   async function loadCourse() {
@@ -56,7 +64,7 @@ const Plot = (function () {
   }
   function toggleOrient() {
     orient = orient === "north" ? "course" : "north";
-    localStorage.setItem("sr33.orient", orient);
+    Store.local.set("orient", orient);
     document.getElementById("orientBtn").textContent = orient === "north" ? "N↑" : "Crs↑";
     document.getElementById("orientBtn").classList.toggle("on", orient === "course");
     draw();
@@ -241,7 +249,7 @@ const Plot = (function () {
   }
 
   // ---- wire ----
-  window.addEventListener("c4:conditions", (e) => {
+  window.addEventListener(EVT + "conditions", (e) => {
     const c = e.detail;
     if (typeof c.lat === "number" && typeof c.lon === "number") {
       // A magnetic heading is ~7-9° off true here: point the arrow along it only when it is true,
@@ -255,7 +263,7 @@ const Plot = (function () {
     }
     if (Date.now() - lastNav > 3000) { lastNav = Date.now(); loadNav(); } else { draw(); }
   });
-  window.addEventListener("c4:mode", () => { fetchRoute(); loadNav(); });  // show/hide tactics+route
+  window.addEventListener(EVT + "mode", () => { fetchRoute(); loadNav(); });  // show/hide tactics+route
   setInterval(() => { if (routeOn && !racing()) fetchRoute(); }, 20000);     // refresh route
   window.addEventListener("resize", draw);
   new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });

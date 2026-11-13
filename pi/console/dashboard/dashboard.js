@@ -21,6 +21,30 @@
   };
   const SEV = { ok: 0, watch: 1, act: 2, na: 2 };
 
+  /* localStorage under "c4.dash.*" (#314). The keys used to start with the project's old name. A
+     key not yet under the new name is read from the old one and copied over, so a deploy keeps
+     the iPad's theme, alert sound, device name and race history. The old key stays (a rollback
+     still finds it); writes go to the new key only. Best effort: private mode / quota read as
+     "nothing stored" and drop the write. */
+  const store = (function () {
+    const NEW = "c4.dash.", OLD = "sr33.dash.";   // OLD: read once to carry a value over, never written
+    return {
+      get(name) {
+        try {
+          const v = localStorage.getItem(NEW + name);
+          if (v !== null && v !== undefined) return v;
+          const old = localStorage.getItem(OLD + name);
+          if (old === null || old === undefined) return null;
+          try { localStorage.setItem(NEW + name, old); } catch (e) { /* quota: still return it */ }
+          return old;
+        } catch (e) { return null; }
+      },
+      set(name, value) {
+        try { localStorage.setItem(NEW + name, value); } catch (e) { /* private mode / quota */ }
+      },
+    };
+  })();
+
   // VMG + Tactics retired 2026-07-03: VMG (% of polar) is repeated on the boat's own instruments, and
   // Tactics (favoured side / persistent-vs-oscillating) is now folded into the top Strategy strip —
   // the strip's synthesis consumes get_tactics and shows the favoured-side read even with no playbook
@@ -422,16 +446,16 @@
   function persistRace() {
     try {
       const ds = dsample(App.windHist, 1800);
-      localStorage.setItem("sr33.dash.windhist", JSON.stringify(ds.map((p) => [Math.round(p.t), Math.round(p.tws * 10) / 10, Math.round(p.twd)])));
-      localStorage.setItem("sr33.dash.fcsthist", JSON.stringify(App.fcstHist));
+      store.set("windhist", JSON.stringify(ds.map((p) => [Math.round(p.t), Math.round(p.tws * 10) / 10, Math.round(p.twd)])));
+      store.set("fcsthist", JSON.stringify(App.fcstHist));
     } catch (e) { /* quota / disabled — best effort */ }
   }
   function loadRace() {
     try {
       const now = Date.now() / 1000;
-      const w = localStorage.getItem("sr33.dash.windhist");
+      const w = store.get("windhist");
       if (w) App.windHist = JSON.parse(w).map((a) => ({ t: a[0], tws: a[1], twd: a[2] })).filter((p) => p.t > now - WIND_WIN_S);
-      const f = localStorage.getItem("sr33.dash.fcsthist");
+      const f = store.get("fcsthist");
       if (f) App.fcstHist = JSON.parse(f).filter((e) => e.t > now - FCST_WIN_S);
     } catch (e) { /* ignore */ }
   }
@@ -1817,11 +1841,11 @@
     let d = null;
     try {
       const q = new URLSearchParams(location.search).get("device");
-      if (q) localStorage.setItem("sr33.dash.device", q.slice(0, 40));
-      d = localStorage.getItem("sr33.dash.device");
+      if (q) store.set("device", q.slice(0, 40));
+      d = store.get("device");
       if (!d) {
         d = "iPad " + Math.random().toString(16).slice(2, 6);
-        localStorage.setItem("sr33.dash.device", d);
+        store.set("device", d);
       }
     } catch (e) { d = d || "iPad"; }
     return d;
@@ -2335,7 +2359,7 @@
   /* ============================ state ============================ */
   const App = {
     src: "live", demoScn: "calm",
-    theme: localStorage.getItem("sr33.dash.theme") || "auto",
+    theme: store.get("theme") || "auto",
     courseFirst: null,   // the loaded course's first mark: the day/night fallback with no fix (#312)
     openTile: null, streamTimer: null, pollTimer: null, seriesTimer: null, briefTimer: null,
     adhereTimer: null, coachTimer: null, devTimer: null, driftTimer: null, selTimer: null, polling: false,
@@ -2397,7 +2421,7 @@
   }
   function cycleTheme() {
     App.theme = { auto: "day", day: "night", night: "auto" }[App.theme];
-    localStorage.setItem("sr33.dash.theme", App.theme); applyTheme();
+    store.set("theme", App.theme); applyTheme();
   }
 
   /* ============================ render ============================ */
@@ -3075,7 +3099,7 @@
      the /coach `new` stream (already deduped + priority-sorted on the Orin) and de-dups by callout id
      (status is baked into the id, so a watch→act escalation re-alerts). iOS Safari blocks audio until a
      user gesture, so it's armed by the 🔔 toggle (which also plays a test chime). Live source only. */
-  const Sound = { on: localStorage.getItem("sr33.dash.sound") === "on", ctx: null, alerted: new Set() };
+  const Sound = { on: store.get("sound") === "on", ctx: null, alerted: new Set() };
   function audioCtx() {
     if (!Sound.ctx) { const AC = window.AudioContext || window.webkitAudioContext; if (AC) Sound.ctx = new AC(); }
     if (Sound.ctx && Sound.ctx.state === "suspended") Sound.ctx.resume();
@@ -3114,7 +3138,7 @@
   }
   function toggleSound() {
     Sound.on = !Sound.on;
-    localStorage.setItem("sr33.dash.sound", Sound.on ? "on" : "off");
+    store.set("sound", Sound.on ? "on" : "off");
     document.getElementById("alertLbl").textContent = Sound.on ? "ON" : "OFF";
     document.getElementById("alertBtn").classList.toggle("armed", Sound.on);
     if (Sound.on) { audioCtx(); playAlert("watch"); }   // the tap unlocks iOS audio + confirms it works
@@ -3230,7 +3254,7 @@
   // Test seam: pi/console/test_dashboard.js defines this hook before loading the file, to reach
   // the parts it pins. Nothing on the iPad defines it.
   if (typeof window.__C4DashTest === "function")
-    window.__C4DashTest({ App: App, BUILD: BUILD, observedAt: observedAt, hold: hold, tileAge: tileAge,
+    window.__C4DashTest({ App: App, store: store, BUILD: BUILD, observedAt: observedAt, hold: hold, tileAge: tileAge,
       oldTag: oldTag, poll: poll, onWake: onWake, courseMapHtml: courseMapHtml, selectorHtml: selectorHtml,
       provenanceTableHtml: provenanceTableHtml, twsTrendTile: twsTrendTile, fetchSailState: fetchSailState,
       fetchCourse: fetchCourse, fetchSelector: fetchSelector, navControlsHtml: navControlsHtml,

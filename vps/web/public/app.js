@@ -4,17 +4,73 @@
    navigator and routing onto this shell. Vanilla JS, no build step. */
 "use strict";
 
+/* Browser storage under "c4.*" keys (#314). Inside app.js on purpose: a browser can pair a
+   cached older index.html (which loads no separate helper) with this app.js, and the app must
+   still start. sail.js and plot.js load after app.js and use it too.
+   The keys used to start with the project's old name. A key not yet under the new name is read
+   from the old one and copied over, so a deploy keeps the iPad's login, theme, mode, route and
+   hoisted sail. The old key is left in place (a rollback still finds it); writes go to the new
+   key only; a remove clears BOTH, so the old key can't bring back a token after a sign-out.
+   Every access is best effort: private mode or a full quota reads as "nothing stored". */
+/* c4-store:begin */
+var C4Store = (function () {
+  const NEW = "c4.";
+  const OLD = "sr33.";   // the old prefix: read once to carry a value over, never written
+
+  function area(kind) {
+    try { return kind === "session" ? globalThis.sessionStorage : globalThis.localStorage; }
+    catch (e) { return null; }
+  }
+  function get(kind, name) {
+    const s = area(kind);
+    if (!s) return null;
+    try {
+      const v = s.getItem(NEW + name);
+      if (v !== null && v !== undefined) return v;
+      const old = s.getItem(OLD + name);
+      if (old === null || old === undefined) return null;
+      try { s.setItem(NEW + name, old); } catch (e) { /* quota: still return it */ }
+      return old;
+    } catch (e) { return null; }
+  }
+  function set(kind, name, value) {
+    const s = area(kind);
+    if (!s) return;
+    try { s.setItem(NEW + name, value); } catch (e) { /* private mode / quota */ }
+  }
+  function remove(kind, name) {
+    const s = area(kind);
+    if (!s) return;
+    try { s.removeItem(NEW + name); } catch (e) { /* private mode */ }
+    try { s.removeItem(OLD + name); } catch (e) { /* private mode */ }
+  }
+  function api(kind) {
+    return { get: (n) => get(kind, n), set: (n, v) => set(kind, n, v), remove: (n) => remove(kind, n) };
+  }
+  return { local: api("local"), session: api("session") };
+})();
+/* c4-store:end */
+
+/* Page events under "c4:" names. #314 transition: a browser may still run a cached older sail.js
+   or plot.js that listens for the old names, so each event also goes out under the old name.
+   Remove after 2027-04. */
+const LEGACY_EVT = 'sr33:';
+function emit(name, detail) {
+  window.dispatchEvent(new CustomEvent('c4:' + name, { detail: detail }));
+  window.dispatchEvent(new CustomEvent(LEGACY_EVT + name, { detail: detail }));
+}
+
 const App = {
   ws: null,
   lastPos: null,         // {lat, lon} from telemetry, for the sun/day-night calc
-  theme: localStorage.getItem('sr33.theme') || 'auto',   // auto | day | night
-  mode: localStorage.getItem('sr33.mode') || 'practice',  // practice | race
+  theme: C4Store.local.get('theme') || 'auto',   // auto | day | night
+  mode: C4Store.local.get('mode') || 'practice',  // practice | race
   pollTimer: null,
-  token: sessionStorage.getItem('sr33.token') || null,    // shared-password bearer token
+  token: C4Store.session.get('token') || null,    // shared-password bearer token
   // Onboard race console (pi/console): the iPad talks ONLY to the Pi engine over boat-local
   // Wi-Fi — no cloud, no auth, no LLM chat, and every panel available (the boat's own
   // computer is legal in-race, so the RRS-41 race gate doesn't apply here). Set by config.js.
-  onboard: !!window.C4_ONBOARD,
+  onboard: !!(window.C4_ONBOARD || window.SR33_ONBOARD),   // old name: #314 transition, remove after 2027-04
 };
 
 /* ---------- gate (server-side shared-password auth) ---------- */
@@ -31,7 +87,7 @@ async function unlock() {
     if (!res.ok) { errEl.textContent = 'Wrong boat password.'; return; }
     const data = await res.json();
     App.token = data.token;
-    sessionStorage.setItem('sr33.token', App.token);
+    C4Store.session.set('token', App.token);
     errEl.textContent = '';
     document.getElementById('pw').value = '';
     document.getElementById('gate').style.display = 'none';
@@ -54,7 +110,7 @@ async function apiFetch(path, opts = {}) {
 /* Drop the session and return to the gate (token expired or rejected). */
 function relock(msg) {
   App.token = null;
-  sessionStorage.removeItem('sr33.token');
+  C4Store.session.remove('token');
   if (App.pollTimer) { clearInterval(App.pollTimer); App.pollTimer = null; }
   if (App.ws) { try { App.ws.close(); } catch (e) {} App.ws = null; }
   const gate = document.getElementById('gate');
@@ -89,7 +145,7 @@ function start() {
 /* ---------- theme (auto day/night) ---------- */
 function cycleTheme() {
   App.theme = { auto: 'day', day: 'night', night: 'auto' }[App.theme];
-  localStorage.setItem('sr33.theme', App.theme);
+  C4Store.local.set('theme', App.theme);
   applyTheme();
 }
 function resolvedTheme() {
@@ -115,7 +171,7 @@ async function syncMode() {
   if (App.onboard) { applyMode(); return; }
   try {
     const r = await (await apiFetch('/api/mode')).json();
-    if (r && r.mode) { App.mode = r.mode; localStorage.setItem('sr33.mode', App.mode); }
+    if (r && r.mode) { App.mode = r.mode; C4Store.local.set('mode', App.mode); }
   } catch (e) { /* keep cached mode; server still enforces */ }
   applyMode();
 }
@@ -128,7 +184,7 @@ async function toggleMode() {
     })).json();
     App.mode = (r && r.mode) ? r.mode : next;
   } catch (e) { App.mode = next; }   // optimistic — the agent still enforces regardless
-  localStorage.setItem('sr33.mode', App.mode);
+  C4Store.local.set('mode', App.mode);
   applyMode();
 }
 function applyMode() {
@@ -138,13 +194,13 @@ function applyMode() {
     const btn = document.getElementById('modeBtn');
     btn.classList.remove('on'); btn.onclick = null; btn.title = 'On-boat engine (Pi) — no cloud';
     document.body.dataset.mode = 'practice';   // panels un-gated (engine is legal in-race)
-    window.dispatchEvent(new CustomEvent('c4:mode', { detail: 'practice' }));
+    emit('mode', 'practice');
     return;
   }
   document.getElementById('modeLbl').textContent = App.mode.toUpperCase();
   document.getElementById('modeBtn').classList.toggle('on', App.mode === 'race');
   document.body.dataset.mode = App.mode;   // tactical/routing panels read this (RRS 41 gate)
-  window.dispatchEvent(new CustomEvent('c4:mode', { detail: App.mode }));
+  emit('mode', App.mode);
 }
 function tacticsAllowed() { return App.onboard || App.mode !== 'race'; }
 
@@ -201,7 +257,7 @@ async function refresh() {
     }
     setFatigue(c.fatigue, c.fatigue_level);
     App.lastConditions = c;
-    window.dispatchEvent(new CustomEvent('c4:conditions', { detail: c }));  // for later panels
+    emit('conditions', c);  // for later panels
   } catch (e) { document.getElementById('link').className = 'dot down'; }
 }
 function setFatigue(index, level) {

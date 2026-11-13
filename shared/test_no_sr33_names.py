@@ -45,7 +45,7 @@ DB_USER = r"(?:POSTGRES_USER[=:]-?|-U |//|\"|:)sr33(?=[:}\"\s]|$)"
 DATA_PATH = r"/var/lib/sr33/"                         # volume mount points inside Pi containers
 UNIT = r"\bsr33-(?:can0|orin-[\w-]+)|\bsr33-oom\.conf|/etc/sr33/|/run/sr33-shed|=sr33-shed\b"
 ORIN_HOME = r"/home/agent-c4/sr33/"                   # the Orin's playbook directory
-STORAGE = r"\bsr33\.(?:token|mode|theme|route|orient|hoisted|dash\.\w+)\b"   # localStorage keys
+OLD_STORAGE = r"OLD = \"sr33\.\"|OLD = \"sr33\.dash\.\""  # the old browser-key prefix, read once
 CI_IMAGE = r"\bsr33-ci-[\w%$-]*"                      # CI image tags other checkouts reuse
 
 STACK_FILES = ["compose.*.yml", ".env.example", "deploy/deploy_prod.sh", "vps/db/seed/seed_dev.sh",
@@ -63,7 +63,13 @@ ALLOWED = [
      "in-container data paths (PR C)"),
     (["pi/systemd/*", "pi/orin/*"], UNIT, "systemd units and their config paths (PR D)"),
     (["pi/systemd/sr33-orin-copilot.service"], ORIN_HOME, "Orin playbook directory (PR D)"),
-    (["vps/web/public/*.js", "pi/console/dashboard/*.js"], STORAGE, "browser storage keys (PR B)"),
+    (["vps/web/public/app.js", "pi/console/dashboard/dashboard.js"], OLD_STORAGE,
+     "old browser-key prefix: carried over to c4.* so a deploy keeps the iPad's login (PR B)"),
+    (["vps/web/public/app.js", "vps/web/public/sail.js", "vps/web/public/plot.js"],
+     r"LEGACY_(?:KEY|EVT) = [\"']sr33[.:][\"']",
+     "cached older scripts still work with the new ones; remove after 2027-04 (PR B)"),
+    (["vps/web/public/app.js", "pi/console/default.conf.template"], r"window\.SR33_ONBOARD\b",
+     "onboard flag under the old name too, for a script pair loaded mid-deploy; remove after 2027-04 (PR B)"),
     (["vps/agent/app/auth.py"], r"\"sr33-auth:\"", "token key salt: changing it logs every device out"),
     (["tools/ci/run.sh", "pi/n2kout/canboat_roundtrip.sh", "tools/seamasks/build.py"], CI_IMAGE,
      "CI image tags (PR C)"),
@@ -130,9 +136,10 @@ def is_test(name):
 
 print("the allow-list itself:")
 check("a new global is caught", SR33.search(leftover("vps/web/public/app.js", "window.SR33_X = 1")))
-check("a storage key is allowed where it lives",
-      not SR33.search(leftover("vps/web/public/app.js", "localStorage.getItem('sr33.mode')")))
-check("but not in another file", SR33.search(leftover("vps/lab/web/app.js", "get('sr33.mode')")))
+check("the old storage prefix is allowed in the carry-over helper",
+      not SR33.search(leftover("vps/web/public/app.js", 'const OLD = "sr33.";')))
+check("but a storage key under the old name is not",
+      SR33.search(leftover("vps/web/public/app.js", "localStorage.getItem('sr33.mode')")))
 check("a container name in an ops script is allowed",
       not SR33.search(leftover("pi/deploy/deploy-data-path.sh", "P=${COMPOSE_PROJECT:-sr33-pi}")))
 check("help text naming sr33 is not",
