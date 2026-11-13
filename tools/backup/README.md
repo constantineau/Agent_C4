@@ -127,3 +127,6 @@ sudo C4_BACKUP_DEST=gs://constantineau-c4-nightly/vps-nightly python3 tools/back
 sudo systemctl enable --now c4-lab-backup.timer
 systemctl list-timers c4-lab-backup.timer
 ```
+
+Updating an install made before #314: the unit now reads the checkout path from `C4_REPO`. Add `C4_REPO=<this checkout's path>` to `/etc/c4-lab-backup.env` BEFORE installing the new unit; without it the backup refuses to start and says why.
+

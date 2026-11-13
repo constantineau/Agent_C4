@@ -13,7 +13,9 @@ RequiresMountsFor=/mnt/data
 [Service]
 Type=oneshot
 EnvironmentFile=/etc/c4-lab-backup.env
-# C4_REPO (the checkout to run from) comes from the env file; unset, python fails on the path.
+# C4_REPO (the checkout to run from) comes from the env file. Unset, refuse with a plain reason
+# (an existing install updated from an older unit: add C4_REPO to the env file first, see README).
+ExecStartPre=/bin/sh -c 'test -n "$C4_REPO" && test -f "$C4_REPO/tools/backup/lab_backup.py" || { echo "c4-lab-backup: set C4_REPO (this checkout path) in /etc/c4-lab-backup.env" >&2; exit 1; }'
 ExecStart=/usr/bin/python3 ${C4_REPO}/tools/backup/lab_backup.py backup
 # Background work: never compete with the live stacks for CPU or disk.
 Nice=10
