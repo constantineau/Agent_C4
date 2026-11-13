@@ -3494,6 +3494,14 @@ function monToggleAuto(on) {
   if (on) Mon.timer = setInterval(monRefresh, 30000);
 }
 
+// Where the Monitor's fleet came from, as the backend's tracker provider names it (#310):
+// "YB", "fleet file", the demo, or the raw provider name.
+function monSourceLabel(fl) {
+  if (!fl) return "tracker";
+  if (fl.provider === "sample") return "demo";
+  return fl.label || fl.provider || "tracker";
+}
+
 function paintMonitor() {
   const data = Mon.data || {};
   const fl = data.fleet || { fixes: [], reason: data.error || "no data" };
@@ -3517,7 +3525,7 @@ function paintMonitor() {
     ? ` · latest position ${fmtAge(fl.newest_age_s)} old${fl.freshness === "fresh" ? "" : fl.freshness === "stale" ? " <span class=\"pill warn\">stale</span>" : " <span class=\"pill bad\">not live</span>"}`
     : " · <span class=\"pill warn\">position times unknown</span>";
   const flLine = fixes.length
-    ? `<span class="pill ${flCls}">${fixes.length} boats</span> via ${esc(fl.provider || "tracker")}${flAge}${fl.delay_min ? ` <span class="muted">(tracker runs ~${fl.delay_min} min behind)</span>` : ""}${fl.demo || fl.provider === "sample" ? " <span class=\"pill warn\">demo</span>" : ""}`
+    ? `<span class="pill ${flCls}">${fixes.length} boats</span> via ${esc(monSourceLabel(fl))}${flAge}${fl.live === false && fl.provider !== "sample" ? ' <span class="pill warn">file, not live</span>' : ""}${fl.delay_min ? ` <span class="muted">(tracker runs ~${fl.delay_min} min behind)</span>` : ""}${fl.demo || fl.provider === "sample" ? " <span class=\"pill warn\">demo</span>" : ""}`
     : `<span class="pill warn">no fleet</span> <span class="muted">${esc(fl.reason || "unavailable")}</span>`;
   const rivals = monRivals(fixes, own);
   const permNote = fl.onboard_permitted === true ? "race rules: tracker data allowed aboard"
@@ -3542,7 +3550,7 @@ function paintMonitor() {
       </div>
     </div>
     <section class="cockpit-map"><div id="monMap" class="routemap routemap-hero"></div></section>
-    ${fixes.length ? `<div class="card"><h3>Fleet positions <span class="muted" style="font-weight:400">— from the public tracker</span></h3>
+    ${fixes.length ? `<div class="card"><h3>Fleet positions <span class="muted" style="font-weight:400">— from the ${esc(monSourceLabel(fl))}</span></h3>
       <div class="muted" style="font-size:12px;margin-bottom:4px">Tap a row to find that boat on the map. ★ us · ● nearest rivals · grey = position over ${fmtAge(staleAfter)} old.</div>
       <table class="fleet-tbl mon-tbl"><thead><tr><th>Boat</th><th>SOG</th><th>COG °T</th><th>DTF</th><th>Age</th></tr></thead><tbody>
       ${fixes.map((f, i) => ({ f, i })).sort((a, b) => (b.f.own ? 1 : 0) - (a.f.own ? 1 : 0) || (a.f.dtf_nm ?? 1e9) - (b.f.dtf_nm ?? 1e9)).map(({ f, i }) => `<tr class="mon-row${f.own ? " own" : rivals.idx.has(i) ? " rival" : ""}${fixAge(f.time) != null && fixAge(f.time) > staleAfter ? " old" : ""}" onclick="monFocus(${i})" title="Show on the map">

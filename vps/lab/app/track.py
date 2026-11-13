@@ -27,6 +27,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 
 from shared import polar as SPOL
+from shared import race_def
 
 from . import atomicio, optimizer
 
@@ -98,22 +99,36 @@ def _water_velocity(sog, cog, cset, cdrift):
 
 
 # ---- GPX --------------------------------------------------------------------------------------
-def _parse_iso(s):
+GPX_NO_ZONE = "GPX times have no zone. Set the race's time zone."
+
+
+def gpx_time(text, tz_name=""):
+    """A GPX <time> as epoch seconds. GPX times are UTC ('Z') by spec; one with no zone is read in
+    the race's time zone, never the server's. With no race zone it raises ValueError(GPX_NO_ZONE)
+    rather than guess. Unreadable text is None (the fix has no time). Shared by the debrief's
+    single-boat upload and the fleet file (`trackers`)."""
+    s = (text or "").strip()
     if not s:
         return None
-    s = s.strip().replace("Z", "+00:00")
+    import datetime
     try:
-        import datetime
-        return datetime.datetime.fromisoformat(s).timestamp()
+        dt = datetime.datetime.fromisoformat(s.replace("Z", "+00:00"))
     except ValueError:
         return None
+    if dt.tzinfo is not None:
+        return dt.timestamp()
+    t = race_def._gun_epoch(s, tz_name)
+    if t is None:
+        raise ValueError(GPX_NO_ZONE)
+    return t
 
 
-def parse_gpx(data: bytes):
+def parse_gpx(data: bytes, tz_name: str = ""):
     """Parse GPX <trkpt lat lon><time>…</time></trkpt> into chronological fixes [{lat,lon,t,sog,cog}].
 
     Namespace-agnostic (matches any `*}trkpt`). `t` is epoch seconds when <time> is present, else None
-    (then scoring anchors relative time on the race start). sog/cog are derived between fixes.
+    (then scoring anchors relative time on the race start). A time with no zone is read in the race's
+    time zone `tz_name`; with none, ValueError. sog/cog are derived between fixes.
     """
     try:
         root = ET.fromstring(data)
@@ -130,7 +145,7 @@ def parse_gpx(data: bytes):
         t = None
         for child in el:
             if child.tag.endswith("}time") or child.tag == "time":
-                t = _parse_iso(child.text)
+                t = gpx_time(child.text, tz_name)
         pts.append({"lat": lat, "lon": lon, "t": t, "sog": None, "cog": None})
     if not pts:
         raise ValueError("no <trkpt> points found in the GPX")
