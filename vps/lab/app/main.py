@@ -663,7 +663,13 @@ def venue_study_run(body: dict):
                         **({"tz": s["tz"]} if s.get("tz") else {})})
         except (KeyError, TypeError, ValueError):
             continue
-    sts = [s for s in sts if s["kind"] in ("metar", "ndbc")]
+    from . import obsarea
+
+    def _readable(kind):
+        # METAR and NDBC have their own readers; any other kind needs its source's reader (#309)
+        src = obsarea.source_for_kind(kind)
+        return kind in ("metar", "ndbc") or (src is not None and hasattr(src, "observed"))
+    sts = [s for s in sts if _readable(s["kind"])]
     if not sts:
         return JSONResponse({"detail": "Tick at least one station."}, status_code=400)
     if len(sts) > 8:
