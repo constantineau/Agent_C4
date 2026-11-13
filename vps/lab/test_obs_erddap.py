@@ -122,7 +122,11 @@ for name, box in (("Fort Lauderdale", FLL), ("English Channel", CHANNEL), ("Lake
     reset()
     check(f"{name}: not covered", not SRC.covers_bbox(box))
     check(f"{name}: no 'Irish buoys' note", SRC.not_here_note() is None)
-check("the station list was never fetched", not FETCHED, FETCHED)
+    fr, fd = obsarea.find(box), obsarea.finder(box)
+    irish = [u for u in FETCHED if "erddap.marine.ie" in u]
+    check(f"{name}: find() and the Lab finder never ask the Irish list", not irish, irish)
+    check(f"{name}: and list no Irish buoy",
+          not any(s_["kind"] == "ie_buoy" for s_ in fr["stations"] + fd["stations"]))
 
 print("3) observed wind")
 reset()
