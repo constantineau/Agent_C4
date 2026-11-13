@@ -1,4 +1,4 @@
-/* SR33 Navigator — iPad-landscape crew companion.
+/* C4 Navigator — iPad-landscape crew companion.
    Two themes (day/light, night/red-on-black) driven by the `data-theme` attribute on <html>;
    set automatically from sunrise/sunset (see app.js) with a manual override. */
 :root, :root[data-theme="day"] {

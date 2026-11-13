@@ -6,10 +6,15 @@
 # (session 1: 22:44:17 -> Jul 16 00:02:27Z, derived 22:39 -> 00:07). This cuts the race out at
 # full resolution so the big file can be deleted while the race stays here and reaches the
 # debrief, which reads Postgres and not this disk.
+#
+#   SRC=<pull>/recovered/archive-jul1517-recovered.db OUT=<race-data>/archive-jul15-race.db \
+#     tools/backup/cut_jul15_race.sh
+#
+# SRC and OUT have no default.
 set -euo pipefail
 
-SRC=${SRC:-/home/constantineau/backups/c4-boat-pull-2026-08-30/recovered/archive-jul1517-recovered.db}
-OUT=${OUT:-/home/constantineau/backups/race-data/archive-jul15-race.db}
+SRC=${SRC:?set SRC to the recovered archive (recovered/archive-jul1517-recovered.db in the pull)}
+OUT=${OUT:?set OUT to the race database to write (e.g. race-data/archive-jul15-race.db)}
 FROM='2026-07-15T22:30:00'
 TO='2026-07-16T00:20:00'      # the derived window (22:39 -> 00:07) with room either side
 

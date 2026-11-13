@@ -10,7 +10,7 @@
 #   sudo cp pi/systemd/sr33-can0.service /etc/systemd/system/
 #   sudo systemctl daemon-reload && sudo systemctl enable --now sr33-can0
 [Unit]
-Description=SR33 PICAN-M CAN bus (can0) — up at 250 kbit/s (NMEA 2000)
+Description=PICAN-M CAN bus (can0) — up at 250 kbit/s (NMEA 2000)
 # Wait for the mcp2515 overlay to create the interface, and come up before Docker.
 After=sys-subsystem-net-devices-can0.device
 BindsTo=sys-subsystem-net-devices-can0.device

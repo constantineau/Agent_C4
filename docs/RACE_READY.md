@@ -172,7 +172,7 @@ The Lab must refuse a route it can't prove safe and complete. **Depends on PR #2
 
 - **Do:** on the VPS, per `tools/backup/README.md`:
   `sudo C4_BACKUP_DEST=gs://constantineau-c4-nightly/vps-nightly python3 tools/backup/lab_restore.py`.
-  For the Coldline archive bucket: `tools/backup/verify_restore.sh`.
+  For the Coldline archive bucket: `BUCKET=... SRC=... STAGE=... tools/backup/verify_restore.sh`.
 - **Pass:** every artifact fetched, every SQLite `integrity_check` ok, row counts match, the dump
   restores into a fresh database (the 2026-11-03 drill was 56/56); `verify_restore.sh` hashes
   match the manifest. Also: one spring copy-off file (S2) restored and checked.

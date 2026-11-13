@@ -1,5 +1,5 @@
 [Unit]
-Description=SR33 onboard re-route — the Lab's full route optimizer, run only when the crew asks
+Description=Onboard re-route — the Lab's full route optimizer, run only when the crew asks
 # A small HTTP API on the Orin's end of the direct Pi<->Orin cable. The Pi engine is its only
 # client (POST /reroute/run, GET /reroute). No timer, no triggers: a run starts only on a request,
 # one at a time, as a child process (memory goes back to the OS after each run).

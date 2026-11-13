@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SR33 telemetry uplink (Pi -> VPS) — collect-everything paradigm.
+"""Telemetry uplink (Pi -> VPS) — collect-everything paradigm.
 
 Subscribes to the Signal K WebSocket delta stream and forwards EVERY (source, path)
 reading to the VPS, including redundant sources (heading/heel/wind/position from multiple

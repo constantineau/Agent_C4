@@ -26,9 +26,11 @@ if [ -z "$VPS" ]; then
   exit 2
 fi
 STRIDE=3000
+# The archiver container: <compose project>-archiver-1 (COMPOSE_PROJECT as in pi/deploy/*.sh).
+ARCHIVER="${COMPOSE_PROJECT:-sr33-pi}-archiver-1"
 
 cursor() {
-  docker exec sr33-pi-archiver-1 python -c "
+  docker exec "$ARCHIVER" python -c "
 import sqlite3
 c=sqlite3.connect('file:/var/lib/sr33/archive/archive.db?mode=ro',uri=True,timeout=30)
 print(c.execute(\"select v from sync_state where k='backfill_last_id'\").fetchone()[0])" 2>/dev/null
@@ -38,7 +40,7 @@ echo "=== $(date -u +%FT%TZ) drain starting ===" >> $LOG
 fails=0
 for i in $(seq 1 2000); do
   docker exec -e VPS_URL=$VPS -e BACKFILL_BATCH=3000 \
-    sr33-pi-archiver-1 python /app/backfill.py --all >> $LOG 2>&1
+    "$ARCHIVER" python /app/backfill.py --all >> $LOG 2>&1
   if [ $? -eq 0 ]; then
     echo "=== $(date -u +%FT%TZ) DRAIN COMPLETE (attempt $i) ===" >> $LOG
     exit 0
@@ -53,9 +55,9 @@ for i in $(seq 1 2000); do
     if [ -n "$cur" ]; then
       target=$((cur + STRIDE))
       echo "--- $(date -u +%FT%TZ) stepping over corrupt region: $cur -> $target ---" >> $LOG
-      docker exec -e VPS_URL=$VPS sr33-pi-archiver-1 \
+      docker exec -e VPS_URL=$VPS "$ARCHIVER" \
         python /tmp/step_over_bad.py $target >> $LOG 2>&1
-      docker exec sr33-pi-archiver-1 sh -c "grep -h UNREADABLE /tmp/step_last.txt" >> $LOST 2>/dev/null
+      docker exec "$ARCHIVER" sh -c "grep -h UNREADABLE /tmp/step_last.txt" >> $LOST 2>/dev/null
     fi
     fails=0
   fi

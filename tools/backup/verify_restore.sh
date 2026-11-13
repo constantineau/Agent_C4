@@ -5,12 +5,17 @@
 # streamed back out of Coldline, decompressed in the pipe (no local disk), and hashed against the
 # sha256 taken from the ORIGINAL file before it ever went up. A mismatch here means the local copy
 # is still the only good copy.
+#
+#   BUCKET=gs://<archive bucket> SRC=<the pull dir> STAGE=<local staging dir> tools/backup/verify_restore.sh
+#
+# None has a default. MAN defaults to $STAGE/MANIFEST-sha256.txt (as archive_pull_to_gcs.sh writes it).
 set -uo pipefail
 
-BUCKET=gs://constantineau-c4-archive
+BUCKET=${BUCKET:?set BUCKET to gs://<archive bucket>}
 PULL="$BUCKET/boat-pull-2026-08-30"
-SRC=/home/constantineau/backups/c4-boat-pull-2026-08-30
-MAN=/home/constantineau/backups/gcs-staging/MANIFEST-sha256.txt
+SRC=${SRC:?set SRC to the local pull directory}
+STAGE=${STAGE:?set STAGE to the local staging directory}
+MAN=${MAN:-$STAGE/MANIFEST-sha256.txt}
 fail=0
 
 echo "=== restoring each large object from Coldline and hashing the stream"
@@ -29,7 +34,7 @@ for rel in pi/sk_archive/archive.corrupt-20260718.db \
 done
 
 echo "=== restoring the tarball and hashing every file inside it"
-TMP=$(mktemp -d /home/constantineau/backups/gcs-staging/restore.XXXX)
+TMP=$(mktemp -d "$STAGE/restore.XXXX")
 gsutil cat "$PULL/rest-of-pull.tar.zst" | zstd -dc | tar -C "$TMP" -xf -
 n=0; bad=0
 while read -r want path; do
@@ -45,7 +50,7 @@ echo "  checked $n restored files, $bad bad"
 rm -rf "$TMP"
 
 echo "=== restoring the bench archive (its local copy is ALREADY gone)"
-want=$(awk '{print $1}' /home/constantineau/backups/gcs-staging/sk_archive-bench-2026-09-09.db.sha256)
+want=$(awk '{print $1}' "$STAGE/sk_archive-bench-2026-09-09.db.sha256")
 got=$(gsutil cat "$BUCKET/bench/sk_archive-bench-2026-09-09.db.gz" | gzip -dc | sha256sum | awk '{print $1}')
 if [ "$want" = "$got" ]; then echo "  [OK ] bench archive restores to $got"
 else echo "  [FAIL] bench archive: want=$want got=$got"; fail=1; fi

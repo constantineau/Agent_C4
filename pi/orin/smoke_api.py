@@ -3,7 +3,7 @@
 
 Confirms the local server returns a coherent, grounded answer fully offline, and measures
 latency + effective decode tok/s. This is the *exit test* for the runtime-bring-up milestone —
-it deliberately does NO SR33 tool-calling (that's the next 9.4 increment); it just sends the
+it deliberately does NO boat tool-calling (that's the next 9.4 increment); it just sends the
 shape of prompt the copilot will use (narrate a few engine facts) and times it.
 
 Run from the Orin or any host on the LAN:

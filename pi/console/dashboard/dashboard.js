@@ -1,4 +1,4 @@
-/* SR33 Crew Dashboard — higher-order tiles (live onboard engine + deterministic status).
+/* C4 Crew Dashboard — higher-order tiles (live onboard engine + deterministic status).
    Design: docs/COPILOT_DASHBOARD.md + the crew's example slide. The grid surfaces the
    higher-order reads the sensors alone don't show:
      TWS Trend · Playbook · Forecast · Sail · Time to Mark · AIS / Fleet · C4 Energy · Data

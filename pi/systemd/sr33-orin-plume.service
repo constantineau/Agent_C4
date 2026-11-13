@@ -1,5 +1,5 @@
 [Unit]
-Description=SR33 onboard forecast plume — download new model cycles, build the plume, push to the Pi engine
+Description=Onboard forecast plume — download new model cycles, build the plume, push to the Pi engine
 # Run by sr33-orin-plume.timer. A short-lived pass (~20 s warm, ~80 s with a full download), so the
 # weather parser's memory goes back to the OS between passes. It never runs the route optimizer.
 # Install notes: pi/orin/plume/README.md. Not installed by any script — the owner enables it.

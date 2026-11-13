@@ -1,5 +1,5 @@
 [Unit]
-Description=SR33 onboard forecast plume — every 15 min
+Description=Onboard forecast plume — every 15 min
 
 [Timer]
 OnBootSec=3min

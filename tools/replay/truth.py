@@ -10,9 +10,9 @@ bad source, and only a per-source view tells those apart. That is also why `envi
 directionTrue` is worth watching closely here — two signalk-derived-data calcs both published
 to it until 2026-09-01, so one path under one $source carried two different quantities.
 
-Usage:
-    python tools/replay/truth.py --start 2026-07-18T17:03:31Z --end 2026-07-18T20:40:00Z \
-        --step 30 --out /home/constantineau/backups/replay-jul18/timeline
+Usage (the archive comes from --archive or $REPLAY_ARCHIVE, no default):
+    python tools/replay/truth.py --boat <boat> --start 2026-07-18T17:03:31Z --end 2026-07-18T20:40:00Z \
+        --step 30 --out <replay dir>/timeline
 """
 import argparse
 import json
@@ -166,8 +166,8 @@ def _iso(s):
 
 def main():
     ap = argparse.ArgumentParser(description="Build the Race Rewind ground-truth series.")
-    ap.add_argument("--archive", default="/home/constantineau/backups/c4-boat-pull-2026-08-30/"
-                                         "work/archive-backfill.db")
+    ap.add_argument("--archive", default=os.environ.get("REPLAY_ARCHIVE"),
+                    help="the recorded archive.db (default $REPLAY_ARCHIVE; one of them is required)")
     ap.add_argument("--boat", required=True, help="the recorded boat's id (no default)")
     ap.add_argument("--start", required=True)
     ap.add_argument("--end", required=True)
@@ -177,6 +177,8 @@ def main():
                                     "the same file the frames were built with, or the "
                                     "ground-truth pane goes blank where the archive stops")
     a = ap.parse_args()
+    if not a.archive:
+        ap.error("no archive: pass --archive or set REPLAY_ARCHIVE")
     build(a.archive, _iso(a.start), _iso(a.end), a.step, a.out, a.boat, spool_db=a.spool)
 
 

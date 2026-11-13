@@ -24,7 +24,7 @@ server {
     location = /config.js {
         default_type application/javascript;
         add_header Cache-Control "no-store";
-        return 200 "window.SR33_ONBOARD = true;";
+        return 200 "window.C4_ONBOARD = true;";
     }
 
     location / {

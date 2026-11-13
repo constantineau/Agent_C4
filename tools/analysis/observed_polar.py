@@ -6,13 +6,14 @@ exists so the same build can be run and inspected from a shell. One implementati
 this repo has already paid for running analyses from two copies of a thing (the sail-log cursor,
 the bench boat_id).
 
-Run inside the lab image with the repo mounted:
-  docker run --rm --network sr33-dev_default \\
+Run inside the lab image with the repo mounted (<project> = the dev stack's compose project,
+<out dir> = where the JSON should land):
+  docker run --rm --network <project>_default \\
     -v $PWD/vps/lab/app:/srv/app:ro -v $PWD/shared:/srv/shared:ro \\
     -v $PWD/tools/analysis/observed_polar.py:/srv/observed_polar.py:ro \\
-    -v /home/constantineau/backups/race-data:/out \\
+    -v <out dir>:/out \\
     -e AGENT_URL=http://<agent>:8000 -e BOAT_PASSWORD=... -e MONITOR_TIMEOUT_S=120 \\
-    -w /srv sr33-dev-lab python observed_polar.py --out /out/observed-polar.json
+    -w /srv <project>-lab python observed_polar.py --out /out/observed-polar.json
 """
 import argparse
 import json

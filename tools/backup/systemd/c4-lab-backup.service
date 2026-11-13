@@ -4,7 +4,7 @@
 #   install -m 600 tools/backup/systemd/c4-lab-backup.env.example /etc/c4-lab-backup.env
 #   systemctl daemon-reload && systemctl enable --now c4-lab-backup.timer
 [Unit]
-Description=Agent C4 Lab + sr33_dev backup (lab_backup.py)
+Description=Agent C4 Lab + dev database backup (lab_backup.py)
 After=docker.service network-online.target
 Wants=network-online.target
 Requires=docker.service
@@ -13,7 +13,10 @@ RequiresMountsFor=/mnt/data
 [Service]
 Type=oneshot
 EnvironmentFile=/etc/c4-lab-backup.env
-ExecStart=/usr/bin/python3 /home/constantineau/Agent_C4/tools/backup/lab_backup.py backup
+# C4_REPO (the checkout to run from) comes from the env file. Unset, refuse with a plain reason
+# (an existing install updated from an older unit: add C4_REPO to the env file first, see README).
+ExecStartPre=/bin/sh -c 'test -n "$C4_REPO" && test -f "$C4_REPO/tools/backup/lab_backup.py" || { echo "c4-lab-backup: set C4_REPO (this checkout path) in /etc/c4-lab-backup.env" >&2; exit 1; }'
+ExecStart=/usr/bin/python3 ${C4_REPO}/tools/backup/lab_backup.py backup
 # Background work: never compete with the live stacks for CPU or disk.
 Nice=10
 IOSchedulingClass=idle
