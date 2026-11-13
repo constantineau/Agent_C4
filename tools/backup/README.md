@@ -26,8 +26,8 @@ no defaults: each script says which it needs at the top, and stops at once if on
 
 ## What is deliberately still on disk
 
-- `backups/c4-boat-pull-2026-08-30/work/archive-backfill.db` (2.9 G) — `harness.py`'s default
-  `--archive`; the replay rig has no source without it.
+- `backups/c4-boat-pull-2026-08-30/work/archive-backfill.db` (2.9 G) — the replay rig's source
+  archive: pass it to `harness.py` as `--archive` (or set `REPLAY_ARCHIVE`); there is no default.
 - `backups/race-data/archive-jul15-race.db` (459 M) — 2,352,414 rows, `22:30 → 00:20Z`. Also
   backfilled into Postgres, which is where the Lab debrief reads.
 - `backups/replay-jul18/` (300 M) — the timelines and the materialised spool.
