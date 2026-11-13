@@ -135,7 +135,7 @@ in-race computation is onboard (legal). See RRS41 §6.
 
 ### 4.1 Between-races learning loop (makes everything below more accurate)
 - **Hoisted-sail logging (prerequisite).** Today the hoisted sail is only in browser `localStorage`
-  (`sr33.hoisted`), passed transiently to `/sail` — **not persisted**. Add a timestamped log so
+  (`c4.hoisted`), passed transiently to `/sail` — **not persisted**. Add a timestamped log so
   crossover-learning has labels. (Polar + calibration learning work without it.)
 - **Polar refinement.** Extend `polar_tool.py` (today read-only observed-vs-ORC p90) to aggregate
   across many sails and **write back** refined polars (`target_stw`/`target_vmg`) — *review-before-replace*.

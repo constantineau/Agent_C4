@@ -22,7 +22,7 @@
   }
   function colour(pal, name) { return pal[family(name)] || "#888"; }
 
-  let hoisted = localStorage.getItem("sr33.hoisted") || "";
+  let hoisted = C4Store.local.get("hoisted") || "";
   let last = null;   // last /api/sail response, for redraw on resize/theme
 
   function isNight() { return document.documentElement.getAttribute("data-theme") === "night"; }
@@ -146,7 +146,7 @@
     shownSails = key;
     if (hoisted && !list.includes(hoisted)) {          // the last boat's sail: not this boat's
       hoisted = "";
-      try { localStorage.setItem("sr33.hoisted", ""); } catch (e) { /* private mode */ }
+      C4Store.local.set("hoisted", "");
     }
     sel.querySelectorAll("button").forEach((b) => b.remove());
     list.concat([""]).forEach((name) => {
@@ -159,7 +159,7 @@
 
   function pick(name) {
     hoisted = name || "";
-    try { localStorage.setItem("sr33.hoisted", hoisted); } catch (e) { /* private mode */ }
+    C4Store.local.set("hoisted", hoisted);
     update(App.lastConditions);
   }
 

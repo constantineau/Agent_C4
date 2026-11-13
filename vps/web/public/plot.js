@@ -5,8 +5,8 @@
 "use strict";
 const Plot = (function () {
   const R2D = 180 / Math.PI, D2R = Math.PI / 180;
-  let route = localStorage.getItem("sr33.route") || "default";
-  let orient = localStorage.getItem("sr33.orient") || "north";   // north | course
+  let route = C4Store.local.get("route") || "default";
+  let orient = C4Store.local.get("orient") || "north";   // north | course
   let course = null, nav = null, boat = null, tactics = null, routeData = null;
   let routeOn = false;                             // boat = {lat,lon,hdg}
   const track = [];                                // recent {lat,lon}
@@ -16,7 +16,7 @@ const Plot = (function () {
   // legal in-race, so navigator/tactics/route stay available.
   function racing() { return (typeof App !== "undefined" && !App.onboard && App.mode === "race"); }
 
-  function setRoute(r) { route = r; localStorage.setItem("sr33.route", r);
+  function setRoute(r) { route = r; C4Store.local.set("route", r);
     document.getElementById("routeName").textContent = r; loadCourse(); }
 
   async function loadCourse() {
@@ -56,7 +56,7 @@ const Plot = (function () {
   }
   function toggleOrient() {
     orient = orient === "north" ? "course" : "north";
-    localStorage.setItem("sr33.orient", orient);
+    C4Store.local.set("orient", orient);
     document.getElementById("orientBtn").textContent = orient === "north" ? "N↑" : "Crs↑";
     document.getElementById("orientBtn").classList.toggle("on", orient === "course");
     draw();

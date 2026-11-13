@@ -273,7 +273,7 @@ Frontier-model write-back capabilities (all between-races):
   frozen pre-start.
 - **Crossover refinement** — refine the J1/A3/S1 sail-change points from observed performance →
   updated `sr33_speed_guide.md`. **Prerequisite (data gap):** the hoisted sail is currently only in
-  browser `localStorage` (`sr33.hoisted`) and passed transiently to `/sail`; it is **not persisted to
+  browser `localStorage` (`c4.hoisted`) and passed transiently to `/sail`; it is **not persisted to
   the archive**. Crossover-learning needs a timestamped hoisted-sail log — add that capture. (Polar +
   calibration learning work without it.)
 - **Calibration learning** — detect speedo/wind/heel offset + drift by comparing redundant sources

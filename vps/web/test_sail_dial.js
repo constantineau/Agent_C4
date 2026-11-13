@@ -35,7 +35,8 @@ const ctx = {
 };
 ctx.window = { addEventListener: (k, fn) => { handlers[k] = fn; } };
 vm.createContext(ctx);
-vm.runInContext(fs.readFileSync(path.join(__dirname, "public", "sail.js"), "utf8"), ctx);
+for (const f of ["store.js", "sail.js"])   // index.html loads store.js first
+  vm.runInContext(fs.readFileSync(path.join(__dirname, "public", f), "utf8"), ctx);
 
 const names = () => sel.children.filter((c) => c.tag === "button").map((b) => b.dataset.sail).join(",");
 const flush = () => new Promise((r) => setImmediate(r));

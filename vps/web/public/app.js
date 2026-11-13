@@ -7,10 +7,10 @@
 const App = {
   ws: null,
   lastPos: null,         // {lat, lon} from telemetry, for the sun/day-night calc
-  theme: localStorage.getItem('sr33.theme') || 'auto',   // auto | day | night
-  mode: localStorage.getItem('sr33.mode') || 'practice',  // practice | race
+  theme: C4Store.local.get('theme') || 'auto',   // auto | day | night
+  mode: C4Store.local.get('mode') || 'practice',  // practice | race
   pollTimer: null,
-  token: sessionStorage.getItem('sr33.token') || null,    // shared-password bearer token
+  token: C4Store.session.get('token') || null,    // shared-password bearer token
   // Onboard race console (pi/console): the iPad talks ONLY to the Pi engine over boat-local
   // Wi-Fi — no cloud, no auth, no LLM chat, and every panel available (the boat's own
   // computer is legal in-race, so the RRS-41 race gate doesn't apply here). Set by config.js.
@@ -31,7 +31,7 @@ async function unlock() {
     if (!res.ok) { errEl.textContent = 'Wrong boat password.'; return; }
     const data = await res.json();
     App.token = data.token;
-    sessionStorage.setItem('sr33.token', App.token);
+    C4Store.session.set('token', App.token);
     errEl.textContent = '';
     document.getElementById('pw').value = '';
     document.getElementById('gate').style.display = 'none';
@@ -54,7 +54,7 @@ async function apiFetch(path, opts = {}) {
 /* Drop the session and return to the gate (token expired or rejected). */
 function relock(msg) {
   App.token = null;
-  sessionStorage.removeItem('sr33.token');
+  C4Store.session.remove('token');
   if (App.pollTimer) { clearInterval(App.pollTimer); App.pollTimer = null; }
   if (App.ws) { try { App.ws.close(); } catch (e) {} App.ws = null; }
   const gate = document.getElementById('gate');
@@ -89,7 +89,7 @@ function start() {
 /* ---------- theme (auto day/night) ---------- */
 function cycleTheme() {
   App.theme = { auto: 'day', day: 'night', night: 'auto' }[App.theme];
-  localStorage.setItem('sr33.theme', App.theme);
+  C4Store.local.set('theme', App.theme);
   applyTheme();
 }
 function resolvedTheme() {
@@ -115,7 +115,7 @@ async function syncMode() {
   if (App.onboard) { applyMode(); return; }
   try {
     const r = await (await apiFetch('/api/mode')).json();
-    if (r && r.mode) { App.mode = r.mode; localStorage.setItem('sr33.mode', App.mode); }
+    if (r && r.mode) { App.mode = r.mode; C4Store.local.set('mode', App.mode); }
   } catch (e) { /* keep cached mode; server still enforces */ }
   applyMode();
 }
@@ -128,7 +128,7 @@ async function toggleMode() {
     })).json();
     App.mode = (r && r.mode) ? r.mode : next;
   } catch (e) { App.mode = next; }   // optimistic — the agent still enforces regardless
-  localStorage.setItem('sr33.mode', App.mode);
+  C4Store.local.set('mode', App.mode);
   applyMode();
 }
 function applyMode() {
