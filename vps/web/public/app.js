@@ -51,6 +51,15 @@ var C4Store = (function () {
 })();
 /* c4-store:end */
 
+/* Page events under "c4:" names. #314 transition: a browser may still run a cached older sail.js
+   or plot.js that listens for the old names, so each event also goes out under the old name.
+   Remove after 2027-04. */
+const LEGACY_EVT = 'sr33:';
+function emit(name, detail) {
+  window.dispatchEvent(new CustomEvent('c4:' + name, { detail: detail }));
+  window.dispatchEvent(new CustomEvent(LEGACY_EVT + name, { detail: detail }));
+}
+
 const App = {
   ws: null,
   lastPos: null,         // {lat, lon} from telemetry, for the sun/day-night calc
@@ -185,13 +194,13 @@ function applyMode() {
     const btn = document.getElementById('modeBtn');
     btn.classList.remove('on'); btn.onclick = null; btn.title = 'On-boat engine (Pi) — no cloud';
     document.body.dataset.mode = 'practice';   // panels un-gated (engine is legal in-race)
-    window.dispatchEvent(new CustomEvent('c4:mode', { detail: 'practice' }));
+    emit('mode', 'practice');
     return;
   }
   document.getElementById('modeLbl').textContent = App.mode.toUpperCase();
   document.getElementById('modeBtn').classList.toggle('on', App.mode === 'race');
   document.body.dataset.mode = App.mode;   // tactical/routing panels read this (RRS 41 gate)
-  window.dispatchEvent(new CustomEvent('c4:mode', { detail: App.mode }));
+  emit('mode', App.mode);
 }
 function tacticsAllowed() { return App.onboard || App.mode !== 'race'; }
 
@@ -248,7 +257,7 @@ async function refresh() {
     }
     setFatigue(c.fatigue, c.fatigue_level);
     App.lastConditions = c;
-    window.dispatchEvent(new CustomEvent('c4:conditions', { detail: c }));  // for later panels
+    emit('conditions', c);  // for later panels
   } catch (e) { document.getElementById('link').className = 'dot down'; }
 }
 function setFatigue(index, level) {

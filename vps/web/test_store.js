@@ -114,9 +114,11 @@ function test(name, fn) {
   await test("only app.js's storage helper names the old prefix; no separate helper file", () => {
     const app = fs.readFileSync(path.join(PUB, "app.js"), "utf8");
     const outside = app.replace(/\/\* c4-store:begin \*\/[\s\S]*?\/\* c4-store:end \*\//, "");
-    assert.ok(!/sr33/i.test(outside), "app.js outside the helper");
+    // the #314 transition constants (LEGACY_KEY / LEGACY_EVT) are the only other old-name lines
+    const strip = (t) => t.split("\n").filter((l) => !/LEGACY_(KEY|EVT) = /.test(l)).join("\n");
+    assert.ok(!/sr33/i.test(strip(outside)), "app.js outside the helper");
     for (const f of ["sail.js", "plot.js"])
-      assert.ok(!/sr33/i.test(fs.readFileSync(path.join(PUB, f), "utf8")), f);
+      assert.ok(!/sr33/i.test(strip(fs.readFileSync(path.join(PUB, f), "utf8"))), f);
     // an older cached index.html loads config, sun, app, sail, plot: the helper must ride in app.js
     assert.ok(app.indexOf("var C4Store") < app.indexOf("const App"));
     assert.ok(!fs.existsSync(path.join(PUB, "store.js")));

@@ -4,6 +4,14 @@
    highlighted so a wrong sail / imminent peel is obvious at a glance. Data from /api/sail. */
 "use strict";
 (function () {
+  // #314 transition: a browser may run this file with a cached older app.js (no C4Store, the
+  // old event names and storage keys). Follow whichever app.js is loaded. Remove after 2027-04.
+  const NEW_APP = typeof C4Store !== "undefined";
+  const LEGACY_KEY = "sr33.", LEGACY_EVT = "sr33:";
+  const Store = NEW_APP ? C4Store : { local: {
+    get: (k) => { try { return localStorage.getItem(LEGACY_KEY + k); } catch (e) { return null; } },
+    set: (k, v) => { try { localStorage.setItem(LEGACY_KEY + k, v); } catch (e) { /* quota */ } } } };
+  const EVT = NEW_APP ? "c4:" : LEGACY_EVT;
   // Colours by sail FAMILY (#305): the boat's own sail names come with /api/sail's `sails`.
   // Day palette per family; night uses a red monochrome ramp for night vision.
   const DAY = { jib: "#3f7bd6", genoa: "#3f7bd6", code0: "#2fa6a0", staysail: "#7f8c99",
@@ -22,7 +30,7 @@
   }
   function colour(pal, name) { return pal[family(name)] || "#888"; }
 
-  let hoisted = C4Store.local.get("hoisted") || "";
+  let hoisted = Store.local.get("hoisted") || "";
   let last = null;   // last /api/sail response, for redraw on resize/theme
 
   function isNight() { return document.documentElement.getAttribute("data-theme") === "night"; }
@@ -146,7 +154,7 @@
     shownSails = key;
     if (hoisted && !list.includes(hoisted)) {          // the last boat's sail: not this boat's
       hoisted = "";
-      C4Store.local.set("hoisted", "");
+      Store.local.set("hoisted", "");
     }
     sel.querySelectorAll("button").forEach((b) => b.remove());
     list.concat([""]).forEach((name) => {
@@ -159,7 +167,7 @@
 
   function pick(name) {
     hoisted = name || "";
-    C4Store.local.set("hoisted", hoisted);
+    Store.local.set("hoisted", hoisted);
     update(App.lastConditions);
   }
 
@@ -188,7 +196,7 @@
     // the boat's sails on a fresh page, before any wind arrives
     update(typeof App !== "undefined" ? App.lastConditions : null);
   });
-  window.addEventListener("c4:conditions", (e) => { App.lastConditions = e.detail; update(e.detail); });
+  window.addEventListener(EVT + "conditions", (e) => { App.lastConditions = e.detail; update(e.detail); });
   window.addEventListener("resize", draw);
   // redraw on theme change (palette swap)
   new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
