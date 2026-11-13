@@ -21,7 +21,7 @@ test("model tiers and prices are Tramp's", () => {
 
 test(".env reading: exported first, then the first file that has it", () => {
   assert.equal(readDotenv("A=1\nC4_GEMINI_API_KEY='abc'\n", "C4_GEMINI_API_KEY"), "abc");
-  assert.equal(readDotenv("C4_DEV_PROJECT=sr33-dev   # keep\n", "C4_DEV_PROJECT"), "sr33-dev");
+  assert.equal(readDotenv("C4_DEV_PROJECT=live-dev   # keep\n", "C4_DEV_PROJECT"), "live-dev");
   assert.equal(readDotenv("X='a #b'\n", "X"), "a #b");
   const dir = mkdtempSync(join(tmpdir(), "grill-"));
   const f = join(dir, ".env");
