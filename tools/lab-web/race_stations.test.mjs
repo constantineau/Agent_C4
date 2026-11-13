@@ -51,7 +51,7 @@ function harness(def, opts = {}) {
   };
   ctx.window = ctx;
   vm.createContext(ctx);
-  const names = ["esc", "attr", "saveChain", "queueDef", "withOverrides", "St", "stKey", "stationPicks", "stKind",
+  const names = ["esc", "attr", "saveChain", "queueDef", "withOverrides", "St", "stKey", "stationPicks", "stPickSig", "stKind",
     "stReset", "detailStationsCard", "stCardHtml", "stPaint", "stDrawMap", "stBase", "stFind", "stTick", "stAdd",
     "stCheck", "stSave", "syncStations", "stDirty", "stDiscard", "stTickSig"];
   const code = names.map(grab).join("\n").replace(/^(const|let) /gm, "var ");
@@ -252,4 +252,47 @@ test("discard after picks changed elsewhere lists those picks, so a later save k
   assert.ok(ctx.St.rows.some((s) => s.id === "KPBI"), "the newer pick is listed");
   assert.equal(ctx.St.ticked["metar:KPBI"], true);
   assert.equal(ctx.St.changed, false);
+});
+
+const PICK_A = { id: "KFLL", kind: "metar", lat: 26.08, lon: -80.16, name: "FLL" };
+const PICK_B = { id: "KPBI", kind: "metar", lat: 26.7, lon: -80.1, name: "West Palm" };
+
+test("Find takes picks saved in another browser: Discard then restores those, not the stale ones (#348)", async () => {
+  const def = Object.assign(RACE(), { stations: { picked: [PICK_A] } });
+  // another browser replaced A with B; this one still holds A
+  const { ctx, els } = harness(def, { reply: () => Object.assign({}, FOUND, { picked: [PICK_B] }) });
+  els.stCard.innerHTML = ctx.detailStationsCard(def);
+  await ctx.stFind();
+  const on = () => Object.keys(ctx.St.ticked).filter((k) => ctx.St.ticked[k]).sort();
+  assert.deepEqual(on(), ["metar:KPBI"], "ticks = the server's picks");
+  assert.deepEqual(ctx.Lab.editDef.stations.picked.map((s) => s.id), ["KPBI"], "editor took B");
+  assert.deepEqual(JSON.parse(ctx.Lab.cleanDef).stations.picked.map((s) => s.id), ["KPBI"], "baseline too");
+  assert.equal(ctx.St.base, JSON.stringify([PICK_B]));
+  assert.ok(!/Picks changed elsewhere/.test(els.stCard.innerHTML), "no unsaved ticks: nothing to warn about");
+  ctx.stTick(0, true);                                      // KFXE on: an unsaved edit
+  ctx.stDiscard();
+  assert.deepEqual(on(), ["metar:KPBI"], "Discard restores B, not A");
+  assert.equal(ctx.St.changed, false);
+  ctx.detailStationsCard(ctx.Lab.editDef);                  // a reload with B is not news any more
+  assert.deepEqual(on(), ["metar:KPBI"]);
+});
+
+test("Find with unsaved ticks: picks saved elsewhere warn, and the ticks stay (#348)", async () => {
+  const def = Object.assign(RACE(), { stations: { picked: [PICK_A] } });
+  let server = [PICK_A];
+  const { ctx, els } = harness(def, { reply: () => Object.assign({}, FOUND, { picked: server }) });
+  const on = () => Object.keys(ctx.St.ticked).filter((k) => ctx.St.ticked[k]).sort();
+  els.stCard.innerHTML = ctx.detailStationsCard(def);
+  await ctx.stFind();
+  assert.ok(!/Picks changed elsewhere/.test(els.stCard.innerHTML), "same picks: no warning");
+  ctx.stTick(ctx.St.rows.findIndex((s) => s.id === "KFXE"), true);   // unsaved: A + KFXE
+  server = [PICK_B];                                         // another browser saves B
+  await ctx.stFind();
+  assert.equal(ctx.St.changed, true, "unsaved ticks kept");
+  assert.deepEqual(on(), ["metar:KFLL", "metar:KFXE"]);
+  assert.match(els.stCard.innerHTML, /Picks changed elsewhere\. Saving replaces them\./);
+  assert.deepEqual(ctx.Lab.editDef.stations.picked.map((s) => s.id), ["KPBI"]);
+  assert.ok(ctx.stDirty());
+  ctx.stDiscard();
+  assert.deepEqual(on(), ["metar:KPBI"]);
 });
