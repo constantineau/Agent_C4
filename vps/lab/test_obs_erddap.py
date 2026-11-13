@@ -13,7 +13,9 @@ ERDDAP's format (a header row, a units row, then data). No grid is downloaded.
   5) the venue study's station finder lists past buoys too (with their last report), keeps a
      window they can't cover out, and ticks the nearest buoy with data;
   6) a station list that won't load is a note, not an error; garbage rows are skipped;
-  7) depth: the ETOPO world grid is opt-in (DEPTH_GRIDS=default,etopo), a race box picks only the
+  7) the boat reads it live (shared.erddap), so the playbook freezes its live buoys: one probe
+     call per network, the same query the boat makes; a dark buoy is left out;
+  8) depth: the ETOPO world grid is opt-in (DEPTH_GRIDS=default,etopo), a race box picks only the
      15-degree tiles it touches, and they keep the "not a chart" label. Unset = the built-ins only.
 """
 import os
@@ -62,6 +64,7 @@ OBS = {   # station -> (speed unit, rows "time,speed,dir,qc")
     "M5": ("m/s", ["2025-07-01T00:00:00Z,10.0,200.0,0"]),
     "M2": ("furlongs/fortnight", ["2025-07-01T00:00:00Z,10.0,200.0,0"]),
 }
+RECENT_CSV = {"text": ""}
 FETCHED = []
 DOWN = {"on": False}
 
@@ -77,6 +80,8 @@ def fake_get(url, timeout=20):
     q = urllib.parse.unquote(url.split("?", 1)[1])
     if "orderByMax" in q:
         return STATIONS_CSV
+    if "station_id=~" in q or q.startswith("station_id,"):         # the live read (probe / boat)
+        return RECENT_CSV["text"]
     sid = q.split('station_id="', 1)[1].split('"', 1)[0]
     if sid not in OBS or "time>=2030" in q:
         raise urllib.error.HTTPError(url, 404, "Your query produced no matching results.", {}, None)
@@ -115,7 +120,7 @@ check("plain notes: NDBC not here, nothing about the Irish list",
 check("its label names the source", SRC.label == "Irish buoys (Marine Institute)")
 check("add by id finds an active buoy", (obsarea.lookup("m5") or {}).get("source") == "ie_buoy")
 check("its kind can be picked", obsarea.clean_pick(dict(got[0])) is not None)
-check("the boat does not read it live", "ie_buoy" not in obsarea.READABLE_KINDS)
+check("the boat reads it live", "ie_buoy" in obsarea.READABLE_KINDS)
 
 print("2) anywhere else: never asked, nothing said")
 for name, box in (("Fort Lauderdale", FLL), ("English Channel", CHANNEL), ("Lake Huron", BAYVIEW)):
@@ -188,7 +193,34 @@ STATIONS_CSV = "<html>Service Unavailable</html>"
 check("a page that isn't a station list: no stations", SRC.stations() == [])
 STATIONS_CSV = _saved
 
-print("7) depth: the world grid is opt-in")
+print("7) the playbook freezes the live Irish buoys")
+from app import optimizer, synthesis  # noqa: E402
+reset()
+RECENT_CSV["text"] = "\n".join([
+    "station_id,time,WindSpeed,WindDirection,QC_Flag", ",UTC,knots,degrees true,",
+    f"M3,{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(time.time() - 1200))},14.0,250.0,0"])
+live = synthesis.probe_live([{"id": "M3", "kind": "ie_buoy"}, {"id": "M5", "kind": "ie_buoy"},
+                             {"id": "X1", "kind": "no_such_network"}])
+probes = [urllib.parse.unquote(u) for u in FETCHED if "station_id=~" in urllib.parse.unquote(u)]
+check("live check: M3 reporting, M5 dark, an unknown kind not live",
+      live == {"M3": True, "M5": False, "X1": False}, live)
+check("one probe call for the network, the boat's query",
+      len(probes) == 1 and 'station_id=~"(M3|M5)"' in probes[0] and "time>=" in probes[0], probes)
+real_bbox = optimizer.course_bbox
+optimizer.course_bbox = lambda d, c: SW_IRELAND
+synthesis._probe_metars = lambda ids, timeout=12: set()
+reset()
+frozen = synthesis._buoy_stations({}, "c", pad_deg=2.5, promises={"M3": [[0, 12.0, 250]]})
+optimizer.course_bbox = real_bbox
+check("frozen: M3 (live) with its kind and promise; M5 (dark) left out",
+      [(s_["id"], s_["kind"], s_["shore"]) for s_ in frozen or []] == [("M3", "ie_buoy", False)]
+      and frozen[0]["promise"] == [[0, 12.0, 250]] and "src_id" not in frozen[0], frozen)
+reset()
+DOWN["on"] = True
+check("a network that won't answer: nothing live",
+      synthesis.probe_live([{"id": "M3", "kind": "ie_buoy"}]) == {"M3": False})
+
+print("8) depth: the world grid is opt-in")
 os.environ.pop("DEPTH_GRIDS", None)
 check("unset: the built-in grids only", [g["name"] for g in depthsrc.grid_catalog()]
       == [g["name"] for g in depthsrc.GRIDS])

@@ -1,7 +1,8 @@
 """Live BUOY + METAR OBSERVATIONS — the up-course leading indicator (locked 2026-07-07;
-METAR airports + actuals-vs-forecast added 2026-07-16).
+METAR airports + actuals-vs-forecast added 2026-07-16; ERDDAP buoy networks added for #309).
 
-NDBC/GLOS/ECCC realtime observations AND airport METARs are COMMON PUBLIC DATA available to all
+NDBC/GLOS/ECCC realtime observations, buoy networks on ERDDAP servers (e.g. Ireland's Marine
+Institute buoys) AND airport METARs are COMMON PUBLIC DATA available to all
 boats (RRS 41 clean, same class as GRIB), pulled onboard over Starlink. A station up-course is the
 fleet's oldest leading indicator: it reports the breeze the boat will be IN before the boat gets
 there — real observation, not forecast. Shore METARs carry a `shore` flag (their anemometers
@@ -18,9 +19,15 @@ This module gives the matcher + the Tier-2 copilot + the dashboard ladder that s
 
 Stations come from the frozen bundle's `buoys` block (synthesis picks stations near the course —
 the homework pattern; the Lab finds them for the race's area, #309), else the BUOY_STATIONS env
-("id:lat:lon:name;..."), else a curated Great-Lakes fallback — on the Great Lakes only; elsewhere
+("id:lat:lon:name[:kind];..."), else a curated Great-Lakes fallback — on the Great Lakes only; elsewhere
 the boat says plainly it has no stations. Fetches are cached (~10 min — the obs cadence) and best-effort: offline or
 out of season (lakes buoys are pulled in winter) → stations report stale/absent, never an error.
+
+Each station is read by its `kind`: "metar" (one batched aviationweather call), "ndbc" (or no
+kind: NDBC's realtime feed per station), or any ERDDAP network registered in shared/erddap.py (one
+call per network for all its stations). A new ERDDAP network is a registration there, not code
+here. A kind the boat has no reader for is listed with a plain note, never fetched from the wrong
+feed.
 """
 from __future__ import annotations
 
@@ -30,6 +37,8 @@ import os
 import time
 import concurrent.futures as cf
 import urllib.request
+
+from shared import erddap
 
 from . import deviation
 from . import navigator
@@ -43,6 +52,9 @@ MAX_NM = float(os.environ.get("BUOY_MAX_NM", "300"))             # course-scale:
 UPCOURSE_CONE = float(os.environ.get("BUOY_UPCOURSE_CONE_DEG", "75"))
 STALE_MIN = float(os.environ.get("BUOY_STALE_MIN", "90"))        # obs older than this = stale
 FETCH_TIMEOUT = float(os.environ.get("BUOY_FETCH_TIMEOUT", "10"))
+KEEP_H = 3.0                                                     # obs window read per station
+NOT_REPORTING_NOTE = "no recent reading"
+NO_READER_NOTE = "the boat can't read this kind of station"
 
 # curated Great-Lakes fallback (mirrors the Lab's venue list) — the bundle/env override this.
 # Live-verified 2026-07-16: 45003/45008 were NOT deployed (404) — replaced with the reporting set.
@@ -109,8 +121,12 @@ def _stations_and_origin():
         for part in env.split(";"):
             bits = part.split(":")
             if len(bits) >= 3:
-                out.append({"id": bits[0].strip(), "lat": float(bits[1]), "lon": float(bits[2]),
-                            "name": bits[3].strip() if len(bits) > 3 else bits[0].strip()})
+                st = {"id": bits[0].strip(), "lat": float(bits[1]), "lon": float(bits[2]),
+                      "name": bits[3].strip() if len(bits) > 3 and bits[3].strip()
+                      else bits[0].strip()}
+                if len(bits) > 4 and bits[4].strip():
+                    st["kind"] = bits[4].strip()
+                out.append(st)
         if out:
             return out, "env"
     return list(_GL_FALLBACK), "fallback"
@@ -193,6 +209,38 @@ def _obs_metars(ids):
     return by_id
 
 
+def _reader(st):
+    """How the boat reads this station: "metar" | "ndbc" | "erddap" | None (no reader aboard)."""
+    kind = st.get("kind") or "ndbc"
+    if kind in ("metar", "ndbc"):
+        return kind
+    return "erddap" if erddap.network(kind) else None
+
+
+def _obs_erddap(kind, sts):
+    """Cached recent obs for the stations of one ERDDAP network (ONE call). {ID: rows newest-first}
+    keyed by the frozen id, upper case. {} offline / nothing reported in the window."""
+    net = erddap.network(kind)
+    if net is None or not sts:
+        return {}
+    src = {str(st["id"]).upper(): str(st.get("src_id") or st["id"]) for st in sts}
+    key = f"erddap:{kind}:" + ",".join(sorted(src))
+    now = time.time()
+    hit = _CACHE.get(key)
+    if hit and now - hit[0] < REFRESH_S:
+        return hit[1]
+    url = net.recent_url(list(src.values()), now - KEEP_H * 3600)
+    try:
+        by_src = net.parse_recent(_fetch(url, FETCH_TIMEOUT)) if url else {}
+        by_id = {sid: by_src.get(s.upper(), []) for sid, s in src.items()}
+    except Exception:
+        # ERDDAP answers "nothing in the window" with an error too: keep the last good read (its
+        # age shows), else nothing
+        by_id = hit[1] if hit else {}
+    _CACHE[key] = (now, by_id)
+    return by_id
+
+
 def _promise_at(station, epoch):
     """The frozen bundle's promised (tws_kn, twd_deg) for this station at `epoch` — linear in time,
     angle-safe in direction — or None (no promise series / epoch outside it +1 h grace)."""
@@ -248,10 +296,14 @@ def get_buoys(route=None):
     if origin == "fallback" and not _in_gl_area(lat, lon):
         return {"available": False, "note": NO_STATIONS_NOTE}
     sts = [st for st in listed if _hav_nm(lat, lon, st["lat"], st["lon"]) <= MAX_NM]
-    metar_obs = _obs_metars([st["id"] for st in sts if st.get("kind") == "metar"])
+    how = {id(st): _reader(st) for st in sts}
+    metar_obs = _obs_metars([st["id"] for st in sts if how[id(st)] == "metar"])
+    erddap_obs = {}
+    for kind in {st.get("kind") for st in sts if how[id(st)] == "erddap"}:
+        erddap_obs.update(_obs_erddap(kind, [st for st in sts if st.get("kind") == kind]))
     # warm the per-station cache concurrently — at course-scale radius the full bundle list is in
     # play (~20 stations) and serial cold fetches would blow the dashboard's request timeout
-    buoy_ids = [st["id"] for st in sts if st.get("kind") != "metar"]
+    buoy_ids = [st["id"] for st in sts if how[id(st)] == "ndbc"]
     if len(buoy_ids) > 1:
         with cf.ThreadPoolExecutor(max_workers=min(8, len(buoy_ids))) as pool:
             list(pool.map(_obs, buoy_ids))
@@ -261,15 +313,20 @@ def get_buoys(route=None):
         brg = _bearing(lat, lon, st["lat"], st["lon"])
         up = (ref_brg is not None and abs(_wrap180(brg - ref_brg)) <= UPCOURSE_CONE)
         shore = bool(st.get("shore") or st.get("kind") == "metar")
-        obs = metar_obs.get(st["id"], []) if st.get("kind") == "metar" else _obs(st["id"])
+        reader = how[id(st)]
+        obs = (metar_obs.get(st["id"], []) if reader == "metar"
+               else erddap_obs.get(str(st["id"]).upper(), []) if reader == "erddap"
+               else _obs(st["id"]) if reader == "ndbc" else [])
         row = {"id": st["id"], "name": st.get("name") or st["id"], "kind": st.get("kind", "ndbc"),
                "shore": shore, "range_nm": round(rng, 1), "bearing": round(brg), "up_course": up}
         if obs:
             ep, tws, twd = obs[0]
             age_min = (now - ep) / 60.0
+            net = erddap.network(st.get("kind")) if reader == "erddap" else None
+            stale_min = max(STALE_MIN, (net.stale_min or 0) if net else 0)
             row.update({"tws_kn": tws, "twd_deg": round(twd), "age_min": round(age_min),
-                        "stale": age_min > STALE_MIN, "trend": _trend(obs)})
-            if own_tws is not None and own_twd is not None and age_min <= STALE_MIN:
+                        "stale": age_min > stale_min, "trend": _trend(obs)})
+            if own_tws is not None and own_twd is not None and age_min <= stale_min:
                 row["delta"] = {"tws_kn": round(tws - own_tws, 1),
                                 "twd_deg": round(_wrap180(twd - own_twd))}
             # ACTUAL vs the frozen FORECAST: what the blend that routed the plan promised at this
@@ -295,7 +352,7 @@ def get_buoys(route=None):
                     upcourse_shore = cand
         else:
             row.update({"tws_kn": None, "stale": True,
-                        "note": "no recent reading"})
+                        "note": NOT_REPORTING_NOTE if reader else NO_READER_NOTE})
         rows.append(row)
     if not rows:
         return {"available": False, "note": f"No buoy within {MAX_NM:g} nm."}
@@ -304,8 +361,10 @@ def get_buoys(route=None):
             "own": {"tws_kn": round(own_tws, 1) if own_tws is not None else None,
                     "twd_deg": round(own_twd) if own_twd is not None else None},
             "ref_bearing": round(ref_brg) if ref_brg is not None else None, "ref_src": ref_src,
-            "based": ["ndbc_realtime", "metar", "own_instruments"], "conf": "engine",
-            "disclaimer": ("Public NDBC/METAR observations (available to all boats) read by the "
+            "based": ["ndbc_realtime", "metar"]
+                     + (["erddap_buoys"] if "erddap" in how.values() else []) + ["own_instruments"],
+            "conf": "engine",
+            "disclaimer": ("Public buoy/METAR observations (available to all boats) read by the "
                            "boat's own computer — a leading indicator, aged and best-effort; lake "
                            "buoys are seasonal and shore anemometers under-read the over-water "
                            "gradient (trust their direction more than their pressure). 'vs "

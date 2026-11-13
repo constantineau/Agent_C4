@@ -190,6 +190,9 @@ services:
     network_mode: host
     environment:
       CAN_IFACE: ${CAN_IFACE:-vcan0}
+      # the name the plotter lists us under (PGN 126996). Set it in .env to keep a plotter's
+      # existing data-source choice; unset = "Agent C4 Navigator"
+      N2KOUT_MODEL: ${N2KOUT_MODEL:-}
     restart: unless-stopped
 
   # Phase 9.2 (iPad-side) — onboard race console. Serves the SAME iPad app as the cloud web,

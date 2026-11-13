@@ -88,11 +88,14 @@ Dual input → Opus extraction → a **draft** RaceDefinition → human review �
   know them. Picked stations show as small purple dots on the Course & Marks map and the Gameplan
   route map. A new source (e.g. a UK buoy network) is one `StationSource` passed to
   `obsarea.register()`: it then shows in the finder, add-by-id and the automatic list with no UI
-  change. The boat reads only `metar` and `ndbc` live (`obsarea.READABLE_KINDS`); a new kind needs
-  a reader aboard before the freeze keeps it.
-  Outside US water: **Irish buoys** (Marine Institute, `app/obserddap.py`, kind `ie_buoy`) cover
-  Irish waters. Any buoy network on an ERDDAP server is one `ErddapBuoySource(...)` there. They feed
-  the finder, venue skill and venue studies (their own observations), not the boat's live list.
+  change. The boat reads `metar`, `ndbc` and every ERDDAP network in `shared/erddap.py` live
+  (`obsarea.READABLE_KINDS`); only those kinds are frozen. Any other new kind needs a reader aboard
+  (`vps/agent/app/buoys.py`) before the freeze keeps it.
+  Outside US water: **Irish buoys** (Marine Institute, kind `ie_buoy`) cover Irish waters. A buoy
+  network on an ERDDAP server is a `shared.erddap.Network` (server, dataset, variables: what the
+  boat reads, one call per network) wrapped in an `ErddapBuoySource(...)` in `app/obserddap.py`
+  (label and coverage box: what the Lab finds). They feed the finder, venue skill, venue studies,
+  and the frozen station list (live-probed with the boat's own query).
 - **Course loader (homework→onboard)**: `shared.race_def.course_to_marks()` flattens a course
   (gates/finish → midpoints; un-geocoded marks skipped + reported) and `POST /course/load` (cloud
   agent AND onboard engine) writes + activates it.
