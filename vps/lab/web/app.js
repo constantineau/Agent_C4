@@ -784,6 +784,8 @@ function detailDelegated(d) {
 const St = { rid: null, rows: null, notes: [], ticked: {}, live: {}, changed: false, busy: "", msg: "" };
 const stKey = (s) => s.kind + ":" + s.id;
 const stationPicks = (d) => (d && d.stations && Array.isArray(d.stations.picked) ? d.stations.picked : null);
+// which stations, ignoring order and names: null = automatic
+const stPickSig = (p) => (p ? JSON.stringify(p.map(stKey).sort()) : "null");
 // a new station kind (a new source in obsarea) shows as its own name, no UI change needed
 function stKind(k) { return k === "metar" ? "Airport" : k === "ndbc" ? "Buoy / coast" : String(k || ""); }
 function stReset(d) {
@@ -860,12 +862,18 @@ async function stFind() {
     // keep the saved picks and anything ticked here that this search didn't list (added by id)
     const keep = (r.picked || []).concat((St.rows || []).filter((s) => St.ticked[stKey(s)]));
     keep.forEach((s) => { if (!have.has(stKey(s))) { have.add(stKey(s)); rows.push(Object.assign({}, s)); } });
+    // the server's picks may be newer than this editor's (saved in another browser): take them into
+    // the definition and its baseline, so Discard and the reload check use them (#348)
+    const srv = Array.isArray(r.picked) ? r.picked : null;
+    const moved = stPickSig(srv) !== stPickSig(stationPicks(Lab.editDef));
+    if (moved) { syncStations(rid, srv ? { picked: srv } : null); St.base = JSON.stringify(srv); }
     if (!St.changed) {
       St.ticked = {};
-      (r.picked || rows.filter((s) => s.auto)).forEach((s) => { St.ticked[stKey(s)] = true; });
+      (srv || rows.filter((s) => s.auto)).forEach((s) => { St.ticked[stKey(s)] = true; });
     }
     St.rows = rows; St.notes = r.notes || [];
-    St.msg = rows.length ? "" : "No stations found. Add one by id.";
+    St.msg = !rows.length ? "No stations found. Add one by id."
+      : moved && St.changed ? "Picks changed elsewhere. Saving replaces them." : "";
   } catch (e) { if (St.rid === rid) St.msg = "Couldn't look: " + (e.message || e); }
   if (St.rid === rid) { St.busy = ""; stPaint(); }
 }
