@@ -9,7 +9,7 @@ nightly backup — sees an empty or half file. Every Lab writer now goes through
   - no `open(..., "w"/"wb")` writer is left in vps/lab/app outside atomicio (a new one must use
     the helper too).
 
-Run (lab image): docker run --rm -v $PWD:/repo:ro -w /srv sr33-ci-lab python3 /repo/vps/lab/test_atomic_writes.py
+Run (lab image): docker run --rm -v $PWD:/repo:ro -w /srv c4-ci-lab python3 /repo/vps/lab/test_atomic_writes.py
 """
 import json
 import os

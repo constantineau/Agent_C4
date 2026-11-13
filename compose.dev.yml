@@ -1,23 +1,27 @@
 # Agent_C4 development stack. Separate DB + ports from prod; safe to tear down.
 #   docker compose -f compose.dev.yml up -d --build
-name: sr33-dev
+# Project, database and volume names default to neutral c4-* names for a new install. An existing
+# install pins its own in .env (C4_DEV_PROJECT, C4_DEV_PGDATA, POSTGRES_DB/USER; see .env.example)
+# so a rebuild keeps the same containers, volumes and database (#314). Not COMPOSE_PROJECT_NAME:
+# dev and prod read the same .env.
+name: ${C4_DEV_PROJECT:-c4-dev}
 
 services:
   timescaledb:
     image: timescale/timescaledb:latest-pg16
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-sr33}
+      POSTGRES_USER: ${POSTGRES_USER:-c4}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
-      POSTGRES_DB: ${POSTGRES_DB:-sr33_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-c4_dev}
     # localhost only. Note: ufw does not filter Docker-published ports, so never publish on 0.0.0.0.
     ports:
       - "127.0.0.1:5433:5432"
     volumes:
-      - sr33_dev_pgdata:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql/data
       # migrations in this dir run in filename order on first init
       - ./vps/db/migrations:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sr33} -d ${POSTGRES_DB:-sr33_dev}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-c4} -d ${POSTGRES_DB:-c4_dev}"]
       interval: 5s
       timeout: 5s
       retries: 20
@@ -141,7 +145,10 @@ services:
     restart: unless-stopped
 
 volumes:
-  sr33_dev_pgdata:
+  # The database files. Named explicitly: the volume's name must not follow its key or the project,
+  # or a rename would start the database on a new, empty volume. An existing install pins it.
+  pgdata:
+    name: ${C4_DEV_PGDATA:-c4-dev_pgdata}
   lab_ingested:
   lab_gribcache:
   lab_coastline:

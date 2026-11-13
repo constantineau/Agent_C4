@@ -21,7 +21,7 @@ _LOCK = threading.Lock()
 
 
 def _path():
-    d = os.path.dirname(os.environ.get("ENGINE_DB", "/var/lib/sr33/engine/engine.db"))
+    d = os.path.dirname(os.environ.get("ENGINE_DB", "/var/lib/c4/engine/engine.db"))
     return os.path.join(d, "reroute-runs.jsonl")
 
 

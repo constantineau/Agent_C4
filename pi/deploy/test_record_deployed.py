@@ -37,16 +37,21 @@ def write(path, text, mode=None):
 tmp = tempfile.mkdtemp()
 here, box, bin_ = (os.path.join(tmp, d) for d in ("checkout", "box", "bin"))
 X = 0o755
-# ssh: drop the options and the host, run the rest locally with the box as $HOME.
+# ssh: drop the options and the host, then run the rest the way sshd does: joined by spaces into
+# one string for the remote shell, so an empty argument disappears, as it does over real ssh.
 write(f"{bin_}/ssh", '#!/bin/bash\nwhile [[ $1 == -o ]]; do shift 2; done\nshift\n'
-      f'HOME={box} exec "$@"\n', X)
+      f'HOME={box} exec bash -c "$*"\n', X)
 # git: only what the script asks. The checkout is clean; the box has no git repo.
 write(f"{bin_}/git", '#!/bin/bash\ncase "$*" in\n'
       f'  "rev-parse --show-toplevel") echo {here} ;;\n'
       '  "rev-parse --short HEAD") echo abc1234 ;;\n'
       '  status*) ;;\n  *) exit 128 ;;\nesac\n', X)
-# docker: the built image is sha256:new; the container runs $RUNNING (default the same).
-write(f"{bin_}/docker", '#!/bin/bash\ncase "$1" in\n'
+# docker: the built image is sha256:new; the container runs $RUNNING (default the same). Every
+# image/container name asked about is logged; `compose config` resolves the box's project from
+# $BOX_PROJECT (unset = a compose file with no name line).
+NAMES = os.path.join(tmp, "names.log")
+write(f"{bin_}/docker", '#!/bin/bash\necho "${@: -1}" >> ' + NAMES + '\ncase "$1" in\n'
+      '  compose) [[ -n $BOX_PROJECT ]] && printf "name: %s\\nservices:\\n" "$BOX_PROJECT" ;;\n'
       '  image) echo sha256:new ;;\n  inspect) echo "${RUNNING:-sha256:new}" ;;\nesac\n', X)
 
 FILE = "pi/engine/engine_app.py"
@@ -94,6 +99,20 @@ r = subprocess.run(["bash", "./record-deployed.sh", "pi", "20261106T045000Z", "w
                    cwd=HERE, env=e, capture_output=True, text=True)
 check(f"works when run as ./record-deployed.sh from pi/deploy (rc {r.returncode})",
       r.returncode == 0)
+
+# The compose project is the box's (#314): what its compose config resolves (its .env pin),
+# else c4-boat; COMPOSE_PROJECT set by the caller (deploy-data-path.sh) wins.
+def asked(**env):
+    open(NAMES, "w").close()
+    run("pi", "20261106T046000Z", "w5c", FILE, "--", "engine", **env)
+    return open(NAMES).read().split()
+
+
+check("the project comes from the box's compose config (its pin)",
+      "sr33-pi-engine" in asked(BOX_PROJECT="sr33-pi") and "sr33-pi-engine-1" in asked(BOX_PROJECT="sr33-pi"))
+check("no pin on the box: the neutral c4-boat", "c4-boat-engine" in asked())
+check("COMPOSE_PROJECT from the caller wins",
+      "given-engine-1" in asked(BOX_PROJECT="sr33-pi", COMPOSE_PROJECT="given"))
 
 r = run("pi", "20261106T050000Z", "w6", "a file; rm -rf ~")
 check("names with shell characters are refused", r.returncode == 2)

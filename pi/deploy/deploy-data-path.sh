@@ -31,11 +31,6 @@ PI_REPO=${PI_REPO:-Agent_C4}                  # relative to the Pi user's home
 BACKUPS=${BACKUPS:-deploy-backups}            # relative to the Pi user's home
 EXPECT_BASE=${EXPECT_BASE:-b3c30a1}           # what the Pi's clone should be on
 VERIFY_TIMEOUT_S=${VERIFY_TIMEOUT_S:-3600}    # quick_check of the 24 GB archive on the SD card took 39 min on 2026-10-28
-# The Pi's compose project: images <project>-<svc>, containers <project>-<svc>-1 (same variable as
-# record-deployed.sh). Passed to compose with -p so names here and there always agree.
-export COMPOSE_PROJECT=${COMPOSE_PROJECT:-sr33-pi}   # exported: record-deployed.sh reads it too
-COMPOSE="docker compose -p $COMPOSE_PROJECT -f compose.pi.yml"
-ENGINE_C=$COMPOSE_PROJECT-engine-1 ARCHIVER_C=$COMPOSE_PROJECT-archiver-1 UPLINK_C=$COMPOSE_PROJECT-uplink-1
 
 apply=0 rollback="" expect_rotation=0 allow_open=0
 while [[ $# -gt 0 ]]; do
@@ -54,9 +49,31 @@ cd "$(git rev-parse --show-toplevel)"
 say()  { printf '\n=== %s\n' "$*"; }
 pi()   { ssh -o ConnectTimeout=15 "$PI_HOST" "$@"; }
 # Read-only look inside the archive volume, through the engine container (it mounts the volume
-# read-only), so no new container is started on the Pi just to list a directory.
-archive_ls() { pi "docker exec $ENGINE_C ls -la --time-style=+%FT%T /var/lib/sr33/archive"; }
+# read-only), so no new container is started on the Pi just to list a directory. Paths come from
+# the container's own ARCHIVE_DB / ENGINE_DB, so this works on containers created before and after
+# the in-container paths moved to /var/lib/c4 (#314).
+archive_ls() { pi "docker exec $ENGINE_C sh -c 'ls -la --time-style=+%FT%T \"\$(dirname \"\$ARCHIVE_DB\")\"'"; }
 run() { if [[ $apply -eq 1 ]]; then echo "+ $*"; "$@"; else echo "(dry run) would run: $*"; fi; }
+
+# The Pi's compose project: images <project>-<svc>, containers <project>-<svc>-1. This script runs
+# HERE (the operator's machine) and the project is the Pi's, so it asks the Pi: the `name:` that
+# `docker compose config` resolves in the Pi's clone, from compose.pi.yml + the Pi's .env
+# (C4_BOAT_PROJECT; unset = c4-boat, #314). COMPOSE_PROJECT set here overrides it. The result is
+# passed to compose with -p and exported to record-deployed.sh, so every name agrees. A project
+# with no archiver container on the Pi stops an --apply: that is a missing .env pin, not a new boat.
+if [[ -z ${COMPOSE_PROJECT:-} ]]; then
+  COMPOSE_PROJECT=$(pi "cd ~/$PI_REPO && docker compose -f compose.pi.yml config 2>/dev/null | sed -n 's/^name: //p' | head -1") \
+    || true
+  [[ -n $COMPOSE_PROJECT ]] || { echo "could not read the compose project on $PI_HOST (docker compose config in ~/$PI_REPO). Set COMPOSE_PROJECT=<project>. Nothing done." >&2; exit 2; }
+fi
+export COMPOSE_PROJECT   # record-deployed.sh reads it too
+COMPOSE="docker compose -p $COMPOSE_PROJECT -f compose.pi.yml"
+ENGINE_C=$COMPOSE_PROJECT-engine-1 ARCHIVER_C=$COMPOSE_PROJECT-archiver-1 UPLINK_C=$COMPOSE_PROJECT-uplink-1
+echo "Pi compose project: $COMPOSE_PROJECT"
+if ! pi "docker inspect $ARCHIVER_C >/dev/null 2>&1"; then
+  echo "!! no container $ARCHIVER_C on the Pi. If the boat runs under another project, pin it in the Pi's .env (C4_BOAT_PROJECT=<project>) or set COMPOSE_PROJECT." >&2
+  [[ $apply -eq 1 ]] && { echo "Nothing done." >&2; exit 2; }
+fi
 
 # The files that make up the data path. Tests are not shipped; they run in `make ci` here.
 files() {
@@ -87,7 +104,7 @@ retention_env() { pi "cd ~/$PI_REPO && sed -n 's/^ARCHIVE_RETAIN_DAYS=//p' .env"
 open_sessions() {
   pi "docker exec -i $ENGINE_C python3 -" <<'PY'
 import os, sqlite3, time
-p = "/var/lib/sr33/engine/engine.db"
+p = os.environ["ENGINE_DB"]
 if os.path.exists(p + "-wal"):
     print("WAL engine.db has a -wal file; not reading it from here")
     raise SystemExit(3)
@@ -328,12 +345,12 @@ echo; echo "archive volume:"
 [[ $expect_rotation -eq 1 ]] && echo "(expect archive.corrupt-<stamp>.db = the old 24 GB file, and a small new archive.db)"
 archive_ls | sed 's/^/  /'
 db_bytes() {   # archive.db + its WAL (fresh writes sit in the WAL until a checkpoint)
-  pi "docker exec $ENGINE_C sh -c 'stat -c %s /var/lib/sr33/archive/archive.db /var/lib/sr33/archive/archive.db-wal 2>/dev/null; true'" \
+  pi "docker exec $ENGINE_C sh -c 'stat -c %s \"\$ARCHIVE_DB\" \"\$ARCHIVE_DB-wal\" 2>/dev/null; true'" \
     | awk '{s += $1} END {print s + 0}'
 }
 s1=$(db_bytes); sleep 60; s2=$(db_bytes)
 echo "archive (db + wal): $s1 -> $s2 bytes in 60 s"; (( s2 > s1 )) || echo "!! not growing"
-echo; echo "status file:"; pi "docker exec $ENGINE_C cat /var/lib/sr33/archive/archiver-status.json" || echo "!! no status file yet"
+echo; echo "status file:"; pi "docker exec $ENGINE_C sh -c 'cat \"\$(dirname \"\$ARCHIVE_DB\")/archiver-status.json\"'" || echo "!! no status file yet"
 echo; echo -n "uplink sends in the last 2 min: "
 pi "docker logs --since 2m $UPLINK_C 2>&1 | grep -c 'sent'" || echo "!! uplink quiet"
 echo -n "archiver restarts since recreate: "; pi "docker inspect -f '{{.RestartCount}}' $ARCHIVER_C"

@@ -14,19 +14,29 @@
 # checkout and exits 1 if one differs, or if a container doesn't run the image just built.
 #
 # Env: REMOTE_REPO (default Agent_C4, under the box user's home), BACKUPS (default
-# deploy-backups), COMPOSE_PROJECT (default sr33-pi: images <project>-<svc>, containers
-# <project>-<svc>-1). Services are optional: the Orin runs systemd units, not images.
+# deploy-backups), COMPOSE_PROJECT (images <project>-<svc>, containers <project>-<svc>-1).
+# Services are optional: the Orin runs systemd units, not images.
+#
+# The compose project belongs to the box, not to this machine. Unset here, it is resolved ON the
+# box: the `name:` that `docker compose -f compose.pi.yml config` gives in its clone (compose.pi.yml
+# + the box's .env, C4_BOAT_PROJECT; unset = c4-boat, #314). deploy-data-path.sh exports the one it
+# resolved, so both agree.
 set -euo pipefail
 
 if [[ ${1:-} == --box ]]; then
   # ---- runs ON the box (fed over ssh): STAMP LABEL COMMIT REPO BACKUPS PROJECT FILE... -- SVC...
   shift
   stamp=$1 label=$2 commit=$3 repo=$4 backups=$5 project=$6; shift 6
+  [[ $project == - ]] && project=""   # "-" = unset (ssh drops an empty argument)
   files=() services=()
   while [[ $# -gt 0 && $1 != -- ]]; do files+=("$1"); shift; done
   [[ ${1:-} == -- ]] && shift
   services=("$@")
   cd ~/"$repo"
+  if [[ -z $project && ${#services[@]} -gt 0 ]]; then
+    project=$(docker compose -f compose.pi.yml config 2>/dev/null | sed -n 's/^name: //p' | head -1) || true
+    project=${project:-c4-boat}
+  fi
   dir=~/"$backups/$label-$stamp"
   mkdir -p "$dir"
   clone="?" local_changes="?"
@@ -61,7 +71,7 @@ files=() services=()
 while [[ $# -gt 0 && $1 != -- ]]; do files+=("$1"); shift; done
 [[ ${1:-} == -- ]] && shift
 services=("$@")
-for x in "${files[@]}" "${services[@]}"; do
+for x in "${files[@]}" "${services[@]}" ${COMPOSE_PROJECT:+"$COMPOSE_PROJECT"}; do
   [[ $x =~ ^[A-Za-z0-9._/@+-]+$ ]] || { echo "unsafe name (spaces or shell characters): $x" >&2; exit 2; }
 done
 
@@ -71,7 +81,7 @@ commit=$(git rev-parse --short HEAD)
 if [[ ${#files[@]} -gt 0 && -n $(git status --porcelain -- "${files[@]}") ]]; then commit+="+uncommitted"; fi
 
 out=$(ssh -o ConnectTimeout=15 "$host" bash -s -- --box "$stamp" "$label" "$commit" \
-        "${REMOTE_REPO:-Agent_C4}" "${BACKUPS:-deploy-backups}" "${COMPOSE_PROJECT:-sr33-pi}" \
+        "${REMOTE_REPO:-Agent_C4}" "${BACKUPS:-deploy-backups}" "${COMPOSE_PROJECT:--}" \
         "${files[@]}" -- "${services[@]}" < "$script") \
   || { echo "!! could not record the deploy on $host" >&2; exit 1; }
 echo "$out"

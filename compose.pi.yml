@@ -8,7 +8,10 @@
 # Host networking is required so the Signal K container can read the host's SocketCAN
 # interface (CAN interfaces live in the host network namespace). Signal K runs on :3010
 # because :3000 is taken on this VM (DreamCRM).
-name: sr33-pi
+# The project name prefixes every container (<project>-engine-1), image and volume
+# (<project>_sk_archive = the boat's archive). New installs get c4-boat; an existing boat pins its
+# own in .env (C4_BOAT_PROJECT) so a rebuild keeps the same volumes (#314).
+name: ${C4_BOAT_PROJECT:-c4-boat}
 
 # Every service's Docker log is capped: 3 files x 10 MB, oldest dropped. The default json-file
 # driver never rotates, and these logs sit on the archive's own SD card, where a flood (the
@@ -98,11 +101,11 @@ services:
       INGEST_TOKEN: ${INGEST_TOKEN:-dev-ingest-token}
       BOAT_ID: ${BOAT_ID:-}   # no default: unset, the service won't start (#307); the bench overlay sets its own
       AGG_SECONDS: ${AGG_SECONDS:-15}
-      QUEUE_DIR: /var/lib/sr33/queue
+      QUEUE_DIR: /var/lib/c4/queue          # = the sk_queue mount below; change them together
     # Store-and-forward queue on a named volume so a reboot mid-outage doesn't drop the
     # batches waiting to be replayed to the cloud ("link outage loses nothing").
     volumes:
-      - sk_queue:/var/lib/sr33/queue
+      - sk_queue:/var/lib/c4/queue
     depends_on:
       - signalk
     restart: unless-stopped
@@ -120,7 +123,7 @@ services:
     environment:
       SIGNALK_WS: ${SIGNALK_WS:-ws://localhost:3010/signalk/v1/stream?subscribe=all}
       BOAT_ID: ${BOAT_ID:-}   # no default: unset, the service won't start (#307); the bench overlay sets its own
-      ARCHIVE_DB: /var/lib/sr33/archive/archive.db
+      ARCHIVE_DB: /var/lib/c4/archive/archive.db
       VPS_URL: ${VPS_URL:-http://localhost:8101}
       INGEST_TOKEN: ${INGEST_TOKEN:-dev-ingest-token}
       # retention: full-res data OUTSIDE race-session windows is pruned after this many days
@@ -133,10 +136,10 @@ services:
       # and none ever finished (a 20 GB archive needs ~65 min, ~0.9 GB of WAL). 2 GB gives it
       # room and is ~4% of the card's free space.
       ARCHIVE_CHECK_WAL_CAP_MB: ${ARCHIVE_CHECK_WAL_CAP_MB:-2048}
-      ENGINE_DB: /var/lib/sr33/engine/engine.db
+      ENGINE_DB: /var/lib/c4/engine/engine.db
     volumes:
-      - sk_archive:/var/lib/sr33/archive
-      - engine_state:/var/lib/sr33/engine:ro
+      - sk_archive:/var/lib/c4/archive
+      - engine_state:/var/lib/c4/engine:ro
     depends_on:
       - signalk
     restart: unless-stopped
@@ -156,8 +159,8 @@ services:
     environment:
       DATA_SOURCE: onboard
       SIGNALK_WS: ${SIGNALK_WS:-ws://localhost:3010/signalk/v1/stream?subscribe=all}
-      ARCHIVE_DB: /var/lib/sr33/archive/archive.db
-      ENGINE_DB: /var/lib/sr33/engine/engine.db
+      ARCHIVE_DB: /var/lib/c4/archive/archive.db
+      ENGINE_DB: /var/lib/c4/engine/engine.db
       BOAT_ID: ${BOAT_ID:-}   # no default: unset, the service won't start (#307); the bench overlay sets its own
       # the Orin copilot over the Pi-Orin cable: /playbook/load stages + commits the playbook there
       COPILOT_URL: ${COPILOT_URL:-http://10.10.10.2:8300}
@@ -172,8 +175,8 @@ services:
       LAB_URL: ${LAB_URL:-}
       INGEST_TOKEN: ${INGEST_TOKEN:-dev-ingest-token}
     volumes:
-      - sk_archive:/var/lib/sr33/archive:ro
-      - engine_state:/var/lib/sr33/engine
+      - sk_archive:/var/lib/c4/archive:ro
+      - engine_state:/var/lib/c4/engine
     depends_on:
       - signalk
     restart: unless-stopped
