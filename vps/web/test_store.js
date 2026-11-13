@@ -115,7 +115,7 @@ function test(name, fn) {
     const app = fs.readFileSync(path.join(PUB, "app.js"), "utf8");
     const outside = app.replace(/\/\* c4-store:begin \*\/[\s\S]*?\/\* c4-store:end \*\//, "");
     // the #314 transition constants (LEGACY_KEY / LEGACY_EVT) are the only other old-name lines
-    const strip = (t) => t.split("\n").filter((l) => !/LEGACY_(KEY|EVT) = /.test(l)).join("\n");
+    const strip = (t) => t.split("\n").filter((l) => !/LEGACY_(KEY|EVT) = |SR33_ONBOARD/.test(l)).join("\n");
     assert.ok(!/sr33/i.test(strip(outside)), "app.js outside the helper");
     for (const f of ["sail.js", "plot.js"])
       assert.ok(!/sr33/i.test(strip(fs.readFileSync(path.join(PUB, f), "utf8"))), f);

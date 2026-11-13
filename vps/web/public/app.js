@@ -70,7 +70,7 @@ const App = {
   // Onboard race console (pi/console): the iPad talks ONLY to the Pi engine over boat-local
   // Wi-Fi — no cloud, no auth, no LLM chat, and every panel available (the boat's own
   // computer is legal in-race, so the RRS-41 race gate doesn't apply here). Set by config.js.
-  onboard: !!window.C4_ONBOARD,
+  onboard: !!(window.C4_ONBOARD || window.SR33_ONBOARD),   // old name: #314 transition, remove after 2027-04
 };
 
 /* ---------- gate (server-side shared-password auth) ---------- */

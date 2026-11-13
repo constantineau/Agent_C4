@@ -68,6 +68,8 @@ ALLOWED = [
     (["vps/web/public/app.js", "vps/web/public/sail.js", "vps/web/public/plot.js"],
      r"LEGACY_(?:KEY|EVT) = [\"']sr33[.:][\"']",
      "cached older scripts still work with the new ones; remove after 2027-04 (PR B)"),
+    (["vps/web/public/app.js", "pi/console/default.conf.template"], r"window\.SR33_ONBOARD\b",
+     "onboard flag under the old name too, for a script pair loaded mid-deploy; remove after 2027-04 (PR B)"),
     (["vps/agent/app/auth.py"], r"\"sr33-auth:\"", "token key salt: changing it logs every device out"),
     (["tools/ci/run.sh", "pi/n2kout/canboat_roundtrip.sh", "tools/seamasks/build.py"], CI_IMAGE,
      "CI image tags (PR C)"),

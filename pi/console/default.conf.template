@@ -24,7 +24,8 @@ server {
     location = /config.js {
         default_type application/javascript;
         add_header Cache-Control "no-store";
-        return 200 "window.C4_ONBOARD = true;";
+        # #314 transition: the old name too, for an app.js loaded mid-deploy. Remove after 2027-04.
+        return 200 "window.C4_ONBOARD = true; window.SR33_ONBOARD = true;";
     }
 
     location / {

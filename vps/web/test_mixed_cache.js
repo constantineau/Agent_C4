@@ -47,4 +47,19 @@ for (const f of ["sail.js", "plot.js"]) {
   assert.ok(!listeners.some((k) => k.startsWith("c4:")), f + ": " + listeners);
   console.log("  ok  old app.js + new " + f + ": old event names");
 }
+// 3) the onboard flag: the Pi's /config.js sets both names; the new app accepts either
+{
+  const conf = fs.readFileSync(path.join(__dirname, "..", "..", "pi", "console", "default.conf.template"), "utf8");
+  const body = conf.match(/return 200 "([^"]*ONBOARD[^"]*)"/)[1];
+  for (const name of ["C4_ONBOARD", "SR33_ONBOARD"]) {     // what a new / an old app.js reads
+    const w = {};
+    vm.runInNewContext(body, { window: w });
+    assert.strictEqual(w[name], true, name);
+  }
+  const app = src("app.js");
+  const line = app.split("\n").find((l) => /onboard: !!/.test(l));
+  for (const w of [{ C4_ONBOARD: true }, { SR33_ONBOARD: true }])
+    assert.strictEqual(vm.runInNewContext("(" + line.trim().replace(/^onboard: /, "").replace(/,\s*\/\/.*$/, "") + ")", { window: w }), true);
+  console.log("  ok  onboard flag works for old and new app.js, from old and new config.js");
+}
 console.log("PASS");
