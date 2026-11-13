@@ -101,7 +101,7 @@ async function vsFind() {
 function vsStationsHtml() {
   const r = Vs.found;
   if (!r) return "";
-  const kind = (s) => (s.kind === "ndbc" ? "Buoy / coast" : "Airport");
+  const kind = (s) => (s.kind === "metar" ? "Airport" : s.kind === "ndbc" ? "Buoy / coast" : "Buoy");
   const rows = r.stations.map((s, i) => `<tr>
       <td><input type="checkbox" ${s.use ? "checked" : ""} onchange="Vs.found.stations[${i}].use=this.checked"
         aria-label="Use ${attr(s.id)}"></td>
@@ -199,7 +199,7 @@ function vsPin() {
   Vs._pin.push(L.circleMarker([la, lo], { radius: 6, color: "#0b0b0e", weight: 1, fillColor: "#ed1c24", fillOpacity: 1 }).addTo(map));
   Vs._pin.push(L.circle([la, lo], { radius: (Number(f.radius_nm) || 40) * 1852, color: "#cdd2da", weight: 1, fillOpacity: 0.05 }).addTo(map));
   ((Vs.found || {}).stations || []).forEach((s) => Vs._pin.push(L.circleMarker([s.lat, s.lon],
-    { radius: 4, color: "#cdd2da", weight: 1, fillColor: s.kind === "ndbc" ? "#3ecf8e" : "#f5b13d", fillOpacity: 0.9 })
+    { radius: 4, color: "#cdd2da", weight: 1, fillColor: s.kind === "metar" ? "#f5b13d" : "#3ecf8e", fillOpacity: 0.9 })
     .bindTooltip(s.id).addTo(map)));
 }
 

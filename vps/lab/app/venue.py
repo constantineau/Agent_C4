@@ -92,12 +92,13 @@ def stations_for(lat, lon, max_nm=STATION_MAX_NM):
     """The obs stations that anchor a venue — the nearest of EACH kind in range (a shore METAR +
     an over-water NDBC buoy), so skill pools both the shore/lake-breeze regime and the open-water
     regime. Curated stations first; a kind with none in range comes from the area's station list
-    (obsarea, #309). Ordered nearest-first; empty if nothing is in range."""
+    (obsarea, #309), which also adds other networks' buoys (obserddap). Ordered nearest-first;
+    empty if nothing is in range."""
+    from . import obsarea
     out = []
-    for kind in ("metar", "ndbc"):
+    for kind in ("metar", "ndbc", *sorted(obsarea.kinds() - {"metar", "ndbc"})):
         s = nearest_station(lat, lon, prefer=kind, max_nm=max_nm)
         if not (s and s["kind"] == kind):
-            from . import obsarea
             s = obsarea.nearest(lat, lon, kind, max_nm)
         if s:
             out.append(s)

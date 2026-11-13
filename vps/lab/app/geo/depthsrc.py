@@ -14,12 +14,19 @@ Region-free. A race's box is checked against every source whose coverage touches
 The join is per mask cell, so two sets meet at a border with no gap and no double rule. Where
 two grids cover the same cell the shallowest depth wins.
 
-Grid sources come from a catalog: the built-in `GRIDS` (public-domain NOAA Great Lakes grids), or
-a JSON list at `DEPTH_GRIDS` (a path; "none" turns grids off). A new region is a catalog entry:
-{"name", "label", "navigational", "bbox": [n, s, w, e], "url", "member" (the GeoTIFF inside a
-.tar.gz/.zip, or omitted for a bare .tif), "z": "elevation" (up is +) | "depth" (down is +),
-"version"}. GDAL (`gdalwarp`) is a prep-time tool here as for ENC; the router only reads the
-cached per-cell result.
+Grid sources come from a catalog, `DEPTH_GRIDS`: a comma list of
+  - `default` (the built-in `GRIDS`, public-domain NOAA Great Lakes grids; also what an unset or
+    empty DEPTH_GRIDS means),
+  - `etopo` (`etopo_tiles()`: NOAA's ETOPO 2022 world grid, 15 arc-second, in 15-degree tiles.
+    Opt-in. Coarse (~450 m) and not for navigation, but it gives depths outside every chart and
+    regional grid. A tile is downloaded (5-30 MB) only when a race's box touches it),
+  - a path to a JSON list of entries,
+or "none" (no grids). A new region is a catalog entry: {"name", "label", "navigational",
+"bbox": [n, s, w, e], "url", "member" (the GeoTIFF inside a .tar.gz/.zip, or omitted for a bare
+.tif), "z": "elevation" (up is +) | "depth" (down is +), "version"}. The file must be a north-up
+lon/lat GeoTIFF with real depth values: an image of the grid (8-bit, scaled for display, e.g. an
+ERDDAP .geotif) is not one. GDAL (`gdalwarp`) is a prep-time tool here as for ENC; the router only
+reads the cached per-cell result.
 """
 from __future__ import annotations
 
@@ -58,6 +65,25 @@ GRIDS = [
         ("erie", "Lake Erie", [43.0004, 40.9996, -84.0004, -77.9996]),
         ("ontario", "Lake Ontario", [44.2504, 43.1496, -79.9004, -76.0496]),
     )]
+
+
+# NOAA NCEI ETOPO 2022 v1, 15 arc-second surface elevation (GEBCO and other bathymetry under it),
+# public domain, "not for navigation". 15-degree GeoTIFF tiles named by their north-west corner
+# (N60W015 covers 45-60 N, 15 W-0), Float32, nodata -99999, elevation in metres (negative = depth).
+_ETOPO = ("https://www.ngdc.noaa.gov/mgg/global/relief/ETOPO2022/data/15s/15s_surface_elev_gtif/"
+          "ETOPO_2022_v1_15s_{tile}_surface.tif")
+
+
+def etopo_tiles() -> list:
+    """The 288 ETOPO 2022 tiles as catalog entries (nothing is downloaded until a race uses one)."""
+    out = []
+    for top in range(90, -90, -15):
+        for left in range(-180, 180, 15):
+            tile = f"{'N' if top >= 0 else 'S'}{abs(top):02d}{'E' if left >= 0 else 'W'}{abs(left):03d}"
+            out.append({"name": f"etopo_{tile.lower()}", "label": "ETOPO world grid (coarse)",
+                        "navigational": False, "bbox": [top, top - 15, left, left + 15],
+                        "url": _ETOPO.format(tile=tile), "z": "elevation", "version": "2022v1"})
+    return out
 
 
 def _touches(bbox, other) -> bool:
@@ -309,15 +335,23 @@ def _unpack_member(archive, member, dst):
 
 
 def grid_catalog() -> list:
-    """The grid sources' specs: `DEPTH_GRIDS` (a JSON file, or "none"), else the built-in list."""
-    path = os.environ.get("DEPTH_GRIDS", "").strip()
-    if not path:
+    """The grid sources' specs from `DEPTH_GRIDS` (see the module doc): unset = the built-in list."""
+    raw = os.environ.get("DEPTH_GRIDS", "").strip()
+    if not raw:
         return list(GRIDS)
-    if path.lower() in ("none", "off", "0"):
+    if raw.lower() in ("none", "off", "0"):
         return []
-    with open(path) as f:
-        got = json.load(f)
-    return [g for g in got if isinstance(g, dict)]
+    out = []
+    for part in (p.strip() for p in raw.split(",")):
+        if part.lower() == "default":
+            out += GRIDS
+        elif part.lower() == "etopo":
+            out += etopo_tiles()
+        elif part:
+            with open(part) as f:
+                got = json.load(f)
+            out += [g for g in got if isinstance(g, dict)]
+    return out
 
 
 class _BadCatalog:

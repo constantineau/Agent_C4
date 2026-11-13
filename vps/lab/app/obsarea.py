@@ -11,6 +11,8 @@ declares its area, like the wind models in wind/models.py:
   - METAR: aviationweather.gov's station list by bounding box. Worldwide.
   - NDBC: NDBC's active station table (stations with weather sensors), by box. US and Caribbean
     only: elsewhere the lookup says so plainly.
+  - buoy networks on ERDDAP servers (obserddap.py), e.g. Ireland's Marine Institute buoys. Each
+    covers its own water and says nothing elsewhere.
 
 A kind with no source for the area gets a plain note, never another area's stations. Lookups are
 cached in memory for a day. Network reads go through `_get` (stubbed in tests).
@@ -80,6 +82,7 @@ class StationSource:
     name, kind, label = "base", None, "stations"
     coverage = None               # (south, north, west, east), or None = worldwide
     coverage_label = None
+    quiet_outside = False         # True: no "not here" note outside its coverage (a regional network)
 
     def covers_bbox(self, bbox) -> bool:
         if self.coverage is None or not bbox:
@@ -88,7 +91,9 @@ class StationSource:
         cs, cn, cw, ce = self.coverage
         return not (n < cs or s > cn or e < cw or w > ce)
 
-    def not_here_note(self) -> str:
+    def not_here_note(self):
+        if self.quiet_outside:
+            return None
         where = f" ({self.coverage_label})" if self.coverage_label else ""
         return f"{self.label}: not here{where}."
 
@@ -184,6 +189,11 @@ def register(source):
     return source
 
 
+def source_for_kind(kind):
+    """The area source whose stations are of `kind`, or None."""
+    return next((src for src in SOURCES.values() if src.kind == kind), None)
+
+
 def kinds():
     """Every station kind a source can return."""
     return {"metar", "ndbc"} | {src.kind for src in SOURCES.values() if src.kind}
@@ -211,7 +221,8 @@ def find(bbox, pad_deg=PAD_DEG, max_per_kind=MAX_PER_KIND):
         if any(st["kind"] == src.kind for st in curated):
             continue
         if not src.covers_bbox(bbox):
-            notes.append(src.not_here_note())
+            if src.not_here_note():
+                notes.append(src.not_here_note())
             continue
         try:
             got = src.find(box)
@@ -228,7 +239,9 @@ def find(bbox, pad_deg=PAD_DEG, max_per_kind=MAX_PER_KIND):
 def nearest(lat, lon, kind, max_nm):
     """The closest station of `kind` within `max_nm` of a point from the area sources (not the
     curated list), or None. Best-effort: a list that can't load is just None."""
-    src = SOURCES[kind]
+    src = source_for_kind(kind)
+    if src is None:
+        return None
     dlat = max_nm / 60.0
     dlon = dlat / max(0.1, math.cos(math.radians(lat)))
     box = (lat + dlat, lat - dlat, lon - dlon, lon + dlon)
@@ -270,7 +283,8 @@ def finder(bbox, pad_deg=PAD_DEG, per_source=FINDER_PER_SOURCE):
     notes = []
     for src in SOURCES.values():
         if not src.covers_bbox(bbox):
-            notes.append(src.not_here_note())
+            if src.not_here_note():
+                notes.append(src.not_here_note())
             continue
         try:
             got = src.find(box)
@@ -362,3 +376,7 @@ def race_stations(definition, bbox, pad_deg=PAD_DEG):
     if p is not None:
         return {"stations": p, "notes": [], "picked": True}
     return dict(find(bbox, pad_deg), picked=False)
+
+
+# buoy networks on ERDDAP servers (Ireland's Marine Institute, ...): they register themselves
+from . import obserddap  # noqa: E402,F401

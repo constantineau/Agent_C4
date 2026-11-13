@@ -106,6 +106,7 @@ services:
       COASTLINE_GLOBAL: ${COASTLINE_GLOBAL:-gshhg}  # global backstop dataset: gshhg (full-res) | natural_earth
       GSHHG_RES: ${GSHHG_RES:-f}            # GSHHG resolution f(ull)|h|i|l|c — full = all sub-nm islands
       ENC_CACHE: /srv/enc                   # NOAA ENC cells + extracted GeoJSON (prep-time GDAL)
+      DEPTH_GRIDS: ${DEPTH_GRIDS:-}         # depth grids: empty = built-in; "default,etopo" adds the world grid (#309)
       PLAYBOOK_DIR: /srv/playbooks          # Lab-2b: frozen, signed playbook bundles (onboard homework)
       # forecast plume: every router model along the planned route, one snapshot per new cycle
       # (48 h kept). PLUME_PUSH=1 also sends it to the Pi engine's POST /plume/load (the Deploy

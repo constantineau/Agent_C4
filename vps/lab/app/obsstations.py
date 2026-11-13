@@ -10,6 +10,9 @@ Great Lakes list; this module finds stations anywhere from two public catalogues
   - NDBC (buoys, C-MAN, coastal stations): NDBC's station table. Observations come from NDBC's
     historical + realtime files (modelskill.fetch_ndbc_window).
 
+  - other networks registered in obsarea (#309), e.g. buoys on an ERDDAP server (obserddap.py):
+    asked only inside their own water; they read their own observations.
+
 The curated list stays as the preference: a curated station in range is marked `curated` and
 ticked by default. Each source is a small object with `find(lat, lon, radius_nm)` so a regional
 network (another country's buoys) can be added as one more source later: a first step toward the
@@ -184,7 +187,36 @@ class CuratedSource:
         return out
 
 
+class AreaSource:
+    """Another network registered in obsarea (#309, e.g. a buoy network on ERDDAP), asked only
+    inside its own coverage. Lists past stations too (`find_all`) with their last report date, so
+    a study window can use them."""
+
+    def __init__(self, src):
+        self.src = src
+        self.name, self.kind = src.label, src.kind
+
+    def find(self, lat, lon, radius_nm):
+        dlat = radius_nm / 60.0
+        dlon = dlat / max(0.1, abs(math.cos(math.radians(lat))))
+        box = (lat + dlat, lat - dlat, lon - dlon, lon + dlon)
+        if not self.src.covers_bbox(box):
+            return []
+        out = []
+        for s in getattr(self.src, "find_all", self.src.find)(box):
+            d = venue._haversine_nm(lat, lon, s["lat"], s["lon"])
+            if d <= radius_nm:
+                out.append(dict(s, dist_nm=round(d, 1), source=self.name))
+        return out
+
+
 SOURCES = [CuratedSource(), IemMetarSource(), NdbcSource()]
+
+
+def area_sources():
+    """obsarea's other networks (not METAR or NDBC, which have their own lists here)."""
+    from . import obsarea
+    return [AreaSource(src) for src in obsarea.SOURCES.values() if src.kind not in ("metar", "ndbc")]
 
 
 # ------------------------------------------------------------------------------------- probing
@@ -213,7 +245,7 @@ def discover(lat, lon, radius_nm, window=None, sources=None, probe_fn=None, max_
     None when no window). Curated stations win a duplicate id. A source that fails is noted, not
     fatal. Returns {stations: [...], notes: [...]}. `ticked` marks the default choice: curated
     stations with data, plus the nearest of each kind with data."""
-    sources = SOURCES if sources is None else sources
+    sources = SOURCES + area_sources() if sources is None else sources
     probe_fn = probe_fn or probe
     end = time.monotonic() + (DEADLINE_S if deadline_s is None else deadline_s)
     found, notes = {}, []
@@ -240,7 +272,8 @@ def discover(lat, lon, radius_nm, window=None, sources=None, probe_fn=None, max_
             elif not found[dk].get("tz") and s.get("tz"):
                 found[dk]["tz"] = s["tz"]        # our KAPN keeps Iowa State's clock for APN
     picks = []
-    for kind in ("metar", "ndbc"):
+    kinds = ("metar", "ndbc", *sorted({s["kind"] for s in found.values()} - {"metar", "ndbc"}))
+    for kind in kinds:
         same = sorted((s for s in found.values() if s["kind"] == kind),
                       key=lambda s: (not s.get("curated"), s["dist_nm"]))
         if window:
@@ -263,7 +296,7 @@ def discover(lat, lon, radius_nm, window=None, sources=None, probe_fn=None, max_
             notes.append(f"{len(late)} station(s) not checked in time. You can still tick them.")
     ex.shutdown(wait=False, cancel_futures=True)
     out = sorted(picks, key=lambda s: s["dist_nm"])
-    for kind in ("metar", "ndbc"):
+    for kind in kinds:
         with_data = [s for s in out if s["kind"] == kind and (not window or s.get("obs"))]
         for s in with_data:
             if s.get("curated"):
