@@ -267,9 +267,9 @@ print("6) a fallback world grid (ETOPO: heights from sea level) vs a lake grid (
 from types import SimpleNamespace as _NS  # noqa: E402
 
 
-def _grid(name, depths, fallback=False):
+def _grid(name, depths, fallback=False, full=None):
     return _NS(name=name, label=name, navigational=False, fallback=fallback,
-               cells=lambda *a, **k: (list(depths), [1] * len(depths)))
+               cells=lambda *a, **k: (list(depths), list(full or [1] * len(depths))))
 
 
 def _field(n):
@@ -289,6 +289,13 @@ check("open sea with only the world grid: its depth counts", fl.mask[1] == 0 and
 check("well above sea level in the world grid: a lake, so no depth data, not a shoal",
       fl.mask[2] == 0 and fl.nodepth[2] == 1)
 check("a drying bank just above sea level still blocks", fl.mask[3] == 1)
+# a regional grid covering only PART of the cell: the world grid's shoal in the rest still blocks
+part = _grid("lake", [40.0, 40.0], full=[0, 0])
+w2 = _grid("etopo_x", [1.0, -170.0], fallback=True)
+fp = _field(2)
+OB._apply_grids(fp, [part, w2], 2.6, None)
+check("part-covered by the regional grid: the world grid's 1 m shoal still blocks", fp.mask[0] == 1)
+check("part-covered, world grid well above sea level: still not a shoal", fp.mask[1] == 0)
 check("the fallback flag is in the grid's cache key",
       D.GridSource(dict(SPEC, fallback=True)).data_version != D.GridSource(SPEC).data_version)
 check("ETOPO tiles are fallback grids", all(t["fallback"] for t in D.etopo_tiles()))

@@ -804,18 +804,18 @@ def _apply_grids(field, grids, safety_depth, cache_dir, chart_polys=()) -> bool:
     shoal = 0
     any_depth = False
     primary = [t for t in got if not getattr(t[0], "fallback", False)]
-    backup = [t for t in got if getattr(t[0], "fallback", False)]
     for i in range(field.nx * field.ny):
         if charted[i]:
             continue
         best, who = None, None                  # shallowest anywhere / its grid, if it is full
-        # a fallback grid (a world grid, heights from sea level) speaks only where no other grid
-        # has a value, and not for a cell well above sea level: that is a lake whose surface
-        # isn't at sea level, so its bed height is not a depth (Codex on #350)
-        use = primary if any(depths[i] is not None for _g, depths, _f in primary) else backup
-        for g, depths, full in use:
+        # a fallback grid (a world grid, heights from sea level) is ignored where another grid
+        # covers the WHOLE cell, and never speaks for a cell well above sea level: that is a lake
+        # whose surface isn't at sea level, so its bed height is not a depth. Where other grids
+        # cover only part of the cell its shoals still count (Codex on #350)
+        whole = any(depths[i] is not None and full[i] for _g, depths, full in primary)
+        for g, depths, full in (primary if whole else got):
             d = depths[i]
-            if d is None or (use is backup and d < -FALLBACK_DRY_M):
+            if d is None or (getattr(g, "fallback", False) and d < -FALLBACK_DRY_M):
                 continue
             any_depth = True
             if best is None or d < best:
