@@ -1011,6 +1011,84 @@ async def chart_override(rid: str, body: dict):
             "chart_overrides": course.get("chart_overrides") or {}}
 
 
+def _race_bbox(definition):
+    """(n, s, w, e) around every course of the race (each padded as the playbook pads it), or None."""
+    from . import optimizer
+    boxes = [b for b in (optimizer.course_bbox(definition, c.get("id"))
+                         for c in definition.get("courses") or [] if isinstance(c, dict)) if b]
+    if not boxes:
+        return None
+    return (max(b[0] for b in boxes), min(b[1] for b in boxes),
+            min(b[2] for b in boxes), max(b[3] for b in boxes))
+
+
+@app.post("/api/races/{rid}/stations/find")
+def race_stations_find(rid: str):
+    """Weather stations around the race's courses for the Lab to pick from (obsarea.finder):
+    {stations: [{id, kind, name, lat, lon, dist_nm, source, auto}], notes, picked}. `picked` is
+    the race's saved picks (null = automatic)."""
+    from . import obsarea
+    d = store.get_race(rid)
+    if not d:
+        return JSONResponse({"detail": "unknown race"}, status_code=404)
+    out = obsarea.finder(_race_bbox(d))
+    out["picked"] = obsarea.picks(d)
+    return out
+
+
+@app.post("/api/races/{rid}/stations/lookup")
+def race_stations_lookup(rid: str, body: dict):
+    """One station by id (curated list, then each area source): {station} or 404."""
+    from . import obsarea
+    d = store.get_race(rid)
+    if not d:
+        return JSONResponse({"detail": "unknown race"}, status_code=404)
+    bbox = _race_bbox(d)
+    near = ((bbox[0] + bbox[1]) / 2.0, (bbox[2] + bbox[3]) / 2.0) if bbox else None
+    st = obsarea.lookup((body or {}).get("id"), near=near)
+    if not st:
+        return JSONResponse({"detail": "No station with that id."}, status_code=404)
+    return {"station": st}
+
+
+@app.post("/api/races/{rid}/stations/check")
+def race_stations_check(rid: str, body: dict):
+    """Live check: has each station reported wind in the last few hours (what the playbook freeze
+    keeps)? Body {stations: [{id, kind}]}, at most 30. Returns {live: {id: bool}}."""
+    from . import synthesis
+    rows = (body or {}).get("stations") or []
+    if not isinstance(rows, list):
+        return JSONResponse({"detail": "stations must be a list."}, status_code=422)
+    sts = [{"id": str(s.get("id") or "").upper(), "kind": s.get("kind")}
+           for s in rows[:30] if isinstance(s, dict) and s.get("id")]
+    return {"live": synthesis.probe_live(sts)}
+
+
+@app.post("/api/races/{rid}/stations")
+async def race_stations_save(rid: str, body: dict):
+    """Save the race's weather-station picks. Body {picked: [{id, kind, lat, lon, name}]} or
+    {picked: null} to go back to automatic. Only this route changes them (see _write_race)."""
+    from . import obsarea
+    d = store.get_race(rid)
+    if not d:
+        return JSONResponse({"detail": "unknown race"}, status_code=404)
+    rows = (body or {}).get("picked")
+    if rows is not None and not isinstance(rows, list):
+        return JSONResponse({"detail": "picked must be a list, or null for automatic."},
+                            status_code=422)
+    block = obsarea.clean_picks(rows, limit=None)
+    if block and len(block["picked"]) > obsarea.MAX_PICKS:
+        # refused, not trimmed: the card keeps the ticks unsaved and says why (Codex on #346)
+        return JSONResponse({"detail": f"Pick {obsarea.MAX_PICKS} stations at most."},
+                            status_code=422)
+    if block is None:
+        d.pop("stations", None)
+    else:
+        d["stations"] = block
+    _write_race(d, stations=True)
+    return {"saved": True, "race_id": rid, "stations": d.get("stations")}
+
+
 @app.get("/api/playbooks")
 async def playbooks_list():
     return {"playbooks": pbstore.list_bundles()}
@@ -1366,12 +1444,12 @@ async def retro_upload(def_race_id: str, race_id: str = None,
     d = store.get_race(def_race_id)
     if not d:
         return JSONResponse({"detail": "That race isn't in the library."}, status_code=404)
-    got, total = [], 0
+    got, left = [], trackers.MAX_FILE_BYTES
     for f in files:
-        raw = await f.read()
-        total += len(raw)
-        if total > trackers.MAX_FILE_BYTES:
+        raw = await f.read(left + 1)          # never more than the limit + 1 byte into memory
+        if len(raw) > left:
             return JSONResponse({"detail": "File too big."}, status_code=413)
+        left -= len(raw)
         got.append((f.filename or "track", raw))
     try:
         res = await run_in_threadpool(retro.ingest_file, (race_id or "").strip() or def_race_id,
@@ -2054,16 +2132,24 @@ def _keep_rating_config(definition, prior):
         definition["venue_country"] = prior["venue_country"]
 
 
-def _write_race(definition, draft=False, overrides=False, report=None):
+def _write_race(definition, draft=False, overrides=False, report=None, stations=False):
     """Persist a RaceDefinition. A preserved field is restored from the stored copy when the save
     omits the key, or — for a re-ingest `draft` only — sends it empty. An ordinary save that sends
     an empty value (the user cleared the notes / emptied the roster) is stored as sent.
 
     A course's chart overrides (#242) are only ever changed by the chart-override route
     (`overrides=True`). Every other save keeps the stored ones, whatever it sends: a tab saving a
-    copy of the race from before an override (or a removal) can't undo it (Codex on #287)."""
+    copy of the race from before an override (or a removal) can't undo it (Codex on #287).
+
+    The race's weather-station picks (`stations`) work the same way: only the stations route
+    (`stations=True`) changes them, so a re-ingest or another tab's save keeps them."""
     rid = re.sub(r"[^a-z0-9_-]", "", str(definition.get("race_id", "")).lower())
     prior = store.get_race(rid)
+    if not stations:
+        if (prior or {}).get("stations"):
+            definition["stations"] = prior["stations"]
+        else:
+            definition.pop("stations", None)
     if not overrides:
         kept = {c.get("id"): c.get("chart_overrides") for c in (prior or {}).get("courses") or []
                 if isinstance(c, dict) and c.get("chart_overrides")}

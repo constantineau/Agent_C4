@@ -14,6 +14,20 @@ declares its area, like the wind models in wind/models.py:
 
 A kind with no source for the area gets a plain note, never another area's stations. Lookups are
 cached in memory for a day. Network reads go through `_get` (stubbed in tests).
+
+A race can pick its own stations in the Lab (Races > Weather stations). `finder()` lists every
+station the sources know around the course, with `auto` on the ones `find()` would pick; `lookup()`
+resolves one id. The picks are saved on the race definition as
+
+    stations: {"picked": [{id, kind, lat, lon, name, source?}, ...]}
+
+(absent or null = automatic; `picked: []` = no stations). `race_stations()` is what the playbook
+uses: the picks when the race has them, else `find()`.
+
+Adding a source (e.g. a UK buoy network): subclass StationSource with `kind`, `label`, `coverage`,
+`find(box)` and `lookup(sid)`, then `register()` it. The finder, the automatic list and the Lab card
+pick it up with no other change. The boat reads only the kinds in READABLE_KINDS live; a new kind
+needs a reader aboard (vps/agent/app/buoys.py) and a live probe (synthesis) before it is frozen.
 """
 from __future__ import annotations
 
@@ -26,12 +40,16 @@ import xml.etree.ElementTree as ET
 from . import venue
 
 _AWC_STATIONS = "https://aviationweather.gov/api/data/stationinfo?format=json&bbox={s},{w},{n},{e}"
+_AWC_STATION_ID = "https://aviationweather.gov/api/data/stationinfo?format=json&ids={sid}"
 _NDBC_ACTIVE = "https://www.ndbc.noaa.gov/activestations.xml"
 _UA = {"User-Agent": "Agent_C4-C4PerformanceLab/1.0"}
 
 CACHE_S = 24 * 3600
 PAD_DEG = 0.6             # around the course box: catches the stations just off the course
 MAX_PER_KIND = 10         # found (not curated) stations kept per kind, nearest the course first
+FINDER_PER_SOURCE = 15    # the Lab's finder lists a few more per source than the automatic pick
+MAX_PICKS = 20            # stations a race can pick
+READABLE_KINDS = ("metar", "ndbc")    # kinds the boat reads live (and the freeze can probe)
 _cache: dict = {}
 
 
@@ -78,6 +96,15 @@ class StationSource:
         """[{id, kind, lat, lon, name}] inside box=(n, s, w, e)."""
         raise NotImplementedError
 
+    def lookup(self, sid):
+        """{id, kind, lat, lon, name} for one station id, or None (default: search the whole
+        coverage box with find)."""
+        if self.coverage is None:
+            return None
+        cs, cn, cw, ce = self.coverage
+        sid = str(sid).upper()
+        return next((st for st in self.find((cn, cs, cw, ce)) if st["id"] == sid), None)
+
 
 class CuratedSource(StationSource):
     name, label = "curated", "Curated stations"
@@ -106,6 +133,19 @@ class AwcMetarSource(StationSource):
             return out
         return _cached(f"awc:{n},{s},{w},{e}", load)
 
+    def lookup(self, sid):
+        sid = str(sid).upper()
+
+        def load():
+            body = _get(_AWC_STATION_ID.format(sid=sid))
+            for r in (json.loads(body) if (body or "").strip() else []) or []:
+                rid = str(r.get("icaoId") or r.get("id") or "").upper()
+                if rid == sid and r.get("lat") is not None and r.get("lon") is not None:
+                    return {"id": sid, "kind": "metar", "lat": float(r["lat"]),
+                            "lon": float(r["lon"]), "name": r.get("site") or sid}
+            return None
+        return _cached(f"awc_id:{sid}", load)
+
 
 def ndbc_active():
     """Every active NDBC station that reports weather (met="y"): [{id, kind, lat, lon, name}]."""
@@ -133,7 +173,20 @@ class NdbcSource(StationSource):
 
 
 CURATED = CuratedSource()
+# The area sources, by name. `find` (automatic picks), `finder` (the Lab list) and `lookup` (add by
+# id) all walk this registry in order, so a new source shows up everywhere once registered.
 SOURCES = {"metar": AwcMetarSource(), "ndbc": NdbcSource()}
+
+
+def register(source):
+    """Add an area source (a StationSource with a unique `name`)."""
+    SOURCES[source.name] = source
+    return source
+
+
+def kinds():
+    """Every station kind a source can return."""
+    return {"metar", "ndbc"} | {src.kind for src in SOURCES.values() if src.kind}
 
 
 def _pad(bbox, pad_deg):
@@ -154,10 +207,9 @@ def find(bbox, pad_deg=PAD_DEG, max_per_kind=MAX_PER_KIND):
     n, s, w, e = bbox
     clat, clon = (n + s) / 2.0, (w + e) / 2.0
     out, notes = [], []
-    for kind in ("metar", "ndbc"):
-        if any(st["kind"] == kind for st in curated):
+    for src in SOURCES.values():
+        if any(st["kind"] == src.kind for st in curated):
             continue
-        src = SOURCES[kind]
         if not src.covers_bbox(bbox):
             notes.append(src.not_here_note())
             continue
@@ -192,3 +244,121 @@ def nearest(lat, lon, kind, max_nm):
         if d <= max_nm and (bd is None or d < bd):      # within the promised radius (Codex #343)
             best, bd = st, d
     return dict(best, dist_nm=round(bd, 1), source=src.name) if best else None
+
+
+# ------------------------------------------------------------------- the Lab's finder + race picks
+def _key(st):
+    return (st.get("kind"), str(st.get("id", "")).upper())
+
+
+def finder(bbox, pad_deg=PAD_DEG, per_source=FINDER_PER_SOURCE):
+    """Every station the sources know around a course box, for the Lab to pick from: the curated
+    ones in range and up to `per_source` from each area source, nearest the course centre first.
+    Each row: {id, kind, name, lat, lon, dist_nm, source, auto}; `auto` marks what `find()` picks
+    (what the race uses with no picks). Returns {stations, notes}."""
+    if not bbox:
+        return {"stations": [], "notes": ["No marks with a position yet."]}
+    auto = find(bbox, pad_deg)
+    auto_keys = {_key(st) for st in auto["stations"]}
+    box = _pad(bbox, pad_deg)
+    n, s, w, e = bbox
+    clat, clon = (n + s) / 2.0, (w + e) / 2.0
+    dist = lambda st: venue._haversine_nm(clat, clon, st["lat"], st["lon"])   # noqa: E731
+    rows = {}
+    for st in CURATED.find(box):
+        rows.setdefault(_key(st), dict(st, source="curated"))
+    notes = []
+    for src in SOURCES.values():
+        if not src.covers_bbox(bbox):
+            notes.append(src.not_here_note())
+            continue
+        try:
+            got = src.find(box)
+        except Exception:          # noqa: BLE001 — one list down must not hide the others
+            notes.append(f"{src.label}: could not load the station list.")
+            continue
+        for st in sorted(got, key=dist)[:per_source]:
+            rows.setdefault(_key(st), dict(st, source=src.name))
+    out = []
+    for k, st in rows.items():
+        out.append({"id": str(st["id"]).upper(), "kind": st["kind"], "name": st.get("name") or st["id"],
+                    "lat": st["lat"], "lon": st["lon"], "dist_nm": round(dist(st), 1),
+                    "source": st.get("source"), "auto": k in auto_keys})
+    out.sort(key=lambda st: st["dist_nm"])
+    return {"stations": out, "notes": notes}
+
+
+def lookup(sid, near=None):
+    """One station by id from the curated list, then each area source, or None. `near` = (lat, lon)
+    adds `dist_nm`. Best-effort: a source that can't load is skipped."""
+    sid = str(sid or "").strip().upper()
+    if not sid or len(sid) > 16:
+        return None
+    hit = next((dict(st, source="curated") for st in venue.STATIONS if st["id"].upper() == sid), None)
+    if not hit:
+        for src in SOURCES.values():
+            try:
+                st = src.lookup(sid)
+            except Exception:      # noqa: BLE001
+                st = None
+            if st:
+                hit = dict(st, source=src.name)
+                break
+    if not hit:
+        return None
+    out = {"id": sid, "kind": hit["kind"], "name": hit.get("name") or sid, "lat": hit["lat"],
+           "lon": hit["lon"], "source": hit.get("source")}
+    if near:
+        out["dist_nm"] = round(venue._haversine_nm(near[0], near[1], hit["lat"], hit["lon"]), 1)
+    return out
+
+
+def clean_pick(row):
+    """A picked station as stored on the race ({id, kind, lat, lon, name, source?}), or None when
+    it is not a usable station."""
+    try:
+        sid = str(row["id"]).strip().upper()
+        lat, lon = float(row["lat"]), float(row["lon"])
+        kind = str(row["kind"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not sid or len(sid) > 16 or not all(c.isalnum() or c in "-_" for c in sid):
+        return None
+    if kind not in kinds() or not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        return None
+    out = {"id": sid, "kind": kind, "lat": lat, "lon": lon,
+           "name": str(row.get("name") or sid)[:80]}
+    if row.get("source"):
+        out["source"] = str(row["source"])[:40]
+    return out
+
+
+def clean_picks(rows, limit=MAX_PICKS):
+    """The race's `stations` block from a list of picked rows (bad rows dropped, one per id, at
+    most MAX_PICKS). None = automatic."""
+    if rows is None:
+        return None
+    out, seen = [], set()
+    for r in rows if isinstance(rows, list) else []:
+        c = clean_pick(r) if isinstance(r, dict) else None
+        if c and _key(c) not in seen:
+            seen.add(_key(c))
+            out.append(c)
+    return {"picked": out if limit is None else out[:limit]}
+
+
+def picks(definition):
+    """The race's picked stations (a list, maybe empty), or None when the race uses automatic."""
+    block = (definition or {}).get("stations")
+    if not isinstance(block, dict) or not isinstance(block.get("picked"), list):
+        return None
+    return [c for c in (clean_pick(r) for r in block["picked"] if isinstance(r, dict)) if c]
+
+
+def race_stations(definition, bbox, pad_deg=PAD_DEG):
+    """The stations a race's playbook uses: its picks when it has them (no network), else the
+    automatic `find()`. Returns {stations, notes, picked}."""
+    p = picks(definition)
+    if p is not None:
+        return {"stations": p, "notes": [], "picked": True}
+    return dict(find(bbox, pad_deg), picked=False)

@@ -113,24 +113,27 @@ def _name_key(name):
 
 
 def stable_ids(fleet: dict, existing: list) -> None:
-    """Give each uploaded boat the id it already has in the archive, matched by sail number,
-    else by name; a new boat gets the next unused id. Rewrites the fleet's teams, tracks and
+    """Give each uploaded boat the id it already has in the archive, matched by sail number
+    (all of those first), then by name; a new boat gets the next unused id. Rewrites the fleet's teams, tracks and
     results in place. Without this the ids follow the file's order, and a re-upload in another
     order would hand each boat another boat's polar and scores."""
     by_sail = {_sail_key(e.get("sail")): e["team_id"] for e in existing if _sail_key(e.get("sail"))}
     by_name = {_name_key(e.get("boat")): e["team_id"] for e in existing if _name_key(e.get("boat"))}
     nxt = max([e["team_id"] for e in existing] + [0]) + 1
     used, remap = set(), {}
+    # every sail-number match is reserved before any name match, so the file's row order can't
+    # let a boat matched by name take an id another boat holds by its sail number
+    for key_of, table in ((lambda t: _sail_key(t.get("sail")), by_sail),
+                          (lambda t: _name_key(t.get("name")), by_name)):
+        for t in fleet["teams"]:
+            key = key_of(t)
+            if t["id"] in remap or not key or table.get(key) is None or table[key] in used:
+                continue
+            remap[t["id"]] = table[key]
+            used.add(table[key])
     for t in fleet["teams"]:
-        tid = None
-        for key, table in ((_sail_key(t.get("sail")), by_sail), (_name_key(t.get("name")), by_name)):
-            if key and table.get(key) is not None and table[key] not in used:
-                tid = table[key]
-                break
-        if tid is None:
-            tid, nxt = nxt, nxt + 1
-        used.add(tid)
-        remap[t["id"]] = tid
+        if t["id"] not in remap:
+            remap[t["id"]], nxt = nxt, nxt + 1
     for t in fleet["teams"]:
         t["id"] = remap[t["id"]]
     fleet["tracks"] = {remap[k]: v for k, v in fleet["tracks"].items()}
