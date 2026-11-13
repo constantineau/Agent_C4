@@ -264,7 +264,10 @@ check("M5 read too", by["M5"].get("tws_kn") == 9.0)
 check("kind kept on the row, source named", by["M3"]["kind"] == "ie_buoy"
       and "erddap_buoys" in r["based"])
 buoys._fetch = ie_fetch(AssertionError("cached"))
-check("cached ~10 min: no second call", buoys.get_buoys()["stations"][0].get("tws_kn") == 12.0)
+n_sent = len(IE_SENT)
+again = buoys.get_buoys()["stations"][0].get("tws_kn")
+check("cached ~10 min: no second call", len(IE_SENT) == n_sent and again == 12.0,
+      (len(IE_SENT), n_sent, again))
 
 stub(boat=(51.217, -10.5), nav_brg=0.0, stations=IE)
 buoys._fetch = ie_fetch(ie_csv(IE_ROWS, unit="m/s"))
