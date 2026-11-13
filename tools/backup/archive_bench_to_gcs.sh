@@ -10,8 +10,8 @@
 # Compress locally first so the upload can be integrity-checked before AND after it leaves.
 set -euo pipefail
 
-if [[ -z ${C4_BENCH_PROJECT:-} ]]; then
-  C4_BENCH_PROJECT=$(sed -n 's/^C4_BENCH_PROJECT=//p' "$(dirname "$0")/../../.env" 2>/dev/null | tail -1 | tr -d "\"'")
+if [[ -z ${SRC:-} && -z ${C4_BENCH_PROJECT:-} && -f "$(dirname "$0")/../../.env" ]]; then
+  C4_BENCH_PROJECT=$(sed -n 's/^C4_BENCH_PROJECT=//p' "$(dirname "$0")/../../.env" | tail -1 | tr -d "\"'")
 fi
 SRC=${SRC:-/var/lib/docker/volumes/${C4_BENCH_PROJECT:-c4-bench}_sk_archive/_data/archive.db}
 STAGE=${STAGE:?set STAGE to a local staging directory}
