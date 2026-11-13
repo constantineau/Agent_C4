@@ -485,10 +485,16 @@ def forecast_series(lat, lon, sd, ed, model, year, include_deep=False):
 
 
 def obs_series(station, sd, ed, deadline=None):
-    """Observed wind for a window from the venue station (METAR range, or NDBC historical/realtime).
-    `deadline` bounds the wait for a METAR request (Find stations)."""
+    """Observed wind for a window from the venue station (METAR range, NDBC historical/realtime, or
+    the station's own network when an obsarea source reads it, #309). `deadline` bounds the wait
+    for a METAR request (Find stations)."""
     if station["kind"] == "ndbc":
         return fetch_ndbc_window(station["id"], sd, ed)
+    if station["kind"] != "metar":
+        from . import obsarea
+        src = obsarea.source_for_kind(station["kind"])
+        if src is not None and hasattr(src, "observed"):
+            return src.observed(station["id"], sd, ed)
     return fetch_metar(station["id"], sd, ed, deadline=deadline)
 
 

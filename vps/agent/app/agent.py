@@ -83,7 +83,9 @@ def build_system_prompt(prof, guide, rated):
     kite = kites[0] if kites else "kite"
     return _SYSTEM_TEMPLATE.format(
         navigator=f"{short} AI Navigator" if short else "AI Navigator",
-        boat_id=prof.get("boat_id") or os.environ.get("BOAT_ID") or BOAT_ID,
+        # the yacht by its own name (#315: "the C&C 35 Mk I racing yacht 'Bravo'"), else its id
+        yacht=(boat_words.describe(prof) if any(boat_words.parts(prof)) else
+               "the racing yacht " + (prof.get("boat_id") or os.environ.get("BOAT_ID") or BOAT_ID)),
         coaching=_coaching(short, guide, sails, kite))
 
 
@@ -105,7 +107,7 @@ def system_blocks():
 
 
 _SYSTEM_TEMPLATE = """You are the {navigator} — navigator, coach, and data historian
-for the racing yacht {boat_id}. You answer the crew over a shared chat thread during
+for {yacht}. You answer the crew over a shared chat thread during
 distance races and practice.
 
 Ground every factual claim in the tools; never invent telemetry. Always note data

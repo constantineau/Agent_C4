@@ -5,6 +5,7 @@ A race definition's `tracker.provider` picks the provider. Each one answers thre
   - `entries(definition)`     — the fleet entry list (who's racing), for the Fleet tab import.
   - `boat_track(definition, boat)` — OUR boat's sailed track, for the debrief.
   - `fleet(ref, definition)`  — every boat's track (+ entries, results when known), for the retro.
+  - `live(definition)`        — each boat's latest position, for the Monitor's fleet map.
 
 Providers:
 
@@ -35,9 +36,10 @@ from . import track as track_mod
 YB_NAMES = ("yb", "ybtracking", "yellowbrick", "bycmack")
 FILE_NAMES = ("file", "upload", "gpx", "csv")
 
+NO_FILE_LIVE = "No live positions: this race uses a fleet file, and none is uploaded yet."
 NO_FILE = "No fleet file for this race yet. Upload one in Debrief, Fleet retro."
 FILE_HINT = "Upload the fleet tracks: GPX or CSV."
-GPX_NO_ZONE = "GPX times have no zone. Set the race's time zone."
+GPX_NO_ZONE = track_mod.GPX_NO_ZONE
 NO_TIMES = "No fixes with a usable time. Times need a zone, or set the race's time zone."
 
 
@@ -70,6 +72,10 @@ class YB:
     @staticmethod
     def fleet(race_id, definition=None):
         return yb_fleet(race_id)
+
+    @staticmethod
+    def live(definition, get_json=None):
+        return yb_live(definition, get_json)
 
 
 class File:
@@ -116,6 +122,24 @@ class File:
     def fleet(race_id, definition=None):
         return {"ok": False, "note": FILE_HINT}
 
+    @staticmethod
+    def live(definition, get_json=None):
+        """Each boat's last position in the uploaded fleet file. A file is never live: the Monitor
+        ages these fixes like any other, so an old file reads as not live."""
+        rid = (definition or {}).get("race_id")
+        rows = rs.get_entries(rid) if rid else []
+        if not rows:
+            return {"ok": False, "note": NO_FILE_LIVE}
+        fixes = []
+        for e in rows:
+            last = next((f for f in reversed(rs.get_track(rid, e["team_id"]) or [])
+                         if f.get("t") is not None), None)
+            if last and (e.get("boat") or "").strip():
+                fixes.append({"name": e["boat"].strip(), "lat": last["lat"], "lon": last["lon"],
+                              "sog": last.get("sog"), "cog": last.get("cog"), "time": last["t"],
+                              "dtf_nm": None})
+        return {"ok": True, "fixes": fixes, "note": "" if fixes else "No positions in the fleet file."}
+
 
 _PROVIDERS = {**{n: YB for n in YB_NAMES}, **{n: File for n in FILE_NAMES}}
 
@@ -137,6 +161,27 @@ def entries(definition):
     return p.entries(definition)
 
 
+def live(definition, get_json=None):
+    """Each boat's latest position from the race's tracker, for the Monitor:
+    {"ok", "fixes": [{name, lat, lon, sog, cog, time, dtf_nm}], "note", "label", "fetches"}.
+    A tracker the Lab can't read, or none set, gets a plain note and no fixes."""
+    prov = provider_name(definition)
+    p = get(prov)
+    if p is None:
+        return {"ok": False, "fixes": [], "label": prov or None, "fetches": False,
+                "note": no_live_note(prov)}
+    out = p.live(definition, get_json)
+    out.setdefault("fixes", [])
+    out.update(label=p.label, fetches=p.fetches)
+    return out
+
+
+def no_live_note(prov: str) -> str:
+    if not prov or prov == "sample":
+        return "No tracker set for this race."
+    return f"No live positions from {prov}. Upload a fleet file in Debrief, Fleet retro."
+
+
 def boat_track(definition, boat=None):
     """Our boat's track from the race's tracker, or a plain note why not."""
     prov = provider_name(definition)
@@ -145,6 +190,54 @@ def boat_track(definition, boat=None):
         return {"ok": False, "note": (f"Can't read {prov} tracks. Upload our GPX." if prov
                                       and prov != "sample" else "No tracker set for this race.")}
     return p.boat_track(definition, boat)
+
+
+# ---- YB: latest positions (the Monitor; was monitor._fleet's YB half) -------------------------
+def yb_live_url(cfg):
+    url = (cfg.get("url") or "").strip()
+    if url:
+        return url
+    race = (cfg.get("race") or "").strip()
+    if not race:
+        return None
+    host = (cfg.get("host") or "cf.yb.tl").strip()
+    return f"https://{host}/API3/Race/{race}/GetPositions?t=0"
+
+
+def parse_yb_positions(payload):
+    """GetPositions → each boat's newest fix."""
+    teams = payload.get("teams") if isinstance(payload, dict) else None
+    if not teams:
+        return []
+    fixes = []
+    for tm in teams:
+        ps = (tm or {}).get("positions") or []
+        if not ps:
+            continue
+        p = max(ps, key=lambda x: x.get("gpsAtMillis") or 0)   # newest fix for this boat
+        lat, lon = p.get("latitude"), p.get("longitude")
+        if lat is None or lon is None:
+            continue
+        ms = p.get("gpsAtMillis")
+        fixes.append({"name": tm.get("name"), "lat": lat, "lon": lon, "sog": p.get("sogKnots"),
+                      "cog": p.get("cog"), "time": (ms / 1000.0 if ms else None),
+                      "dtf_nm": p.get("dtfNm")})
+    return fixes
+
+
+def yb_live(definition, get_json=None):
+    cfg = (definition or {}).get("tracker") or {}
+    url = yb_live_url(cfg)
+    if not url:
+        return {"ok": False, "note": "No YB race id set for this race."}
+    try:
+        payload = (get_json or track_mod._yb_get)(url)
+    except Exception as e:
+        return {"ok": False, "note": f"Tracker fetch failed: {type(e).__name__}"}
+    if isinstance(payload, dict) and payload.get("error") and not payload.get("teams"):
+        return {"ok": False, "note": "Race not live on the tracker yet."}
+    fixes = parse_yb_positions(payload)
+    return {"ok": True, "fixes": fixes, "note": "" if fixes else "No positions yet."}
 
 
 # ---- YB: the full fleet (was retro.ingest_race's fetch half) ----------------------------------
@@ -258,21 +351,11 @@ def _local(tag):
 
 
 def _gpx_time(text, tz_name, stem):
-    """A GPX <time> as epoch seconds. GPX times are UTC ('Z') by spec; one with no zone is read
-    in the race's time zone, never the server's, and refused when the race has none. Unreadable
-    text is None (the fix is dropped)."""
-    from datetime import datetime
-    s = (text or "").strip()
+    """A GPX <time> as epoch seconds (`track.gpx_time`), the refusal naming the file."""
     try:
-        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        return track_mod.gpx_time(text, tz_name)
     except ValueError:
-        return None
-    if dt.tzinfo is not None:
-        return dt.timestamp()
-    t = race_def._gun_epoch(s, tz_name)
-    if t is None:
         raise ValueError(f"{stem}: {GPX_NO_ZONE}")
-    return t
 
 
 def _gpx_tracks(data: bytes, stem: str, tz_name: str = ""):

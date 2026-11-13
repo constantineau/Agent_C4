@@ -14,7 +14,23 @@ What it asserts, for every surface:
 
 No network: the forecast is a synthetic two-model wind field, the shoreline is a fixture box for
 the Isle of Wight, the current/wave builders run for real (the Channel is open-sea water,
-but no forecast reaches a race this far ahead, so they say none without fetching).
+but no forecast reaches a race this far ahead, so they say none without fetching). The US-only
+sources are checked to say "outside coverage" offline: LMHOFS and GLWU by their water masks, NOAA
+ENC against a stubbed US-only cell catalog, HRRR by its area.
+
+The race: Europe/London time zone, a fleet-file tracker (not YB), no ORC column named. The boat:
+Bravo's ORC cert polar; the playbook runs Bravo with a synthetic sail model of its own (G1, A2,
+S2) so its sail calls can be checked by name.
+
+The 9 assertions of #315, by test (the Pi engine's are in the onboard file):
+  1 route on Bravo's polar, says no current / waves / depth   test_route_*
+  2 playbook: every route on Bravo's polar, its sails, its boat model, the data block
+                                                              test_playbook_*
+  3 debrief scored against Bravo's polar                      test_debrief_*
+  4 gun time in the race's zone; none is a review error       test_gun_*
+  5 fleet ratings: "rating column unknown"                    test_fleet_ratings_say_which_number
+  7 Orin re-route on Bravo's polar and boat id                test_orin_*
+  9 Lab prompts never say SR33                                test_lab_prompts_never_say_sr33
 
 Parts that fail on today's dev are strict expected failures, each naming the ticket that fixes it.
 When a fix lands, its xfail turns into an unexpected pass and this file FAILS: the fixer removes
@@ -112,6 +128,8 @@ RACE = {
     "rules_profile": {"rrs_edition": "2025-2028", "tracker_permitted": False},
     "timezone": "Europe/London", "division_starts": {"IRC 2": "2027-05-25T07:00:00"},
     "own": {"division": "IRC 2"},
+    # not YB: the fleet's tracks come from a file the user uploads (#310). No ORC column is named.
+    "tracker": {"provider": "file"},
     "courses": [{
         "id": "c", "name": "Channel triangle",
         "start": {"type": "point", "lat": 50.30, "lon": -1.30},
@@ -174,6 +192,68 @@ judge._oracle_windfield = lambda bbox, start, t_end, models, race_id, log: (
     fake_windfield(bbox, start, t_end), "forecast")
 boats.set_active("bravo")
 
+# ---- Bravo with its own sail model (#315 Setup: "a different sail inventory (G1, A2, S2)") --------
+# The cert has no per-sail curves, so the test gives Bravo a synthetic sail model written as its OWN
+# polar files (genoa G1 up to 100° TWA, asym A2 to 145°, sym S2 below), in a boat-data dir of
+# its own. Same boat id, same envelope (the cert): the playbook routes and calls sails on it.
+from shared import boat_polar as BP  # noqa: E402
+
+BRAVO_SAILS_DIR = os.path.join(_tmp, "boatdata")
+os.makedirs(BRAVO_SAILS_DIR)
+_ZONES = (("G1", "Genoa (G1)", 0.0, 100.0), ("A2", "Asym A2", 100.0, 145.0),
+          ("S2", "Symmetric kite (S2)", 145.0, 180.0))
+
+
+def _write_bravo_sails():
+    cert = [list(map(float, r)) for r in BRAVO["cert_polar"]]
+    tws = sorted({r[0] for r in cert})
+    beat = {t: min(r[1] for r in cert if r[0] == t) for t in tws}
+    xo = {"boat_id": "bravo", "source": "test: synthetic sail model",
+          "sail_names": {n: label for n, label, _a, _b in _ZONES},
+          "inventory": [n for n, *_ in _ZONES], "tws_buckets": [int(t) for t in tws],
+          "crossovers": {str(int(t)): [{"sail": n, "short": n, "label": label,
+                                        "twa_min": max(lo, beat[t]), "twa_max": hi}
+                                       for n, label, lo, hi in _ZONES] for t in tws},
+          "overlaps": {}}
+    # each sail is the cert inside its zone, 10% off it outside: the envelope stays the cert
+    sp = {"boat_id": "bravo", "sails": {n: [[t, a, round(v * (1.0 if lo <= a <= hi else 0.9), 3)]
+                                            for t, a, v in cert] for n, _l, lo, hi in _ZONES}}
+    for name, obj in (("bravo_test_envelope.json", cert), ("bravo_test_crossovers.json", xo),
+                      ("bravo_test_sail_polars.json", sp)):
+        with open(os.path.join(BRAVO_SAILS_DIR, name), "w") as f:
+            json.dump(obj, f)
+
+
+_write_bravo_sails()
+# the boat-data dirs the Lab already reads stay (so an sr33 lookup would still find, and the guard
+# catch, sr33's files); Bravo's own dir comes first
+os.environ["BOAT_DATA_DIR"] = os.pathsep.join((BRAVO_SAILS_DIR,) + tuple(BP.data_dirs()))
+BRAVO_SAILS = dict(copy.deepcopy(BRAVO), sail_inventory=["G1", "A2", "S2"], loa_m=10.7,
+                   polar_files={"envelope": "bravo_test_envelope.json",
+                                "sail_polars": "bravo_test_sail_polars.json",
+                                "crossovers": "bravo_test_crossovers.json"})
+BRAVO_SAILS_POLAR = BP.resolve(BRAVO_SAILS)
+assert BRAVO_SAILS_POLAR and BRAVO_SAILS_POLAR["crossovers"] and BRAVO_SAILS_POLAR["sail_polars"]
+BRAVO_POLAR = BP.resolve(BRAVO)
+BRAVO_SAIL_NAMES = {"G1", "A2", "S2"}
+
+
+@contextlib.contextmanager
+def routes_seen():
+    """Every optimizer.optimize_course call inside the block: (boat polar block, wind field)."""
+    from app import optimizer
+    real, calls = optimizer.optimize_course, []
+
+    def spy(*a, **kw):
+        calls.append((kw.get("boat_polar"), a[3] if len(a) > 3 else kw.get("wf")))
+        return real(*a, **kw)
+
+    optimizer.optimize_course = spy
+    try:
+        yield calls
+    finally:
+        optimizer.optimize_course = real
+
 # observation station lists (#309), offline: a small fake of aviationweather.gov's station list
 # (answering for the asked box) and NDBC's active table. The live probes say every station reports.
 from app import obsarea  # noqa: E402
@@ -232,16 +312,55 @@ def xfail(ticket, why):
 # ==== 1. Lab route (the Optimize button) =========================================================
 @pytest.fixture(scope="module")
 def route():
-    with watch() as seen:
+    with watch() as seen, routes_seen() as calls:
         r = main._run_optimize(RACE, "c", T0, MODELS, 0)
-    return r, seen
+    return r, seen, calls
 
 
 def test_route_runs_for_bravo(route):
-    r, _ = route
+    r = route[0]
     assert r.get("available") is not False, r.get("note")
     assert r.get("complete") and r.get("total_hours")
     assert (r.get("boat") or {}).get("boat_id") == "bravo"
+
+
+def test_route_is_on_bravos_polar(route):
+    """#315 (1): the route says, and the optimizer was handed, Bravo's own polar."""
+    r, _, calls = route
+    assert (r.get("polar") or {}).get("boat_id") == "bravo", r.get("polar")
+    assert r["polar"]["version"] == BRAVO_POLAR["version"]
+    assert calls and all((bp or {}).get("version") == BRAVO_POLAR["version"] for bp, _wf in calls)
+
+
+def _seg_speed_ratios(path, wf):
+    """For each step of a routed path: speed made good / Bravo's polar speed at the wind there."""
+    from shared import polar as SPOL
+    from app import optimizer
+    pts = [tuple(map(float, p)) for p in BRAVO["cert_polar"]]
+    out = []
+    for a, b in zip(path, path[1:]):
+        dt_h = (b["t"] - a["t"]) / 3600.0
+        w = wf.wind_at(a["lat"], a["lon"], a["t"])
+        if dt_h <= 0 or not w:
+            continue
+        hdg = optimizer._bearing(a["lat"], a["lon"], b["lat"], b["lon"])
+        twa = abs(((hdg - w[1] + 180.0) % 360.0) - 180.0)
+        v = SPOL.lookup(pts, w[0], twa)
+        if v > 0.5:
+            out.append(optimizer._hav_nm(a["lat"], a["lon"], b["lat"], b["lon"]) / dt_h / v)
+    return out
+
+
+def test_route_leg_speed_is_bravos(route):
+    """#315 (1), spot-check: the boat speed along the first leg is Bravo's polar speed at the wind
+    the router saw (no current, no waves, helm 1.0), not sr33's or anyone else's."""
+    r, _, calls = route
+    wf = calls[0][1]
+    leg_end = next(i for i, p in enumerate(r["path"]) if p["t"] >= r["legs"][0]["eta_epoch"])
+    ratios = sorted(_seg_speed_ratios(r["path"][:leg_end + 1], wf))
+    assert len(ratios) >= 5, ratios
+    med = ratios[len(ratios) // 2]
+    assert 0.95 <= med <= 1.03, (med, ratios)
 
 
 def test_route_text_has_no_sr33_or_bayview(route):
@@ -328,6 +447,69 @@ def test_route_result_says_hrrr_not_here():
     assert "HRRR: not here (US only)." in ((r.get("data") or {}).get("notes") or []), r.get("data")
 
 
+def test_lmhofs_and_glwu_say_outside_coverage():
+    """#315 Setup / #308: the Great Lakes models (LMHOFS currents, GLWU waves) report "outside
+    coverage" on the Channel and are never asked for data, even for a window they would have. The
+    global sources are stubbed to have nothing (no network)."""
+    import time
+    from app import current, optimizer, seasource, wave
+    bbox = optimizer.course_bbox(RACE, "c")
+    gl = [s for s in current.SOURCES + wave.SOURCES if re.search(r"LMHOFS|GLWU", s.name)]
+    assert len(gl) == 2, [s.name for s in gl]
+    for src in gl:
+        assert seasource.share(src, bbox) < seasource.COVER_MIN, src.name
+    assert not set(gl) & set(seasource.pick(current.SOURCES, bbox) + seasource.pick(wave.SOURCES, bbox))
+    asked = []
+    for src in current.SOURCES + wave.SOURCES:      # an instance attribute shadows the method
+        src.fetch = (lambda bb, a, b, log, _n=src.name: asked.append(_n))
+    try:
+        now = int(time.time())
+        cur = current.build_currentfield(bbox, now, now + 6 * 3600)
+        wav = wave.build_wavefield(bbox, now, now + 6 * 3600)
+    finally:
+        for src in current.SOURCES + wave.SOURCES:
+            del src.fetch
+    assert not [n for n in asked if n in {s.name for s in gl}], asked
+    assert not cur.loaded and not wav.loaded
+    block = seasource.data_block(cur, wav, RACE, bbox)
+    assert block["current"].startswith("none:") and block["waves"].startswith("none:"), block
+    assert block["warning"] == seasource.TIDAL_WARNING, block      # tidal water, no current
+    # a race that names its water as the Great Lakes models do would get them: the stub is real
+    assert seasource.pick(current.SOURCES, (45.9, 45.6, -84.9, -84.3)), "LMHOFS mask not loaded"
+
+
+# a NOAA ENC catalog with only US cells (Great Lakes and Florida): nothing touches the Channel
+_US_ENC = {"US4MI1AM": {"bbox": [46.1, 45.7, -85.0, -84.3], "url": "https://enc.invalid/a.zip",
+                        "band": "4"},
+           "US4FL1BM": {"bbox": [26.5, 25.9, -80.3, -79.9], "url": "https://enc.invalid/b.zip",
+                        "band": "4"}}
+
+
+def test_route_with_noaa_charts_says_no_depth_data():
+    """#315 Setup / #292: the Lab set to NOAA ENC charts. The Channel is outside ENC coverage: no
+    cell is downloaded, the route runs on the global shoreline and says depths were not checked."""
+    from app import routerun
+    from app.geo import enc
+    real_index, real_get = enc.cell_index, enc._ensure_cell_s57
+    downloads = []
+    enc.cell_index = lambda cache_dir=None, refresh=False: dict(_US_ENC)
+    enc._ensure_cell_s57 = lambda cell, cache_dir: downloads.append(cell["name"])
+    try:
+        assert enc.cells_for_bbox((50.6, 49.9, -1.6, -0.5)) == []
+        with watch() as seen:
+            r = routerun.run_course(RACE, "c", T0, MODELS, boat=load_bravo(), chart_source="enc",
+                                    briefing=False, grids=False)
+    finally:
+        enc.cell_index, enc._ensure_cell_s57 = real_index, real_get
+    assert seen == [] and downloads == []
+    assert r.get("available") is not False, r.get("note")
+    # no chart covers the water: each leg is listed "No depth data: check the paper chart" (#242),
+    # never passed as checked, never refused
+    notes = {n.get("code"): n for n in (r.get("safety") or {}).get("notes") or []}
+    assert "no_depth" in notes and notes["no_depth"]["legs"], r.get("safety")
+    assert re.search(r"no depth data", notes["no_depth"]["text"].lower()), notes
+
+
 def test_boat_without_polar_refuses_plainly():
     """A profile with no polar must not borrow sr33's: the run says there is no polar."""
     from app import routerun
@@ -341,23 +523,67 @@ def test_boat_without_polar_refuses_plainly():
 # ==== 2. Lab playbook (Gameplan synthesis, the frozen bundle) ======================================
 @pytest.fixture(scope="module")
 def bundle():
-    kw = dict(jib_crossovers=main._active_jibs(), sail_config=main._active_sails(),
-              helm_factor=boats.active_helm_factor(), polar_adjustments=main._active_adjustments(),
+    """The playbook for Bravo with its own sail model (G1 / A2 / S2), as the Lab's job snapshots
+    the boat and its polar together."""
+    kw = dict(jib_crossovers=BRAVO_SAILS["jib_crossovers"], sail_config=boats.sail_config(BRAVO_SAILS),
+              helm_factor=boats.helm_factor(BRAVO_SAILS), polar_adjustments=main._active_adjustments(),
               wave_coeffs=main._active_wave(), use_waves=True, fan_depth="quick",
-              chart=main._playbook_chart())
-    with watch() as seen:
+              chart=main._playbook_chart(), boat=BRAVO_SAILS, boat_polar=BRAVO_SAILS_POLAR)
+    with watch() as seen, routes_seen() as calls:
         b = synthesis.synthesize(RACE, "c", T0, MODELS, 0, time_budget_s=60, **kw)
-    return b, seen
+    return b, seen, calls
 
 
 def test_playbook_builds_for_bravo(bundle):
-    b, _ = bundle
+    b = bundle[0]
     assert b.get("available", True) is not False, b.get("note")
     assert b.get("variants") and b.get("consensus", {}).get("total_hours")
 
 
 def test_playbook_bundle_is_bravos(bundle):
-    assert (bundle[0].get("boat_model") or {}).get("boat_id") == "bravo"
+    bm = bundle[0].get("boat_model") or {}
+    assert bm.get("boat_id") == "bravo" and bm.get("name") == "Bravo"
+    assert (bm.get("polar") or {}).get("version") == BRAVO_SAILS_POLAR["version"], bm.get("polar")
+    assert set(bm.get("sail_inventory") or []) == BRAVO_SAIL_NAMES, bm.get("sail_inventory")
+
+
+def test_playbook_every_route_on_bravos_polar(bundle):
+    """#315 (2): every route behind the playbook (variants, scenario plays, pace checks) was
+    routed on Bravo's polar block, and nothing else."""
+    calls = bundle[2]
+    assert len(calls) >= 3, len(calls)
+    versions = {(bp or {}).get("version") for bp, _wf in calls}
+    assert versions == {BRAVO_SAILS_POLAR["version"]}, versions
+
+
+def _sails_named(b):
+    """Every sail name the bundle puts in front of the crew: variant sail plans, legs, plays."""
+    names = set()
+    for v in b.get("variants") or []:
+        names |= {s.get("sail") for s in v.get("sail_plan") or [] if s.get("sail")}
+        names |= {l.get("sail") for l in (v.get("route") or {}).get("legs") or [] if l.get("sail")}
+    names |= {l.get("sail") for l in (b.get("consensus") or {}).get("legs") or [] if l.get("sail")}
+    for p in b.get("plays") or []:
+        prm = p.get("params") or {}
+        names |= {prm.get(k) for k in ("hoisted", "change_to") if prm.get(k)}
+    return names
+
+
+def test_playbook_sails_are_bravos(bundle):
+    """#315 (2): sail plans and sail plays use Bravo's sail names (G1, A2, S2), never sr33's J1/A3/S1."""
+    names = _sails_named(bundle[0])
+    assert names, "the playbook named no sail at all"
+    assert names <= BRAVO_SAIL_NAMES, names
+
+
+def test_playbook_bundle_carries_data_block(bundle):
+    """#315 (2): the bundle and every variant carry the data-source block, in words."""
+    b = bundle[0]
+    d = b.get("data") or {}
+    assert d.get("current", "").startswith("none:") and d.get("waves", "").startswith("none:"), d
+    assert isinstance(d.get("notes"), list) and d["notes"], d
+    for v in b.get("variants") or []:
+        assert (v.get("data") or {}).get("current", "").startswith("none:"), (v["id"], v.get("data"))
 
 
 def test_playbook_opens_no_sr33_file(bundle):
@@ -421,7 +647,7 @@ def test_debrief_targets_are_bravos(scored):
 def tactics(bundle):
     pb = bundle[0]
     with watch() as seen:
-        tac = judge._tactics(RACE, RID, pb, None, lambda *_: None, boat=load_bravo())
+        tac = judge._tactics(RACE, RID, pb, None, lambda *_: None, boat=copy.deepcopy(BRAVO_SAILS))
     return tac, seen
 
 
@@ -458,9 +684,9 @@ def _orin_request():
 
 
 def _orin_run(job):
-    with watch() as seen:
+    with watch() as seen, routes_seen() as calls:
         out = job.run(_orin_request(), is_online=lambda: False)
-    return out, seen
+    return out, seen, calls
 
 
 @pytest.fixture(scope="module")
@@ -470,10 +696,17 @@ def orin_bravo():
 
 
 def test_orin_routes_bravo(orin_bravo):
-    out, _ = orin_bravo
+    out = orin_bravo[0]
     assert out.get("available"), out.get("note")
     assert (out.get("boat") or {}).get("boat_id") == "bravo"
     assert out.get("legs")
+
+
+def test_orin_routes_on_bravos_polar(orin_bravo):
+    """#315 (7): the Orin's optimizer was handed Bravo's polar, and the result says so."""
+    out, _, calls = orin_bravo
+    assert (out.get("polar") or {}).get("boat_id") == "bravo", out.get("polar")
+    assert calls and {(bp or {}).get("version") for bp, _wf in calls} == {BRAVO_POLAR["version"]}
 
 
 def test_orin_says_no_chart(orin_bravo):
@@ -497,7 +730,7 @@ def test_orin_unconfigured_boat_never_falls_back_to_sr33():
         if "REROUTE_BOAT" not in str(exc):    # but only a refusal that names it
             raise
         return
-    out, seen = _orin_run(job)
+    out, seen, _calls = _orin_run(job)
     assert seen == []
     assert not no_sr33_text(out)
     if out.get("available"):
@@ -566,14 +799,88 @@ def test_fleet_ratings_say_which_number():
 
 
 def test_gun_without_timezone_is_flagged():
+    """#315 (4): a local gun time with no time zone is a review ERROR and never read as UTC."""
     d = copy.deepcopy(RACE)
     d.pop("timezone")
     r = racestart.resolve(d, None, now=T0 - 86400)
     errs = race_def.validate(d)[0]
-    assert ("zone" in (r.get("note") or "").lower() or r.get("source") != "race_start"
-            or any("zone" in str(e).lower() for e in errs)), (r, errs)
+    assert any("zone" in str(e).lower() for e in errs), errs
+    assert r["source"] != "race_start" and r["race_start"] is None, r
+    assert "zone" in (r.get("note") or "").lower(), r
+    assert racestart.race_start(d) is None          # not 07:00Z (a UTC guess), not 06:00Z
 
 
 def test_gun_with_timezone_is_local():
     """Europe/London in May is UTC+1: the 07:00 gun is 06:00Z."""
     assert racestart.resolve(RACE, None, now=T0 - 86400)["epoch"] == T0
+
+
+# ==== 6. Tracker: not YB (#310) ===================================================================
+def test_tracker_is_the_races_own_never_yb():
+    """The race names a non-YB tracker (a fleet file). Entries and the boat's track come from it
+    and say plainly there is no file yet; YB is never fetched. An unknown tracker is said plainly."""
+    from app import track, trackers
+    fetched = []
+    real = track._yb_get
+    track._yb_get = lambda url, raw=False: fetched.append(url)
+    try:
+        assert trackers.get(RACE) is trackers.File
+        e, t = trackers.entries(RACE), trackers.boat_track(RACE, "Bravo")
+        other = dict(copy.deepcopy(RACE), tracker={"provider": "tractrac"})
+        e2 = trackers.entries(other)
+    finally:
+        track._yb_get = real
+    assert fetched == []
+    assert e == {"ok": False, "note": trackers.NO_FILE} and t == {"ok": False, "note": trackers.NO_FILE}
+    assert e2 == {"ok": False, "note": trackers.unknown_note("tractrac")}, e2
+
+
+# ==== 7. Prompts built for Bravo (#306) ===========================================================
+def test_lab_prompts_never_say_sr33(route, bundle, scored):
+    """#315 (9): every frontier prompt the Lab builds for Bravo's race (variant synthesis, plays,
+    route briefing, debrief critique) says nothing of SR33 / C4. The model is stubbed: each call
+    is recorded, then fails, so the deterministic fallbacks run."""
+    from app import llm, optimizer
+    sent = []
+
+    def fake(system, user, max_tokens=4000):
+        sent.append(system + "\n" + user)
+        raise RuntimeError("no model in this test")
+
+    b = bundle[0]
+    real = llm.complete
+    keys = {m: m.API_KEY for m in (synthesis, judge, optimizer)}
+    llm.complete = fake
+    for m in keys:
+        m.API_KEY = "test-only"
+    try:
+        pb2a = {"consensus": b["consensus"], "agreement": b.get("agreement"),
+                "decision_spread_min": b.get("decision_spread_min"), "n_scenarios": 1,
+                "variants": [{"side": v["id"], "label": v["name"], "total_hours": v.get("total_hours")}
+                             for v in b["variants"]]}
+        made = {}
+
+        def run(name, fn, *a):
+            n0 = len(sent)
+            fn(*a)
+            made[name] = len(sent) - n0
+
+        run("variants", synthesis._opus_synthesis, pb2a, RACE, "c", RACE["name"])
+        plays = [p for p in b.get("plays") or [] if p.get("divergence") and "params" in p]
+        # a fixed play if the bundle has none, so the plays prompt is always built and checked
+        plays = plays or [{"id": "p1", "name": "Wind shifts right early", "params": {"shift_deg": 10},
+                           "divergence": {"delta_eta_min": 6.0, "xte_mean_nm": 1.2},
+                           "favored_side": "right"}]
+        run("plays", synthesis._play_synthesis,
+            [dict(p, narrative_seed=p.get("narrative_seed") or "") for p in plays],
+            b.get("corridor") or {}, "reaching", RACE["name"])
+        run("briefing", optimizer.briefing, route[0], RACE["name"])
+        run("critique", judge._critique, {"race_name": RACE["name"], "tactics_available": False,
+                                          "actual_track": scored[0]})
+    finally:
+        llm.complete = real
+        for m, k in keys.items():
+            m.API_KEY = k
+    assert all(made.get(k) for k in ("variants", "plays", "briefing", "critique")), made
+    for text in sent:
+        assert not re.search(r"sr33|\bC4\b|bayview", text, re.I), text[:400]

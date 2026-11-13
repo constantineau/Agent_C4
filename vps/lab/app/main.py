@@ -663,7 +663,13 @@ def venue_study_run(body: dict):
                         **({"tz": s["tz"]} if s.get("tz") else {})})
         except (KeyError, TypeError, ValueError):
             continue
-    sts = [s for s in sts if s["kind"] in ("metar", "ndbc")]
+    from . import obsarea
+
+    def _readable(kind):
+        # METAR and NDBC have their own readers; any other kind needs its source's reader (#309)
+        src = obsarea.source_for_kind(kind)
+        return kind in ("metar", "ndbc") or (src is not None and hasattr(src, "observed"))
+    sts = [s for s in sts if _readable(s["kind"])]
     if not sts:
         return JSONResponse({"detail": "Tick at least one station."}, status_code=400)
     if len(sts) > 8:
@@ -1520,11 +1526,13 @@ async def debrief_track_get(race_id: str, recording: float = None):
 
 @app.post("/api/debrief/track/upload")
 async def debrief_track_upload(race_id: str, file: UploadFile = File(...)):
-    if not store.get_race(race_id):
+    d = store.get_race(race_id)
+    if not d:
         return JSONResponse({"detail": "unknown race"}, status_code=404)
     raw = await file.read()
     try:
-        trk = await run_in_threadpool(track.parse_gpx, raw)
+        # times with no zone are read in the race's zone, never the server's (#310)
+        trk = await run_in_threadpool(track.parse_gpx, raw, d.get("timezone") or "")
     except ValueError as e:
         return JSONResponse({"detail": str(e)}, status_code=400)
     meta = await run_in_threadpool(track.save_track, race_id, trk)

@@ -10,6 +10,12 @@ and the boat id every engine module files data under.
 Assertions: no sr33 file is opened while serving Bravo (audit hook on open()), the numbers are
 Bravo's, no "SR33" in what Bravo's crew is told, and nothing falls back to boat id "sr33".
 
+#315's assertions here: 6 (targets, % of polar, sail advice are Bravo's; no bundle → "No boat
+polar loaded"), 8 (no engine module starts without a boat id; the other services' halves are
+test_boat_id_required.py, vps/ingestion/test_ingest_boat_id.py, pi/*/test_boat_id.py,
+pi/orin/reroute/test_reroute_boat.py, shared/test_boat_id.py) and 9 (the coach, the summary
+writer and the Orin copilot name Bravo, never SR33).
+
 Parts that fail on today's dev are strict expected failures naming the ticket that fixes each;
 the fix turns its xfail into an unexpected pass, which fails this file until the marker goes. The
 fixer may adapt the deploy step to the real interface, keeping the assertions.
@@ -198,6 +204,73 @@ def test_coach_prompt_is_bravos():
     text = " ".join(b.get("text", "") for b in agent.SYSTEM_BLOCKS)
     assert seen == []
     assert "sr33" not in text.lower()
+    assert "Bravo" in text, text[:300]          # #315 (9): the prompt names the boat it is for
+
+
+def test_summary_prompt_is_bravos(monkeypatch):
+    """#315 (9): the crew summary/debrief writer names Bravo and never SR33 (Anthropic stubbed)."""
+    import anthropic
+    from app import summarizer
+    sent = []
+
+    class _Msgs:
+        def create(self, **kw):
+            sent.append(kw)
+            return type("R", (), {"content": []})()
+
+    monkeypatch.setattr(anthropic, "Anthropic", lambda **kw: type("C", (), {"messages": _Msgs()})())
+    with watch() as seen:
+        summarizer._llm_narrative({"window": "test"}, "debrief")
+    assert seen == [] and sent
+    prompt = sent[0]["system"] + json.dumps(sent[0]["messages"])
+    assert "Bravo" in prompt and not re.search(r"sr33|\bC4\b", prompt, re.I), prompt
+
+
+# ==== #315 (6): a Pi with NO bundle and nothing deployed =========================================
+_NO_BUNDLE_PROBE = r"""
+import json, os, sys
+sys.path.append(sys.argv[1])
+from fastapi.testclient import TestClient
+from app import datasource, tools
+import engine_app
+c = TestClient(engine_app.app)
+print(json.dumps({
+    "rows": datasource.active().polars_stw(),
+    "target": tools.get_polar_target(12, 90),
+    "sail": c.get("/sail", params={"tws": 11, "twa": 60}).json(),
+}))
+"""
+
+
+def test_no_bundle_tiles_say_no_polar():
+    """A fresh Bravo Pi (BOAT_ID=bravo) with no playbook and no Deploy push: no polar rows, and
+    the targets and sail tiles say plainly there is no polar. Never sr33's numbers."""
+    env = dict(os.environ, BOAT_ID="bravo", DATA_SOURCE="onboard", ONBOARD_LIVE_WS="false")
+    fresh = tempfile.mkdtemp()
+    env["ENGINE_DB"] = os.path.join(fresh, "engine", "engine.db")
+    env["ARCHIVE_DB"] = os.path.join(fresh, "archive", "archive.db")
+    env.pop("POLARS_FILE", None)
+    env["PYTHONPATH"] = os.pathsep.join([os.path.join(REPO, "vps", "agent"), REPO, ENGINE_DIR])
+    p = subprocess.run([sys.executable, "-c", _NO_BUNDLE_PROBE, ENGINE_DIR], env=env,
+                       capture_output=True, text=True, timeout=120)
+    assert p.returncode == 0, p.stderr[-800:]
+    out = json.loads(p.stdout.strip().splitlines()[-1])
+    plain = (boat_polar.NO_POLAR_ABOARD, boat_polar.NO_POLAR)
+    assert out["rows"] == [], out["rows"][:3]
+    assert out["target"] == {"available": False, "note": boat_polar.NO_POLAR_ABOARD}, out["target"]
+    assert out["sail"].get("available") is False and out["sail"].get("note") in plain, out["sail"]
+    assert not re.search(r"sr33", json.dumps(out), re.I), out
+
+
+def test_targets_are_bravos():
+    """#315 (6): the engine's polar target (the targets / % of polar tile) reads Bravo's polar."""
+    from app import tools
+    with watch() as seen:
+        got = [(tws, twa, tools.get_polar_target(tws, twa))
+               for tws, twa in ((8, 52), (12, 90), (16, 135))]
+    assert seen == []
+    for tws, twa, t in got:
+        assert t["available"] and abs(t["target_stw"] - SPOL.target(POLAR, tws, twa)) < 0.05, t
 
 
 # ==== #313: Bravo's own kit (sensor priority, house bank, Orin, plotter) ==========================

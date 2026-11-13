@@ -1,8 +1,9 @@
 """Monitor — shore-side live view during the race.
 
 Two sources, both shore-side (the boat itself uses the onboard console):
-  - FLEET: the permitted public race tracker (YB Tracking / cf.yb.tl) — the whole fleet, delayed;
-    every fix carries its own timestamp so the UI can age it. Shore-side viewing of a public tracker
+  - FLEET: the race's tracker, through its provider (`trackers.live`, #310): a public feed such
+    as YB, delayed, or the last positions in an uploaded fleet file (never live). Every fix
+    carries its own timestamp so the UI can age it. Shore-side viewing of a public tracker
     is always fine — the onboard-use gate (`rules_profile.tracker_permitted`) is a separate, in-race
     concern, surfaced here only as a note.
   - OWN BOAT: our boat's live position + instruments from the cloud agent (the uplinked telemetry),
@@ -16,11 +17,11 @@ import urllib.request
 
 from shared import race_def
 
+from . import trackers
+
 _TIMEOUT = float(os.environ.get("MONITOR_TIMEOUT_S", "8"))
 _AGENT_URL = os.environ.get("AGENT_URL", "http://agent:8000").rstrip("/")
 _BOAT_PASSWORD = os.environ.get("BOAT_PASSWORD", "")
-
-_YB_PROVIDERS = ("yb", "bycmack", "ybtracking", "yellowbrick")
 
 # How old the NEWEST fleet fix may be before the Monitor stops calling the fleet live. A public
 # tracker runs ~15 min behind and boats ping every 10-30 min, so a healthy feed's newest fix is
@@ -35,36 +36,6 @@ def _http_json(url, data=None, headers=None, timeout=None):
     req = urllib.request.Request(url, data=data, headers=headers or {})
     with urllib.request.urlopen(req, timeout=timeout or _TIMEOUT) as r:
         return json.loads(r.read().decode())
-
-
-def _yb_url(cfg):
-    url = (cfg.get("url") or "").strip()
-    if url:
-        return url
-    race = (cfg.get("race") or "").strip()
-    if not race:
-        return None
-    host = (cfg.get("host") or "cf.yb.tl").strip()
-    return f"https://{host}/API3/Race/{race}/GetPositions?t=0"
-
-
-def _parse_yb(payload):
-    teams = payload.get("teams") if isinstance(payload, dict) else None
-    if not teams:
-        return []
-    fixes = []
-    for tm in teams:
-        ps = (tm or {}).get("positions") or []
-        if not ps:
-            continue
-        p = max(ps, key=lambda x: x.get("gpsAtMillis") or 0)   # newest fix for this boat
-        lat, lon = p.get("latitude"), p.get("longitude")
-        if lat is None or lon is None:
-            continue
-        ms = p.get("gpsAtMillis")
-        fixes.append({"name": tm.get("name"), "lat": lat, "lon": lon, "sog": p.get("sogKnots"),
-                      "cog": p.get("cog"), "time": (ms / 1000.0 if ms else None), "dtf_nm": p.get("dtfNm")})
-    return fixes
 
 
 def freshness(fixes, now=None):
@@ -145,25 +116,11 @@ def _fleet(definition, demo=False):
         base.update(fixes=fixes, provider="sample",
                     reason="demo fixture" if fixes else "demo needs a course with positions")
         return base
-    prov = (cfg.get("provider") or "").lower()
-    if prov not in _YB_PROVIDERS:
-        base["reason"] = "no public tracker configured for this race"
-        return base
-    url = _yb_url(cfg)
-    if not url:
-        base["reason"] = "tracker has no race id / url"
-        return base
-    try:
-        payload = _http_json(url)
-    except Exception as e:
-        base["reason"] = f"tracker fetch failed: {type(e).__name__}"
-        return base
-    if isinstance(payload, dict) and payload.get("error") and not payload.get("teams"):
-        base["reason"] = "race not live yet (tracker dormant)"
-        return base
-    base["fixes"] = _parse_yb(payload)
-    if not base["fixes"]:
-        base["reason"] = "no positions yet"
+    # the race's tracker provider (#310): YB fetches live; a fleet file shows its last positions;
+    # any other tracker says plainly it has no live positions here
+    res = trackers.live(definition, get_json=lambda url: _http_json(url))
+    base.update(fixes=res.get("fixes") or [], reason=res.get("note") or "",
+                label=res.get("label"), live=bool(res.get("fetches")))
     return base
 
 

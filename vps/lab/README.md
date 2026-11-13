@@ -90,6 +90,9 @@ Dual input → Opus extraction → a **draft** RaceDefinition → human review �
   `obsarea.register()`: it then shows in the finder, add-by-id and the automatic list with no UI
   change. The boat reads only `metar` and `ndbc` live (`obsarea.READABLE_KINDS`); a new kind needs
   a reader aboard before the freeze keeps it.
+  Outside US water: **Irish buoys** (Marine Institute, `app/obserddap.py`, kind `ie_buoy`) cover
+  Irish waters. Any buoy network on an ERDDAP server is one `ErddapBuoySource(...)` there. They feed
+  the finder, venue skill and venue studies (their own observations), not the boat's live list.
 - **Course loader (homework→onboard)**: `shared.race_def.course_to_marks()` flattens a course
   (gates/finish → midpoints; un-geocoded marks skipped + reported) and `POST /course/load` (cloud
   agent AND onboard engine) writes + activates it.
@@ -135,6 +138,10 @@ cheap.
   (DEPARE or DRGARE, deep or shallow) covers the water. NOAA ENC is US-only, so Canadian water has
   none: a leg through water no depth area covers is NOT refused (Cole's decision) but listed in
   `notes` (`no_depth`, with the legs), and the Lab shows "No depth data: check the paper chart."
+  Depth grids fill water no chart covers (`app/geo/depthsrc.py`, #292): the Great Lakes grids by
+  default; `DEPTH_GRIDS=default,etopo` adds NOAA's coarse ETOPO 2022 world grid (opt-in, one
+  5-30 MB tile per 15 degrees, downloaded only for tiles a race touches). Its legs say "Depths from
+  ETOPO world grid (coarse), not a chart: check the paper chart."
   Routing on Natural Earth / GSHHG alone (no ENC asked for) is still refused. A
   playbook bundle carries one verdict over its main route, options and route plays
   (`routesafety.bundle_verdict`); **freeze, lock-in, Deploy push and GPX refuse** unless it is ok, and

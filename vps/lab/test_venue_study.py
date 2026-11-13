@@ -414,6 +414,21 @@ far = client.post("/api/venue-study/run", headers=H, json={
     "stations": [{"id": s_["id"], "kind": s_["kind"], "lat": s_["lat"], "lon": s_["lon"]} for s_ in FL_ST]})
 check("stations from another place are refused (the pin moved after Find stations)",
       far.status_code == 400 and "Find stations again" in far.json()["detail"])
+from app import jobs as _jobs  # noqa: E402
+_start, _seen = _jobs.start, {}
+_jobs.start = lambda kind, work, meta=None, **k: (_seen.setdefault("meta", meta), {"ok": True, "job_id": "x"})[1]
+try:
+    ieb = client.post("/api/venue-study/run", headers=H, json={
+        "lat": 51.2, "lon": -10.0, "radius_nm": 40, "month": 8,
+        "stations": [{"id": "M3", "kind": "ie_buoy", "lat": 51.2166, "lon": -10.55}]})
+    check("a station from a registered network with a reader can be run (#309)",
+          ieb.status_code == 200 and "meta" in _seen, ieb.text)
+    odd = client.post("/api/venue-study/run", headers=H, json={
+        "lat": 51.2, "lon": -10.0, "radius_nm": 40, "month": 8,
+        "stations": [{"id": "Q1", "kind": "no_such_kind", "lat": 51.2, "lon": -10.0}]})
+    check("a kind nothing can read: a plain 400", odd.status_code == 400 and "Tick" in odd.json()["detail"])
+finally:
+    _jobs.start = _start
 before = venuestudy.load(st["key"])
 before_w = modelskill.load_scores(st["key"])
 _fc = modelskill.fetch_forecast
