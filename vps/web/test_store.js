@@ -2,7 +2,7 @@
 // Pins: a value under the old key is carried over (the iPad keeps its login across the deploy);
 // the new key wins when both exist; writes go to the new key only and leave the old one for a
 // rollback; a sign-out clears BOTH keys, so a reload stays signed out instead of the old key
-// bringing the token back. store.js and app.js are browser scripts: they run here in a vm with
+// bringing the token back. app.js is a browser script: they run here in a vm with
 // Map-backed storage, and a "reload" is a fresh vm over the same storage.
 // Run: node vps/web/test_store.js (no deps; tools/ci/run.sh runs it in node:22-alpine).
 "use strict";
@@ -25,7 +25,7 @@ function storage(init) {
 
 function el() { return { style: {}, textContent: "", value: "", dataset: {} }; }
 
-/* One page load: store.js then app.js, as index.html orders them. */
+/* One page load: app.js (it carries the storage helper), as index.html loads it. */
 function page(local, session, extra) {
   const els = {};
   const ctx = Object.assign({
@@ -36,7 +36,7 @@ function page(local, session, extra) {
   }, extra || {});
   ctx.window = { addEventListener() {}, C4_ONBOARD: false };
   vm.createContext(ctx);
-  for (const f of ["store.js", "app.js"])
+  for (const f of ["app.js"])
     vm.runInContext(fs.readFileSync(path.join(PUB, f), "utf8"), ctx, { filename: f });
   vm.runInContext("start = function () {};", ctx);   // the live app is not under test here
   return { ctx: ctx, els: els, App: vm.runInContext("App", ctx) };
@@ -111,13 +111,15 @@ function test(name, fn) {
     vm.runInContext("C4Store.local.set('x', '1'); C4Store.session.remove('token');", p.ctx);
   });
 
-  await test("only store.js names the old prefix; index.html loads it before the app", () => {
-    for (const f of ["app.js", "sail.js", "plot.js"])
+  await test("only app.js's storage helper names the old prefix; no separate helper file", () => {
+    const app = fs.readFileSync(path.join(PUB, "app.js"), "utf8");
+    const outside = app.replace(/\/\* c4-store:begin \*\/[\s\S]*?\/\* c4-store:end \*\//, "");
+    assert.ok(!/sr33/i.test(outside), "app.js outside the helper");
+    for (const f of ["sail.js", "plot.js"])
       assert.ok(!/sr33/i.test(fs.readFileSync(path.join(PUB, f), "utf8")), f);
-    const html = fs.readFileSync(path.join(PUB, "index.html"), "utf8");
-    const i = html.indexOf('src="/store.js"');
-    assert.ok(i > 0 && i < html.indexOf('src="/app.js"') && i < html.indexOf('src="/sail.js"')
-      && i < html.indexOf('src="/plot.js"'));
+    // an older cached index.html loads config, sun, app, sail, plot: the helper must ride in app.js
+    assert.ok(app.indexOf("var C4Store") < app.indexOf("const App"));
+    assert.ok(!fs.existsSync(path.join(PUB, "store.js")));
   });
 
   console.log(n + " passed");

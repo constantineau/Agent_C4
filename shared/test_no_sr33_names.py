@@ -63,7 +63,7 @@ ALLOWED = [
      "in-container data paths (PR C)"),
     (["pi/systemd/*", "pi/orin/*"], UNIT, "systemd units and their config paths (PR D)"),
     (["pi/systemd/sr33-orin-copilot.service"], ORIN_HOME, "Orin playbook directory (PR D)"),
-    (["vps/web/public/store.js", "pi/console/dashboard/dashboard.js"], OLD_STORAGE,
+    (["vps/web/public/app.js", "pi/console/dashboard/dashboard.js"], OLD_STORAGE,
      "old browser-key prefix: carried over to c4.* so a deploy keeps the iPad's login (PR B)"),
     (["vps/agent/app/auth.py"], r"\"sr33-auth:\"", "token key salt: changing it logs every device out"),
     (["tools/ci/run.sh", "pi/n2kout/canboat_roundtrip.sh", "tools/seamasks/build.py"], CI_IMAGE,
@@ -132,7 +132,7 @@ def is_test(name):
 print("the allow-list itself:")
 check("a new global is caught", SR33.search(leftover("vps/web/public/app.js", "window.SR33_X = 1")))
 check("the old storage prefix is allowed in the carry-over helper",
-      not SR33.search(leftover("vps/web/public/store.js", 'const OLD = "sr33.";')))
+      not SR33.search(leftover("vps/web/public/app.js", 'const OLD = "sr33.";')))
 check("but a storage key under the old name is not",
       SR33.search(leftover("vps/web/public/app.js", "localStorage.getItem('sr33.mode')")))
 check("a container name in an ops script is allowed",

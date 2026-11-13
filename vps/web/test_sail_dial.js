@@ -35,8 +35,10 @@ const ctx = {
 };
 ctx.window = { addEventListener: (k, fn) => { handlers[k] = fn; } };
 vm.createContext(ctx);
-for (const f of ["store.js", "sail.js"])   // index.html loads store.js first
-  vm.runInContext(fs.readFileSync(path.join(__dirname, "public", f), "utf8"), ctx);
+// the storage helper rides at the top of app.js, which index.html loads before sail.js
+const appSrc = fs.readFileSync(path.join(__dirname, "public", "app.js"), "utf8");
+vm.runInContext(appSrc.slice(appSrc.indexOf("/* c4-store:begin */"), appSrc.indexOf("/* c4-store:end */")), ctx);
+vm.runInContext(fs.readFileSync(path.join(__dirname, "public", "sail.js"), "utf8"), ctx);
 
 const names = () => sel.children.filter((c) => c.tag === "button").map((b) => b.dataset.sail).join(",");
 const flush = () => new Promise((r) => setImmediate(r));

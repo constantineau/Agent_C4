@@ -4,6 +4,53 @@
    navigator and routing onto this shell. Vanilla JS, no build step. */
 "use strict";
 
+/* Browser storage under "c4.*" keys (#314). Inside app.js on purpose: a browser can pair a
+   cached older index.html (which loads no separate helper) with this app.js, and the app must
+   still start. sail.js and plot.js load after app.js and use it too.
+   The keys used to start with the project's old name. A key not yet under the new name is read
+   from the old one and copied over, so a deploy keeps the iPad's login, theme, mode, route and
+   hoisted sail. The old key is left in place (a rollback still finds it); writes go to the new
+   key only; a remove clears BOTH, so the old key can't bring back a token after a sign-out.
+   Every access is best effort: private mode or a full quota reads as "nothing stored". */
+/* c4-store:begin */
+var C4Store = (function () {
+  const NEW = "c4.";
+  const OLD = "sr33.";   // the old prefix: read once to carry a value over, never written
+
+  function area(kind) {
+    try { return kind === "session" ? globalThis.sessionStorage : globalThis.localStorage; }
+    catch (e) { return null; }
+  }
+  function get(kind, name) {
+    const s = area(kind);
+    if (!s) return null;
+    try {
+      const v = s.getItem(NEW + name);
+      if (v !== null && v !== undefined) return v;
+      const old = s.getItem(OLD + name);
+      if (old === null || old === undefined) return null;
+      try { s.setItem(NEW + name, old); } catch (e) { /* quota: still return it */ }
+      return old;
+    } catch (e) { return null; }
+  }
+  function set(kind, name, value) {
+    const s = area(kind);
+    if (!s) return;
+    try { s.setItem(NEW + name, value); } catch (e) { /* private mode / quota */ }
+  }
+  function remove(kind, name) {
+    const s = area(kind);
+    if (!s) return;
+    try { s.removeItem(NEW + name); } catch (e) { /* private mode */ }
+    try { s.removeItem(OLD + name); } catch (e) { /* private mode */ }
+  }
+  function api(kind) {
+    return { get: (n) => get(kind, n), set: (n, v) => set(kind, n, v), remove: (n) => remove(kind, n) };
+  }
+  return { local: api("local"), session: api("session") };
+})();
+/* c4-store:end */
+
 const App = {
   ws: null,
   lastPos: null,         // {lat, lon} from telemetry, for the sun/day-night calc
