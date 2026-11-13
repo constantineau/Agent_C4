@@ -682,7 +682,7 @@ def bundle_hash(bundle):
 
 
 def _approved_path():
-    base = os.path.dirname(os.environ.get("ENGINE_DB", "/var/lib/sr33/engine/engine.db"))
+    base = os.path.dirname(os.environ.get("ENGINE_DB", "/var/lib/c4/engine/engine.db"))
     return os.path.join(base, "copilot-playbook.json")
 
 

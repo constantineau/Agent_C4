@@ -240,9 +240,9 @@ mode the iPad is served from the Pi (`pi/console`) and talks only to the onboard
 One VPS, two Docker-isolated stacks with **separate databases** so dev can never corrupt
 the production race archive:
 
-- **dev** (`compose.dev.yml`, DB `sr33_dev`, ports 5433/8101/8102/8090) — run by hand
+- **dev** (`compose.dev.yml`, DB `sr33_dev` on the VPS — `c4_dev` on a new install, ports 5433/8101/8102/8090) — run by hand
   during sessions; this is where the Pi bench (`vcan0`) and fake data feed.
-- **prod** (`compose.prod.yml`, DB `sr33_prod`) — managed/auto-restart; touched only to deploy.
+- **prod** (`compose.prod.yml`, DB `sr33_prod` on the VPS — `c4_prod` on a new install) — managed/auto-restart; touched only to deploy.
 
 Git mirrors this: develop on `dev`, merge to `main`, deploy `main` via
 `deploy/deploy_prod.sh`. The Pi is a deploy target, not a dev host — deploy by SSH

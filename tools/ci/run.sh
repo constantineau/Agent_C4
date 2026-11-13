@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Every test suite in the repo, each in a throwaway container off its own service's image, built
-# fresh from this tree (tagged sr33-ci-*, never the running stacks' images). `make ci` runs this.
+# fresh from this tree (tagged c4-ci-*, never the running stacks' images). `make ci` runs this.
+# C4_CI_PREFIX changes the tag prefix (default c4-ci), so two checkouts can run CI side by side
+# without overwriting each other's images.
 # Usage: tools/ci/run.sh [filter]   — only test files whose path contains <filter>.
 #
 # Discovery is automatic: each area below is a glob, so a new test_* file in a known area runs
@@ -14,6 +16,7 @@ set -uo pipefail
 shopt -s globstar nullglob
 cd "$(git rev-parse --show-toplevel)"
 repo=$PWD filter=${1:-}
+tag=${C4_CI_PREFIX:-c4-ci}
 fails=() passes=0 skips=() known=()
 declare -A wired=()
 
@@ -25,9 +28,9 @@ declare -A EXCLUDED=(
 
 # build <svc> <dockerfile>: the service image, plus pytest/freezegun on top for the test layer.
 build() {
-  docker build -q -t "sr33-ci-$1-base" -f "$2" . >/dev/null || { echo "BUILD FAILED: $1"; exit 1; }
-  printf 'FROM sr33-ci-%s-base\nRUN pip install --no-cache-dir -q pytest freezegun httpx\n' "$1" \
-    | docker build -q -t "sr33-ci-$1" - >/dev/null || { echo "BUILD FAILED: $1 (test layer)"; exit 1; }
+  docker build -q -t "$tag-$1-base" -f "$2" . >/dev/null || { echo "BUILD FAILED: $1"; exit 1; }
+  printf 'FROM %s-%s-base\nRUN pip install --no-cache-dir -q pytest freezegun httpx\n' "$tag" "$1" \
+    | docker build -q -t "$tag-$1" - >/dev/null || { echo "BUILD FAILED: $1 (test layer)"; exit 1; }
 }
 
 # run <svc> <workdir> <pythonpath> <file> [cmd...]: one test file; default cmd runs it as a script.
@@ -43,7 +46,7 @@ run() {
     -e PYTHONPATH="$pp" -e PYTHONDONTWRITEBYTECODE=1 -e C4_CI=1 \
     -e BOAT_ID=ci-boat -e REROUTE_BOAT=ci-boat -e BOAT_PASSWORD=ci-only-password \
     -e DATABASE_URL=postgresql://ci:ci-only-db-password@127.0.0.1:5432/ci \
-    "sr33-ci-$svc" "${cmd[@]}" 2>&1)
+    "$tag-$svc" "${cmd[@]}" 2>&1)
   rc=$?
   local line
   while IFS= read -r line; do skips+=("$f: ${line#*] }"); done \
@@ -95,7 +98,7 @@ build ingestion vps/ingestion/Dockerfile
 build lab vps/lab/Dockerfile
 docker image inspect node:22-alpine >/dev/null 2>&1 || docker pull -q node:22-alpine >/dev/null \
   || { echo "PULL FAILED: node:22-alpine"; exit 1; }
-docker tag node:22-alpine sr33-ci-node
+docker tag node:22-alpine "$tag-node"
 
 area archiver /repo /repo/pi/archiver:/repo pi/archiver/**/test_*.py
 area uplink /repo /repo pi/uplink/**/test_*.py

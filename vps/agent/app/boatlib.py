@@ -54,7 +54,7 @@ _LIB_MEMO = {"memo": None}       # (file key, doc)
 
 
 def _path():
-    base = os.path.dirname(os.environ.get("ENGINE_DB", "/var/lib/sr33/engine/engine.db"))
+    base = os.path.dirname(os.environ.get("ENGINE_DB", "/var/lib/c4/engine/engine.db"))
     return os.path.join(base, "boat-library.json")
 
 

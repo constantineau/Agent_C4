@@ -12,7 +12,7 @@ backfill.py    SQLite       ->  cloud /ingest/raw  (resumable, post-passage)
 
 ## Storage
 
-- SQLite at `ARCHIVE_DB` (default `/var/lib/sr33/archive/archive.db`), on the `sk_archive`
+- SQLite at `ARCHIVE_DB` (default `/var/lib/c4/archive/archive.db`), on the `sk_archive`
   named Docker volume → **survives container restarts, rebuilds, and host reboots.**
 - `PRAGMA journal_mode=WAL` (backfill reads never block the live writer) +
   `PRAGMA synchronous=FULL` (durable across power loss — fsync on each ~2 s flush).
@@ -35,7 +35,7 @@ Inspect the archive:
 
 ```bash
 docker compose -f compose.pi.yml exec archiver \
-  python -c "import sqlite3;c=sqlite3.connect('/var/lib/sr33/archive/archive.db');\
+  python -c "import sqlite3;c=sqlite3.connect('/var/lib/c4/archive/archive.db');\
 print(c.execute('select count(*),min(time),max(time) from readings').fetchone())"
 ```
 
@@ -148,7 +148,7 @@ copyoff.py status --outbox D/outbox
   re-reads every row. Only a receipt matching the boat's own numbers counts: then the ledger
   (`outbox/ledger.json`) records it and the segment's outbox copy is deleted.
 - The ledger's `verified_through_id` (per archive inode, contiguous from id 1) gates the prune:
-  set `ARCHIVE_OFFBOAT_LEDGER=/var/lib/sr33/archive/outbox/ledger.json` and the prune deletes
+  set `ARCHIVE_OFFBOAT_LEDGER=/var/lib/c4/archive/outbox/ledger.json` and the prune deletes
   only verified rows. Missing or unreadable ledger = nothing pruned. Unset (today) = old behaviour.
 
 ### Spring deploy steps (#181)
@@ -162,7 +162,7 @@ copyoff.py status --outbox D/outbox
    `--stats`, or the Starlink app) before deciding the cadence.
 4. The one-time backlog (~15 GB live archive + the 24 GB `archive.corrupt-20261028T154237.db`)
    on dock Wi-Fi, or by pulling the card.
-5. Rebuild the archiver and set `ARCHIVE_OFFBOAT_LEDGER=/var/lib/sr33/archive/outbox/ledger.json`
+5. Rebuild the archiver and set `ARCHIVE_OFFBOAT_LEDGER=/var/lib/c4/archive/outbox/ledger.json`
    so the prune deletes only rows verified off the boat.
 6. On the VPS: compress what arrives and copy it to the archive bucket.
 
@@ -172,7 +172,7 @@ copyoff.py status --outbox D/outbox
 |-----|---------|---------|
 | `SIGNALK_WS` | `ws://localhost:3010/signalk/v1/stream?subscribe=all` | Signal K delta stream |
 | `BOAT_ID` | required (no default) | boat id stamped on every row; missing → the archiver won't start |
-| `ARCHIVE_DB` | `/var/lib/sr33/archive/archive.db` | SQLite path (on the named volume) |
+| `ARCHIVE_DB` | `/var/lib/c4/archive/archive.db` | SQLite path (on the named volume) |
 | `ARCHIVE_FLUSH_ROWS` / `ARCHIVE_FLUSH_SECONDS` | `1000` / `2` | flush cadence (durability vs. throughput) |
 | `VPS_URL` / `INGEST_TOKEN` | `http://localhost:8101` / `dev-ingest-token` | backfill target |
 | `BACKFILL_BATCH` | `1000` | readings per cloud POST |

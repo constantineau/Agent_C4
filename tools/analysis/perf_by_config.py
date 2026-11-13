@@ -27,9 +27,28 @@ from collections import defaultdict
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 POLARS = os.path.join(ROOT, "vps", "db", "seed", "polars_sr33.sql")
-# The dev Postgres: its container, user and db (env DB_CONTAINER / POSTGRES_USER / POSTGRES_DB).
-PSQL = ["docker", "exec", os.environ.get("DB_CONTAINER", "sr33-dev-timescaledb-1"), "psql",
-        "-U", os.environ.get("POSTGRES_USER", "sr33"), "-d", os.environ.get("POSTGRES_DB", "sr33_dev"),
+
+
+def _dev_project():
+    """The dev stack's compose project, as compose.dev.yml resolves it (#314): C4_DEV_PROJECT
+    exported, else in this checkout's .env (C4_ENV_FILE overrides the path), else c4-dev."""
+    if os.environ.get("C4_DEV_PROJECT"):
+        return os.environ["C4_DEV_PROJECT"]
+    try:
+        with open(os.environ.get("C4_ENV_FILE") or os.path.join(ROOT, ".env")) as f:
+            found = [l.split("=", 1)[1].strip().strip("'\"") for l in f
+                     if l.startswith("C4_DEV_PROJECT=")]
+        if found and found[-1]:
+            return found[-1]
+    except OSError:
+        pass
+    return "c4-dev"
+
+
+# Runs on the VPS against the dev Postgres: container DB_CONTAINER, default
+# <dev project>-timescaledb-1. psql runs as the container's own POSTGRES_USER on its POSTGRES_DB.
+PSQL = ["docker", "exec", os.environ.get("DB_CONTAINER") or f"{_dev_project()}-timescaledb-1",
+        "sh", "-c", 'exec psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" "$@"', "sh",
         "-At", "-F", "\t"]
 MS_TO_KN = 1.943844
 

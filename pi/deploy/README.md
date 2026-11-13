@@ -94,7 +94,9 @@ checkout of the commit to deploy (`STAMP=$(date -u +%Y%m%dT%H%M%SZ)`, a short na
    has local edits you didn't expect.
 2. **Back up** to `~/deploy-backups/<name>-$STAMP/` on the Pi: a tar of the files about to be
    overwritten, `new-files.txt` listing the new ones, and each service's current image tagged
-   `sr33-pi-<svc>:pre-$STAMP`.
+   `<project>-<svc>:pre-$STAMP`. `<project>` is the Pi's compose project (`sr33-pi` on the boat,
+   pinned by `C4_BOAT_PROJECT` in its `.env`; c4-boat on a new install, #314). Read it on the Pi:
+   `docker compose -f compose.pi.yml config | sed -n 's/^name: //p'`.
 3. **Copy** the files into `~/Agent_C4` (`tar -cf - <files> | ssh … 'cd ~/Agent_C4 && tar -xf -'`).
 4. **Rebuild and restart only** those services:
    `docker compose -f compose.pi.yml build <svc…> && docker compose -f compose.pi.yml up -d --no-deps <svc…>`.
@@ -103,7 +105,7 @@ checkout of the commit to deploy (`STAMP=$(date -u +%Y%m%dT%H%M%SZ)`, a short na
 6. **Verify**: `/health` and the endpoints the change touches answer, restart count stays 0.
 
 Rollback: in `~/Agent_C4` untar the backup, delete the files in `new-files.txt`, retag
-`sr33-pi-<svc>:pre-$STAMP` as `sr33-pi-<svc>`, `up -d --no-deps --no-build <svc…>`, and add a
+`<project>-<svc>:pre-$STAMP` as `<project>-<svc>`, `up -d --no-deps --no-build <svc…>`, and add a
 line to `~/DEPLOYED` saying which deploy was undone.
 
 ## What's on the box

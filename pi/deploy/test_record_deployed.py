@@ -45,8 +45,12 @@ write(f"{bin_}/git", '#!/bin/bash\ncase "$*" in\n'
       f'  "rev-parse --show-toplevel") echo {here} ;;\n'
       '  "rev-parse --short HEAD") echo abc1234 ;;\n'
       '  status*) ;;\n  *) exit 128 ;;\nesac\n', X)
-# docker: the built image is sha256:new; the container runs $RUNNING (default the same).
-write(f"{bin_}/docker", '#!/bin/bash\ncase "$1" in\n'
+# docker: the built image is sha256:new; the container runs $RUNNING (default the same). Every
+# image/container name asked about is logged; `compose config` resolves the box's project from
+# $BOX_PROJECT (unset = a compose file with no name line).
+NAMES = os.path.join(tmp, "names.log")
+write(f"{bin_}/docker", '#!/bin/bash\necho "${@: -1}" >> ' + NAMES + '\ncase "$1" in\n'
+      '  compose) [[ -n $BOX_PROJECT ]] && printf "name: %s\\nservices:\\n" "$BOX_PROJECT" ;;\n'
       '  image) echo sha256:new ;;\n  inspect) echo "${RUNNING:-sha256:new}" ;;\nesac\n', X)
 
 FILE = "pi/engine/engine_app.py"
@@ -94,6 +98,20 @@ r = subprocess.run(["bash", "./record-deployed.sh", "pi", "20261106T045000Z", "w
                    cwd=HERE, env=e, capture_output=True, text=True)
 check(f"works when run as ./record-deployed.sh from pi/deploy (rc {r.returncode})",
       r.returncode == 0)
+
+# The compose project is the box's (#314): what its compose config resolves (its .env pin),
+# else c4-boat; COMPOSE_PROJECT set by the caller (deploy-data-path.sh) wins.
+def asked(**env):
+    open(NAMES, "w").close()
+    run("pi", "20261106T046000Z", "w5c", FILE, "--", "engine", **env)
+    return open(NAMES).read().split()
+
+
+check("the project comes from the box's compose config (its pin)",
+      "sr33-pi-engine" in asked(BOX_PROJECT="sr33-pi") and "sr33-pi-engine-1" in asked(BOX_PROJECT="sr33-pi"))
+check("no pin on the box: the neutral c4-boat", "c4-boat-engine" in asked())
+check("COMPOSE_PROJECT from the caller wins",
+      "given-engine-1" in asked(BOX_PROJECT="sr33-pi", COMPOSE_PROJECT="given"))
 
 r = run("pi", "20261106T050000Z", "w6", "a file; rm -rf ~")
 check("names with shell characters are refused", r.returncode == 2)

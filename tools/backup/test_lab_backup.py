@@ -665,5 +665,19 @@ with tempfile.TemporaryDirectory() as tmp:
     check(f"the volume fails, to be retried ({failed!r})",
           failed is not None and "became a database" in str(failed))
 
+print("the dev stack's names (#314):")
+with tempfile.TemporaryDirectory() as tmp:
+    envf = os.path.join(tmp, ".env")
+    with open(envf, "w") as f:
+        f.write("POSTGRES_PASSWORD=x\nC4_DEV_PROJECT=old\nexport C4_DEV_PROJECT=\"live-dev\"\n")
+    check("a pin in the checkout's .env names the project (last line wins, quotes stripped)",
+          lb.stack_pin("C4_DEV_PROJECT", "c4-dev", env={}, env_file=envf) == "live-dev")
+    check("an exported value beats the .env",
+          lb.stack_pin("C4_DEV_PROJECT", "c4-dev", env={"C4_DEV_PROJECT": "x"}, env_file=envf) == "x")
+    check("no pin anywhere: the neutral default",
+          lb.stack_pin("POSTGRES_DB", "c4_dev", env={}, env_file=envf) == "c4_dev"
+          and lb.stack_pin("C4_DEV_PROJECT", "c4-dev", env={},
+                           env_file=os.path.join(tmp, "missing")) == "c4-dev")
+
 print("\nALL OK" if ok else "\nFAILURES")
 sys.exit(0 if ok else 1)

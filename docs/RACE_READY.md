@@ -49,7 +49,7 @@ Follow "Spring deploy steps (#181)" in `pi/archiver/README.md`:
    estimate is 0.7–1 GB/day; it has never been measured.
 4. The one-time backlog: only the live `archive.db` now. The damaged archives were deleted on
    Cole's go on 2026-11-03, so the README's 24 GB file is gone.
-5. Rebuild the archiver with `ARCHIVE_OFFBOAT_LEDGER=/var/lib/sr33/archive/outbox/ledger.json`.
+5. Rebuild the archiver with `ARCHIVE_OFFBOAT_LEDGER=/var/lib/c4/archive/outbox/ledger.json`.
 6. VPS: compress what arrives and copy it to the archive bucket.
 
 - **Pass:** `copyoff.py status --outbox D/outbox` shows sealed files verified; the archiver's
@@ -138,7 +138,7 @@ Two races on the same course in one day (#41, #246, merged in #286).
 A long Starlink outage must lose nothing (#243, #283: no queue cap, paged replay).
 
 - **Do:** with everything on, unplug Starlink for 2 h (longer if the dock allows). Plug it back.
-- **Watch:** queue size on the Pi (`docker compose -f compose.pi.yml exec uplink sh -c 'ls /var/lib/sr33/queue/*.json 2>/dev/null | wc -l'`);
+- **Watch:** queue size on the Pi (`docker compose -f compose.pi.yml exec uplink sh -c 'ls /var/lib/c4/queue/*.json 2>/dev/null | wc -l'`);
   uplink log; on the VPS, rows per minute in `telemetry_raw` over the outage window.
 - **Pass:** the queue drains to zero; the cloud has 15 s rows across the whole outage, no gap;
   live data keeps its 15 s cadence while the backlog replays; nothing in `quarantine/`.

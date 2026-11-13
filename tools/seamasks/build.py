@@ -9,7 +9,7 @@ than the model grid, so the model's own points don't leave holes).
 Needs the network and the Lab image's libraries (netCDF4, cfgrib). Run it by hand when a model's
 grid changes, in a throwaway container, and commit the JSON:
 
-    docker run --rm -v "$PWD:/repo" -w /repo -e PYTHONPATH=/repo/vps/lab sr33-ci-lab \
+    docker run --rm -v "$PWD:/repo" -w /repo -e PYTHONPATH=/repo/vps/lab c4-ci-lab \
         python3 tools/seamasks/build.py [lmhofs glwu hycom-espc gfs-wave-global-0p16 ...]
 """
 import datetime

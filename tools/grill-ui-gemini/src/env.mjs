@@ -41,12 +41,17 @@ export function secret(name, env = process.env, files = ENV_FILES) {
 /** The Gemini key: C4_GEMINI_API_KEY, exported or in a .env. */
 export const geminiKey = (env, files) => secret("C4_GEMINI_API_KEY", env, files);
 
+/** The dev Lab's container: <C4_DEV_PROJECT>-lab-1, the project as compose.dev.yml resolves it
+ * (exported, else a .env, else c4-dev; #314). */
+export const devLabContainer = (env = process.env, files = ENV_FILES) =>
+  `${secret("C4_DEV_PROJECT", env, files) ?? "c4-dev"}-lab-1`;
+
 /**
  * The dev Lab's team password (read-only use: it only buys a GET token). C4_LAB_PASSWORD,
  * else LAB_PASSWORD in a .env, else what the running dev container was started with, else
  * compose.dev.yml's default.
  */
-export function labPassword(env = process.env, files = ENV_FILES, container = "sr33-dev-lab-1") {
+export function labPassword(env = process.env, files = ENV_FILES, container = devLabContainer(env, files)) {
   const v = secret("C4_LAB_PASSWORD", env, files) ?? secret("LAB_PASSWORD", {}, files);
   if (v) return v;
   try {

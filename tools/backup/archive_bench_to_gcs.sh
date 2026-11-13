@@ -3,12 +3,17 @@
 #
 #   STAGE=<local staging dir> DEST=gs://<bucket>/bench/ tools/backup/archive_bench_to_gcs.sh
 #
-# STAGE and DEST have no default; COMPOSE_PROJECT (default sr33-pi) names the volume, SRC overrides it.
+# STAGE and DEST have no default. Runs on the bench host: the volume is <bench project>_sk_archive,
+# the project being C4_BENCH_PROJECT (exported, else in this checkout's .env; default c4-bench, the
+# compose.pi.sample.yml default, #314). SRC overrides the whole path.
 # Not pure sample data: 8.1M course-provider rows Jul 9-14 2026 + 323 n2k-socketcan.35 rows.
 # Compress locally first so the upload can be integrity-checked before AND after it leaves.
 set -euo pipefail
 
-SRC=${SRC:-/var/lib/docker/volumes/${COMPOSE_PROJECT:-sr33-pi}_sk_archive/_data/archive.db}
+if [[ -z ${C4_BENCH_PROJECT:-} ]]; then
+  C4_BENCH_PROJECT=$(sed -n 's/^C4_BENCH_PROJECT=//p' "$(dirname "$0")/../../.env" 2>/dev/null | tail -1 | tr -d "\"'")
+fi
+SRC=${SRC:-/var/lib/docker/volumes/${C4_BENCH_PROJECT:-c4-bench}_sk_archive/_data/archive.db}
 STAGE=${STAGE:?set STAGE to a local staging directory}
 OUT="$STAGE/sk_archive-bench-2026-09-09.db.gz"
 # NOT a bucket with a lifecycle rule that deletes at 30 days (the VPS backups bucket): right for
