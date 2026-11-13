@@ -196,5 +196,5 @@ cat <<EOF
         pi/systemd/sr33-orin-llm.service from the MLC wrapper to llama-server) so it autostarts.
      3. Update SETUP.md / serve.sh / bench.sh / models.md to the 7.2 + llama.cpp reality and
         delete pi/orin/BRINGUP_STATE.md.
-     4. Then the next 9.4 increment: the SR33 copilot service feeding engine facts + the playbook.
+     4. Then the next 9.4 increment: the copilot service feeding engine facts + the playbook.
 EOF

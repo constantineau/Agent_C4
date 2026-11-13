@@ -21,10 +21,13 @@ from the original file. Every script prints what it verified.
 | `delete_archived.sh` | deletes named files only after BOTH proofs, at delete time: the local copy still hashes to the manifest, AND the GCS object, read back in full and decompressed, hashes to the same sha256 (#243; an object merely existing is not enough). Skips loudly, exits 1 if anything was kept, never guesses |
 | `cut_jul15_race.sh` | lifts the Jul 15 race out of the 8.5 G delivery salvage at full resolution so the salvage could be deleted without losing the race |
 
+Paths and buckets come from env vars (`SRC`, `STAGE`, `DEST`, `BUCKET`, `MAN`, `PULL`, `OUT`), with
+no defaults: each script says which it needs at the top, and stops at once if one is unset (#314).
+
 ## What is deliberately still on disk
 
-- `backups/c4-boat-pull-2026-08-30/work/archive-backfill.db` (2.9 G) — `harness.py`'s default
-  `--archive`; the replay rig has no source without it.
+- `backups/c4-boat-pull-2026-08-30/work/archive-backfill.db` (2.9 G) — the replay rig's source
+  archive: pass it to `harness.py` as `--archive` (or set `REPLAY_ARCHIVE`); there is no default.
 - `backups/race-data/archive-jul15-race.db` (459 M) — 2,352,414 rows, `22:30 → 00:20Z`. Also
   backfilled into Postgres, which is where the Lab debrief reads.
 - `backups/replay-jul18/` (300 M) — the timelines and the materialised spool.
@@ -111,6 +114,7 @@ gsutil ls -L -b gs://constantineau-c4-nightly | grep -iE 'storage class|location
 cd /home/constantineau/Agent_C4 && git pull
 sudo install -m 644 tools/backup/systemd/c4-lab-backup.service tools/backup/systemd/c4-lab-backup.timer /etc/systemd/system/
 sudo install -m 600 tools/backup/systemd/c4-lab-backup.env.example /etc/c4-lab-backup.env
+sudoedit /etc/c4-lab-backup.env    # set C4_BACKUP_DEST (the bucket) and C4_REPO (this checkout's path)
 sudo systemctl daemon-reload
 
 # 3. first real run (~10 min), then a restore drill from the bucket (~30 min)
@@ -123,3 +127,6 @@ sudo C4_BACKUP_DEST=gs://constantineau-c4-nightly/vps-nightly python3 tools/back
 sudo systemctl enable --now c4-lab-backup.timer
 systemctl list-timers c4-lab-backup.timer
 ```
+
+Updating an install made before #314: the unit now reads the checkout path from `C4_REPO`. Add `C4_REPO=<this checkout's path>` to `/etc/c4-lab-backup.env` BEFORE installing the new unit; without it the backup refuses to start and says why.
+

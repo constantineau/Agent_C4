@@ -4,7 +4,7 @@
 #   sudo cp pi/systemd/sr33-orin-copilot-dashboard.service /etc/systemd/system/
 #   sudo systemctl enable --now sr33-orin-copilot-dashboard
 [Unit]
-Description=SR33 onboard copilot — dashboard brief (stdlib, no deps)
+Description=Onboard copilot — dashboard brief (stdlib, no deps)
 After=network-online.target ollama.service
 Wants=network-online.target
 

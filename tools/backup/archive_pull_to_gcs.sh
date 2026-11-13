@@ -7,11 +7,16 @@
 # Nothing is deleted here. Every file is hashed, compressed, decompressed again and re-hashed
 # against the source before it is uploaded, and the manifest of source hashes goes up with it —
 # so the archive can be PROVEN identical to what was on this disk, not merely assumed to be.
+#
+#   SRC=<the pull dir> STAGE=<local staging dir> DEST=gs://<archive bucket>/boat-pull-2026-08-30 \
+#     tools/backup/archive_pull_to_gcs.sh
+#
+# All three have no default.
 set -euo pipefail
 
-SRC=/home/constantineau/backups/c4-boat-pull-2026-08-30
-STAGE=/home/constantineau/backups/gcs-staging
-DEST=gs://constantineau-c4-archive/boat-pull-2026-08-30
+SRC=${SRC:?set SRC to the boat pull directory (c4-boat-pull-2026-08-30)}
+STAGE=${STAGE:?set STAGE to a local staging directory}
+DEST=${DEST:?set DEST to gs://<archive bucket>/boat-pull-2026-08-30}
 MANIFEST="$STAGE/MANIFEST-sha256.txt"
 
 BIG=(

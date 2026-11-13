@@ -38,7 +38,7 @@ function stubEl() {
   return proxy;
 }
 
-function load() {
+function load(local) {
   let nowMs = 1793000000000;
   const els = {};
   let timers = [], tid = 0;          // timers run only when a test calls fire(), on the fake clock
@@ -47,7 +47,7 @@ function load() {
     setTimeout: (fn, ms) => { timers.push({ id: ++tid, fn: fn, at: nowMs + (ms || 0) }); return tid; },
     clearTimeout: (id) => { timers = timers.filter((t) => t.id !== id); },
     setInterval: () => 0, clearInterval: () => {},
-    localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+    localStorage: local || { getItem: () => null, setItem() {}, removeItem() {} },
     location: { search: "" },
     navigator: { userAgent: "test" },
     addEventListener() {},
@@ -675,6 +675,41 @@ test("#335 another boat sailed: the PLAYS block says the playbook is whose, play
   ok(T.D.playsHtml() === "", "no playbook: the block stays hidden, as before");
   T.D.App.plays = { available: true, n_plays: 2, plays: [], watchlist: [], sail_state: {} };
   ok(T.D.playsHtml().includes("Watching 2 conditions"), "same boat: plays as before");
+});
+
+/* #314: the console's storage keys moved from "sr33.dash.*" to "c4.dash.*". */
+function mapStorage(init) {
+  const m = new Map(Object.entries(init || {}));
+  return { m: m, getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => { m.set(k, String(v)); },
+    removeItem: (k) => { m.delete(k); } };
+}
+test("#314 an old storage key is carried over (theme, sound, device), the old key stays", () => {
+  const local = mapStorage({ "sr33.dash.theme": "night", "sr33.dash.device": "Nav iPad" });
+  const T = load(local);
+  ok(T.D.App.theme === "night", "the iPad keeps its theme across the deploy: " + T.D.App.theme);
+  ok(local.m.get("c4.dash.theme") === "night", "copied to the new key");
+  ok(local.m.get("sr33.dash.theme") === "night", "the old key is left for a rollback");
+  ok(T.D.store.get("device") === "Nav iPad", "the device name carries over");
+  ok(local.m.get("c4.dash.device") === "Nav iPad", "device copied to the new key");
+});
+test("#314 the new key wins when both exist; writes go to the new key only", () => {
+  const local = mapStorage({ "sr33.dash.theme": "night", "c4.dash.theme": "day" });
+  const T = load(local);
+  ok(T.D.App.theme === "day", "new key must win: " + T.D.App.theme);
+  T.D.store.set("sound", "on");
+  ok(local.m.get("c4.dash.sound") === "on" && !local.m.has("sr33.dash.sound"), "write to the new key only");
+  ok(local.m.get("sr33.dash.theme") === "night", "the old key is never written");
+});
+test("#314 storage that throws reads as nothing and drops writes", () => {
+  const bad = { getItem() { throw new Error("denied"); }, setItem() { throw new Error("denied"); }, removeItem() {} };
+  const T = load(bad);
+  ok(T.D.store.get("theme") === null && T.D.App.theme === "auto", "falls back to auto");
+  T.D.store.set("theme", "day");
+});
+test("#314 dashboard.js names the old prefix only inside the carry-over helper", () => {
+  const src = require("node:fs").readFileSync(require("node:path").join(DIR, "dashboard.js"), "utf8");
+  ok((src.match(/sr33/gi) || []).length === 1, "one mention: the helper's OLD prefix");
+  ok(!/localStorage\.(get|set|remove)Item\(["']/.test(src), "every access goes through the helper");
 });
 
 (async () => {

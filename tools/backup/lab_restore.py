@@ -2,7 +2,7 @@
 """Restore a Lab backup set (made by lab_backup.py) and PROVE it restored (#180).
 
 Default is a drill: everything is restored into throwaway containers and checked, then thrown
-away. Nothing touches the running sr33-dev-* stack.
+away. Nothing touches the running dev stack.
 
   - every artifact is fetched from the set that stores it and its sha256 checked against INDEX;
   - every volume tarball is unpacked in a `--rm` container on a tmpfs, every file in it is hashed

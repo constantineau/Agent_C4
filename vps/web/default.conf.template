@@ -18,6 +18,9 @@ server {
     }
 
     location / {
+        # no-cache (NOT no-store): the browser keeps a copy but revalidates every load, so a
+        # cached old index.html never pairs with a new app.js (the Pi console does the same)
+        add_header Cache-Control "no-cache";
         try_files $uri $uri/ /index.html;
     }
 

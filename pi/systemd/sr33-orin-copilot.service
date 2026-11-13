@@ -1,5 +1,5 @@
 [Unit]
-Description=SR33 onboard copilot — decision-support service (Tier 2, 9.4)
+Description=Onboard copilot — decision-support service (Tier 2, 9.4)
 # Needs the LLM (Ollama) up and the network (to reach the Pi engine over boat-local Wi-Fi).
 After=network-online.target ollama.service
 Wants=network-online.target

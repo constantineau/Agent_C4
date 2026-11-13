@@ -35,6 +35,9 @@ const ctx = {
 };
 ctx.window = { addEventListener: (k, fn) => { handlers[k] = fn; } };
 vm.createContext(ctx);
+// the storage helper rides at the top of app.js, which index.html loads before sail.js
+const appSrc = fs.readFileSync(path.join(__dirname, "public", "app.js"), "utf8");
+vm.runInContext(appSrc.slice(appSrc.indexOf("/* c4-store:begin */"), appSrc.indexOf("/* c4-store:end */")), ctx);
 vm.runInContext(fs.readFileSync(path.join(__dirname, "public", "sail.js"), "utf8"), ctx);
 
 const names = () => sel.children.filter((c) => c.tag === "button").map((b) => b.dataset.sail).join(",");
@@ -52,13 +55,13 @@ const check = (name, cond) => { if (!cond) failed++; console.log(`  [${cond ? "O
   check("the boat's sails before any wind, a spaced name too", names() === "G1,BIG RED,");
   check("says no wind yet", els.sailRec.textContent === "No true wind yet.");
   answer = { available: false, note: "x", sails: [{ name: "G1", family: "genoa" }, { name: "A2", family: "asym" }] };
-  handlers["sr33:conditions"]({ detail: cond }); await flush(); await flush();
+  handlers["c4:conditions"]({ detail: cond }); await flush(); await flush();
   check("the boat's sails become the buttons (+ none)", names() === "G1,A2,");
   answer = { available: false, note: "Sail advice withheld" };
-  handlers["sr33:conditions"]({ detail: cond }); await flush(); await flush();
+  handlers["c4:conditions"]({ detail: cond }); await flush(); await flush();
   check("an answer with no sails field keeps them", names() === "G1,A2,");
   answer = { available: false, note: "No polar for this boat.", sails: [] };
-  handlers["sr33:conditions"]({ detail: cond }); await flush(); await flush();
+  handlers["c4:conditions"]({ detail: cond }); await flush(); await flush();
   check("an explicit [] clears the other boat's buttons", names() === "");
   console.log(failed ? "FAIL" : "PASS");
   process.exit(failed ? 1 : 0);

@@ -21,9 +21,10 @@ Fidelity notes, all deliberate:
     by default and recorded in the manifest as skipped, rather than silently returning junk.
   - AIS/fleet is empty: the archiver stored own-ship contexts only (see source.py).
 
-Usage:
+Usage (the archive and engine store come from flags or env, no defaults):
+    export REPLAY_ARCHIVE=<pull>/work/archive-backfill.db REPLAY_ENGINE=<replay dir>/engine.db
     python tools/replay/harness.py --boat <boat> --start 2026-07-18T17:03:31Z --end 2026-07-18T20:40:00Z \
-        --step 30 --out /home/constantineau/backups/replay-jul18/timeline
+        --step 30 --out <replay dir>/timeline
 """
 import argparse
 import json
@@ -217,9 +218,10 @@ def _iso(s):
 
 def main():
     ap = argparse.ArgumentParser(description="Precompute a Race Rewind timeline.")
-    ap.add_argument("--archive", default="/home/constantineau/backups/c4-boat-pull-2026-08-30/"
-                                         "work/archive-backfill.db")
-    ap.add_argument("--engine", default="/home/constantineau/backups/replay-jul18/engine.db")
+    ap.add_argument("--archive", default=os.environ.get("REPLAY_ARCHIVE"),
+                    help="the recorded archive.db (default $REPLAY_ARCHIVE; one of them is required)")
+    ap.add_argument("--engine", default=os.environ.get("REPLAY_ENGINE"),
+                    help="the engine store (engine.db) of the race (default $REPLAY_ENGINE; required)")
     ap.add_argument("--polars", default=os.path.join(ROOT, "vps", "db", "seed", "polars_sr33.sql"))
     ap.add_argument("--spool", help="a readings-schema SQLite file of uplink aggregates "
                                     "(tools/replay/spool_to_sqlite.py) attached alongside the "
@@ -231,6 +233,8 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--endpoints", help="comma-separated override of the endpoint list")
     a = ap.parse_args()
+    if not a.archive or not a.engine:
+        ap.error("no archive or engine store: pass --archive/--engine or set REPLAY_ARCHIVE/REPLAY_ENGINE")
     build(a.archive, a.engine, a.polars, _iso(a.start), _iso(a.end), a.step, a.out,
           endpoints=[e.strip() for e in a.endpoints.split(",")] if a.endpoints else None,
           spool_db=a.spool, boat=a.boat)

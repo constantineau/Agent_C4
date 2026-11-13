@@ -5,7 +5,7 @@ What one run does:
   1. Each Lab volume -> `vps-lab_<vol>.tar.gz`. The tar is deterministic (sorted, gzip mtime 0),
      and every SQLite file in it is an online `.backup()` snapshot, not the live file, so a Lab
      write mid-run cannot tear it.
-  2. sr33_dev -> `vps-sr33_dev.pgdump` (`pg_dump -Fc`, a read-only snapshot transaction; nothing
+  2. the dev database -> `vps-<db>.pgdump` (`pg_dump -Fc`, a read-only snapshot transaction; nothing
      is written to the live database). The dump is then read back with `pg_restore -f -` in a
      throwaway container (no network) to count the rows of every table and hash its content.
   3. Each artifact is uploaded to the destination and checked there: a local copy is re-hashed,
@@ -30,8 +30,10 @@ Usage:
 Env (all optional except the destination):
   C4_BACKUP_DEST         where sets go (required)
   C4_BACKUP_WORK         staging directory on this host (default /mnt/data/c4-backup/work)
+  C4_BACKUP_PROJECT      the dev stack's compose project; names the default volumes
+                         (<project>_lab_*) and database container (default: VOL_PREFIX below)
   C4_BACKUP_VOLUMES      space-separated volume names (default: the Lab's eight, below)
-  C4_BACKUP_PG           "container:user:db" (default sr33-dev-timescaledb-1:sr33:sr33_dev);
+  C4_BACKUP_PG           "container:user:db" (default <project>-timescaledb-1:sr33:sr33_dev);
                          empty = no database
   C4_BACKUP_PRUNE        1 = prune after a successful backup (default 1)
   C4_BACKUP_KEEP         "daily,weekly,monthly" sets to keep (default 7,4,12)
@@ -56,10 +58,13 @@ from datetime import datetime, timezone
 # The Lab's state. gribcache is deliberately left out: it is a download cache (2 GB, 34k files)
 # that refills itself from NOAA. coastline and enc are slow to rebuild and almost never change,
 # so with de-duplication they cost nothing after the first set.
-DEFAULT_VOLUMES = ("sr33-dev_lab_ingested sr33-dev_lab_learning sr33-dev_lab_retro "
-                   "sr33-dev_lab_playbooks sr33-dev_lab_shares sr33-dev_lab_plume "
-                   "sr33-dev_lab_coastline sr33-dev_lab_enc")
-DEFAULT_PG = "sr33-dev-timescaledb-1:sr33:sr33_dev"
+# Volume and container names are prefixed by the compose project (#314: its default changes later).
+_PROJECT = os.environ.get("C4_BACKUP_PROJECT")
+VOL_PREFIX = f"{_PROJECT}_lab_" if _PROJECT else "sr33-dev_lab_"
+PG_CONTAINER = f"{_PROJECT}-timescaledb-1" if _PROJECT else "sr33-dev-timescaledb-1"
+LAB_VOLUMES = ("ingested", "learning", "retro", "playbooks", "shares", "plume", "coastline", "enc")
+DEFAULT_VOLUMES = " ".join(VOL_PREFIX + v for v in LAB_VOLUMES)
+DEFAULT_PG = f"{PG_CONTAINER}:sr33:sr33_dev"
 SET_RE = re.compile(r"^backup-(\d{4}-\d{2}-\d{2})T(\d{6})Z$")
 INDEX = "INDEX.json"
 MANIFEST = "MANIFEST-sha256.txt"
@@ -577,7 +582,8 @@ def run_backup(dest, work, volumes, pg_spec, now=None, producers=None):
     if producers is None:
         producers = []
         for v in volumes:
-            short = v.split("_", 1)[1] if v.startswith("sr33-dev_") else v
+            # the artifact is named without the project: vps-lab_<vol>.tar.gz whatever the stack
+            short = "lab_" + v[len(VOL_PREFIX):] if v.startswith(VOL_PREFIX) else v
 
             def mk_vol(out, scratch, v=v):
                 key, files, counts = tar_volume(volume_dir(v), out, scratch)

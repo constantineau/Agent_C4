@@ -16,13 +16,16 @@
 #
 # Anything that fails is skipped, loudly, and left on disk. Exit 1 if anything was skipped.
 #
-# SRC / MAN / PULL may be overridden from the environment (the tests do); the defaults are the
-# 2026-08-30 boat pull.
+#   SRC=<the pull dir> MAN=<staging>/MANIFEST-sha256.txt PULL=gs://<archive bucket>/boat-pull-2026-08-30 \
+#     tools/backup/delete_archived.sh <relative path> ...
+#
+# SRC / MAN / PULL come from the environment and have no default (the 2026-08-30 boat pull was
+# the first use).
 set -uo pipefail
 
-SRC=${SRC:-/home/constantineau/backups/c4-boat-pull-2026-08-30}
-MAN=${MAN:-/home/constantineau/backups/gcs-staging/MANIFEST-sha256.txt}
-PULL=${PULL:-gs://constantineau-c4-archive/boat-pull-2026-08-30}
+SRC=${SRC:?set SRC to the local pull directory}
+MAN=${MAN:?set MAN to the MANIFEST-sha256.txt written by archive_pull_to_gcs.sh}
+PULL=${PULL:?set PULL to the gs:// prefix the pull was archived under}
 FREED=0
 SKIPPED=0
 

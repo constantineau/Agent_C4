@@ -1,4 +1,4 @@
-"""SR33 onboard LLM copilot (Tier 2, Phase 9.4) — the decision-support layer.
+"""Onboard LLM copilot (Tier 2, Phase 9.4) — the decision-support layer.
 
 A thin client that turns the deterministic engine's facts (+ the frozen playbook) into bounded,
 grounded decision support via the local LLM. Runs ON THE ORIN, talks to the Pi engine over

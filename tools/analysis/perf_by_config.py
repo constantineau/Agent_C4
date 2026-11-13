@@ -27,7 +27,10 @@ from collections import defaultdict
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 POLARS = os.path.join(ROOT, "vps", "db", "seed", "polars_sr33.sql")
-PSQL = ["docker", "exec", "sr33-dev-timescaledb-1", "psql", "-U", "sr33", "-d", "sr33_dev", "-At", "-F", "\t"]
+# The dev Postgres: its container, user and db (env DB_CONTAINER / POSTGRES_USER / POSTGRES_DB).
+PSQL = ["docker", "exec", os.environ.get("DB_CONTAINER", "sr33-dev-timescaledb-1"), "psql",
+        "-U", os.environ.get("POSTGRES_USER", "sr33"), "-d", os.environ.get("POSTGRES_DB", "sr33_dev"),
+        "-At", "-F", "\t"]
 MS_TO_KN = 1.943844
 
 

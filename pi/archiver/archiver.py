@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SR33 full-resolution local archive (Pi onboard) — boat is the source of truth.
+"""Full-resolution local archive (Pi onboard) — boat is the source of truth.
 
 A silent second subscriber to the Signal K WebSocket delta stream. Where the uplink
 forwards 15-s *aggregates* to the cloud, this records EVERY delta verbatim into a durable

@@ -289,7 +289,7 @@ raise slow / clear fast):
   delta (actuals-vs-plan, the spatial plangap); surfaced on the wind tile's up-course ladder.
 
 **Onboard console** (`pi/console/`, **:8091**): nginx serving the same web app pointed only
-at the engine (`/api` → :8200, no cloud, no auth, no chat; `config.js` → `SR33_ONBOARD=
+at the engine (`/api` → :8200, no cloud, no auth, no chat; `config.js` → `C4_ONBOARD=
 true`, every panel ungated). In a race the iPad uses `http://<pi>:8091`; between races the
 cloud app.
 

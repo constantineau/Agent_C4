@@ -3,4 +3,4 @@
    the race/practice gate). The Pi race console (pi/console) overrides /config.js to set
    ONBOARD=true → the app talks ONLY to the onboard engine over boat-local Wi-Fi, with no
    auth, no chat, and every panel available (the boat's own computer is legal in-race). */
-window.SR33_ONBOARD = false;
+window.C4_ONBOARD = false;
