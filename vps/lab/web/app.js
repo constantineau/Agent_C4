@@ -1829,13 +1829,27 @@ async function pickBoat(id) {
   if (!(await boatGuard())) return later() || !here() ? undefined : repaintBoatPage();   // Stay → repaint puts the picker back
   if (later()) return;
   Opt.activeBoat = id;
+  // the old boat's speeds card can't be edited while the new boat loads: it reloads below
+  // (a hidden card just drops it; opening the card loads the new boat's)
+  const hadModel = !!Opt.showBoatModel;
+  Opt.boatModel = null;
   const post = boatWrite.then(() => (later() ? null : apiPost("/api/boats/active", { boat_id: id })));
   boatWrite = post.catch(() => {});
-  await post;
+  let saved = null;
+  try { saved = await post; } catch (e) { saved = { ok: false }; }
   if (later()) return;
+  if (!saved || !saved.ok) {                     // the server kept the old boat: say so, fill nothing
+    await reloadBoats(() => !later());
+    if (hadModel && !later()) {                  // the card goes back to the boat still active
+      try { const bm = await (await apiGet("/api/crossovers")).json(); if (!later()) bmLoaded(bm); }
+      catch (e) { if (!later()) bmLoaded({ error: String(e) }); }
+    }
+    if (!later() && here()) { repaintBoatPage(); alert("Couldn't switch the boat. Try again."); }
+    return;
+  }
   await reloadBoats(() => !later());            // a later pick's list and active boat stand
   if (later()) return;
-  if (Opt.boatModel) {   // the card shows the new boat's model, not the old one's
+  if (hadModel) {   // the card shows the new boat's model, not the old one's
     let bm;
     try { bm = await (await apiGet("/api/crossovers")).json(); } catch (e) { bm = { error: String(e) }; }
     if (later()) return;                         // never over a later pick's model

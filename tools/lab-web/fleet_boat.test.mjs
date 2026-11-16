@@ -114,7 +114,7 @@ function pickRig() {
     _fleetOwnCols: () => ({ rating: null, tod: null }) };
   ctx.repaintBoatPage = () => { ctx.repaints++; };
   ctx.apiPost = (path, body) => path === "/api/boats/active"
-    ? (ctx.posts.push(body.boat_id), hold("active", body.boat_id, {}))
+    ? (ctx.posts.push(body.boat_id), hold("active", body.boat_id, ctx.failActive ? { ok: false } : { ok: true }))
     : hold("fill", body.boat_id, { ok: true, json: async () => ({ note: null,
         own: Object.assign({}, body.own, { boat: body.boat_id.toUpperCase(), sail: "" }) }) });
   let reloadFor = null;
@@ -178,7 +178,7 @@ test("typing while the active-boat save is pending wins over the pick's fill", a
 
 test("pick A then B: A's late boat list and model never replace B's", async () => {
   const { ctx, f, release, tick } = pickRig();
-  ctx.Opt.boatModel = { boat: "old" };
+  ctx.Opt.boatModel = { boat: "old" }; ctx.Opt.showBoatModel = true;
   const pa = f.pickBoat("a"); await tick();
   await release("active", "a");                       // A's GET /api/boats now held (says active: a)
   const pb = f.pickBoat("b"); await tick();
@@ -191,7 +191,7 @@ test("pick A then B: A's late boat list and model never replace B's", async () =
 
 test("pick A then B: A's late model reply never replaces B's", async () => {
   const { ctx, f, release, tick } = pickRig();
-  ctx.Opt.boatModel = { boat: "old" };
+  ctx.Opt.boatModel = { boat: "old" }; ctx.Opt.showBoatModel = true;
   const pa = f.pickBoat("a"); await tick();
   await release("active", "a"); await release("reload", "a");   // A's /api/crossovers held
   const pb = f.pickBoat("b"); await tick();
@@ -240,4 +240,16 @@ test("a Gameplan pick repaints Gameplan only while it is still open", async () =
   await release("active", "b"); ctx.activeSec = "races";
   await release("reload", "b"); await p;
   assert.equal(ctx.repaints, 1);
+});
+
+test("the server refuses the switch: no fill, the race keeps its boat, and it says so", async () => {
+  const { d, ctx, f, release, tick, held } = pickRig();
+  ctx.failActive = true; ctx.alerts = []; ctx.alert = (m) => ctx.alerts.push(m);
+  const p = f.pickBoat("a"); await tick();
+  await release("active", "a");
+  await release("reload", "a");
+  await p;
+  assert.ok(!held.some((h) => h.what === "fill"), "no fill after a refused switch");
+  assert.equal(d.own.boat, "Old");
+  assert.equal(ctx.alerts.length, 1);
 });
