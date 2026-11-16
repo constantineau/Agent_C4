@@ -1741,6 +1741,7 @@ function optBoatControls() {
       <select id="optBoat" onchange="optPickBoat(this.value)">
         ${(Opt.boats || []).map((b) => `<option value="${esc(b.boat_id)}" ${b.boat_id === Opt.activeBoat ? "selected" : ""}>${esc(b.name)} (${depthTxt(b.draft_m)})</option>`).join("")}
       </select></label>
+    <button type="button" class="mini" onclick="newBoatFromCert()">New boat</button>
     <label>Draft <input type="number" id="optDraft" step="0.1" min="0" value="${depthVal(ab.draft_m)}" style="width:64px" onchange="optSaveDraft()">
       <select id="optDepthUnit" onchange="optSetDepthUnit(this.value)" aria-label="Depth unit">
         <option value="ft" ${u === "ft" ? "selected" : ""}>ft</option>
@@ -1753,6 +1754,82 @@ function optBoatControls() {
         <option value="enc" ${isEnc ? "selected" : ""}>NOAA charts (uses draft)</option>
       </select></label>
     <span class="muted">${isEnc ? "avoids water under " + depthTxt(ab.safety_depth_m) : "coastline only, no depths"}</span>`;
+}
+/* New boat from its ORC certificate: paste the cert link, its number or the sail number → Look up
+   shows what the public ORC list holds → Create boat saves it (the link itself is never opened). */
+function nbPreviewHtml(p) {
+  const rows = [["Boat", p.name], ["Sail", p.sail_number], ["Class", p.boat_class],
+    ["Draft", depthTxt(p.draft_m)], ["Length", p.loa_m ? depthVal(p.loa_m) + " " + depthUnit() : "?"],
+    ["GPH", p.gph ?? "?"], ["Certificate", p.ref_no + (p.issue_date ? ", issued " + p.issue_date : "")],
+    ["Polar", p.polar_rows ? p.polar_rows + " speeds" : "none"]];
+  return `<table class="nb-prev">${rows.map(([k, v]) => `<tr><td class="muted">${esc(k)}</td><td>${esc(v)}</td></tr>`).join("")}</table>`;
+}
+function newBoatFromCert() {
+  const el = document.createElement("div");
+  el.className = "modal-back";
+  el.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="nbH">
+    <h3 id="nbH">New boat</h3>
+    <p><label>ORC certificate link, number or sail number<br>
+      <input id="nbCert" style="width:100%" autocomplete="off"></label></p>
+    <p><label>Country (if not in the sail number) <input id="nbCountry" style="width:70px" maxlength="3" autocomplete="off"></label></p>
+    <div id="nbOut"></div>
+    <div class="modal-btns">
+      <button data-c="cancel">Cancel</button>
+      <button data-c="look" class="primary">Look up</button>
+      <button data-c="create" class="primary" hidden>Create boat</button>
+    </div></div>`;
+  const $ = (s) => el.querySelector(s);
+  const out = $("#nbOut");
+  let found = null;
+  const body = (save) => ({ cert: $("#nbCert").value.trim(), country: $("#nbCountry").value.trim() || null,
+                            race_id: Opt.raceId || null, save });
+  async function look() {
+    found = null; $("[data-c=create]").hidden = true;
+    if (!$("#nbCert").value.trim()) { out.innerHTML = '<p class="err">Enter a link, number or sail number.</p>'; return; }
+    out.innerHTML = '<p class="muted">Looking up…</p>';
+    try {
+      const r = await apiPost("/api/boats/from-orc", body(false));
+      const j = await r.json();
+      if (!r.ok) {
+        const where = (j.searched || []).length ? " Searched: " + j.searched.join(", ") + "." : "";
+        out.innerHTML = `<p class="err">${esc((j.detail || "Not found.") + where)}</p>`; return;
+      }
+      found = j;
+      out.innerHTML = nbPreviewHtml(j.preview) + `<p class="muted">Found in the ${esc(j.country)} list.</p>`;
+      $("[data-c=create]").hidden = false; $("[data-c=create]").focus();
+    } catch (e) { out.innerHTML = `<p class="err">${esc(String(e.message || e))}</p>`; }
+  }
+  async function create() {
+    if (!found) return;
+    $("[data-c=create]").disabled = true;
+    try {
+      const r = await apiPost("/api/boats/from-orc", body(true));
+      const j = await r.json();
+      if (!r.ok) { out.innerHTML = `<p class="err">${esc(j.detail || "Not saved.")}</p>`; $("[data-c=create]").disabled = false; return; }
+      el.remove();
+      await reloadBoats(); renderGameplan();
+      if (j.boat_id !== Opt.activeBoat) {
+        const c = await askModal(j.updated ? "Boat updated" : "Boat added",
+          `${esc(j.note)} Use <b>${esc(j.summary.name)}</b> now?`,
+          [{ c: "no", label: "Not now", cls: "" }, { c: "yes", label: "Use this boat", cls: "primary" }], "yes", "no");
+        if (c === "yes") await optPickBoat(j.boat_id);
+      } else {
+        await askModal("Boat updated", esc(j.note), [{ c: "ok", label: "OK", cls: "primary" }], "ok", "ok");
+      }
+    } catch (e) { out.innerHTML = `<p class="err">${esc(String(e.message || e))}</p>`; $("[data-c=create]").disabled = false; }
+  }
+  el.addEventListener("click", (e) => {
+    const c = e.target.dataset ? e.target.dataset.c : null;
+    if (e.target === el || c === "cancel") el.remove();
+    else if (c === "look") look();
+    else if (c === "create") create();
+  });
+  el.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") el.remove();
+    else if (e.key === "Enter" && e.target.tagName === "INPUT") { e.preventDefault(); look(); }
+  });
+  document.body.appendChild(el);
+  $("#nbCert").focus();
 }
 async function optPickBoat(id) {
   // the boat-model thresholds save to the ACTIVE boat — settle unsaved ones before it changes

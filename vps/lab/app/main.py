@@ -728,6 +728,31 @@ def save_boat(body: dict):
     return {"boat": saved, "summary": boat_profile.summary(saved), "warnings": warns}
 
 
+@app.post("/api/boats/from-orc")
+async def boat_from_orc(body: dict):
+    """A boat from its ORC certificate. Body {cert: link | RefNo | sail number, country?, race_id?,
+    save?}. Without `save`: a preview (nothing stored). With `save: true`: a new profile, or the
+    profile already carrying this RefNo gets the cert's polar again. A cert link is never fetched
+    (sas.orc.org blocks servers); its RefNo is looked up in the public ORC list."""
+    from . import certboat
+    body = body or {}
+    d = store.get_race(body.get("race_id")) if body.get("race_id") else None
+    found = await run_in_threadpool(certboat.lookup, body.get("cert"), body.get("country"), d,
+                                    boats.active_boat())
+    if not found["ok"]:
+        return JSONResponse({"detail": found["note"], "searched": found["searched"]},
+                            status_code=404)
+    out = {"preview": certboat.preview(found["rec"], found["country"]),
+           "searched": found["searched"], "country": found["country"]}
+    if body.get("save"):
+        r = certboat.create(found["rec"], found["country"])
+        if not r["ok"]:
+            return JSONResponse({"detail": r["note"]}, status_code=400)
+        out.update(saved=True, boat_id=r["boat_id"], updated=r["updated"], note=r["note"],
+                   summary=boat_profile.summary(r["boat"]))
+    return out
+
+
 @app.get("/api/boats/library")       # declared before /api/boats/{bid} so 'library' isn't an id
 def boat_library():
     """Read-only: every boat profile with its polar block (#320). The Pi engine pulls this by
