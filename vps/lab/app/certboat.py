@@ -241,8 +241,8 @@ def own_from_boat(boat, definition):
     old = dict(d.get("own") or {})
     own = dict(old)
     own["boat"] = str(boat.get("name") or boat.get("boat_id") or "")
-    if boat.get("sail_number"):
-        own["sail"] = str(boat["sail_number"])
+    # the profile's sail, even when blank: an inherited sail would make another boat look like this one
+    own["sail"] = str(boat.get("sail_number") or "").strip()
     if str(boat.get("mmsi") or "").strip():
         own["mmsi"] = str(boat["mmsi"]).strip()
     if not _same_boat(old, own):

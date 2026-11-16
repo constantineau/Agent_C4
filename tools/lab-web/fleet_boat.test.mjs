@@ -46,14 +46,40 @@ test("mismatch: the active boat when the race has another (or none), else null",
   assert.equal(f.ownMismatch({ boat: "Old" }, null, "hooligan"), null);
 });
 
-test("fill: the server's own replaces the race's; a bad reply keeps it", () => {
-  const f = run(["ownFilled"], {});
-  const own = { boat: "Old", division: "orc", rating: 1.01 };
-  const filled = { boat: "Hooligan", sail: "USA 52521", division: "orc", orc_gph: 438.9, rating: 1.3889 };
-  const out = f.ownFilled(own, filled);
-  assert.deepEqual({ ...out }, filled);
-  assert.notEqual(out, filled);
-  assert.deepEqual({ ...f.ownFilled(own, null) }, own);
+test("fill: only the fields a fill owns; division as on screen; MMSI only from the profile", () => {
+  const f = run(["OWN_FILL_KEYS", "ownFilled"], {});
+  const sent = { boat: "Old", division: "orc", rating: 1.01, rating_col: "manual", mmsi: "367000000" };
+  const onScreen = { ...sent, division: "dh" };           // division typed while the fill ran
+  const filled = { boat: "Hooligan", sail: "USA 52521", division: "orc", mmsi: "367000000",
+                   orc_gph: 438.9, rating: 1.3889, rating_col: "TMF_Offshore" };
+  const out = f.ownFilled(onScreen, filled, sent);
+  assert.deepEqual({ ...out }, { boat: "Hooligan", sail: "USA 52521", division: "dh", mmsi: "367000000",
+                                 orc_gph: 438.9, rating: 1.3889, rating_col: "TMF_Offshore" });
+  // a number the reply leaves out is gone; a profile MMSI wins
+  const out2 = f.ownFilled(sent, { boat: "New", sail: "", mmsi: "316000001" }, sent);
+  assert.ok(!("rating" in out2) && !("rating_col" in out2) && out2.mmsi === "316000001");
+  assert.deepEqual({ ...f.ownFilled(sent, null, sent) }, sent);
+});
+
+test("a fill reply is dropped after a later fill or typing", async () => {
+  const d = { race_id: "r", own: { boat: "Old", division: "orc" } };
+  let release;
+  const ctx = { Lab: { editDef: d, ownRev: 0, ownFillGen: 0 }, Object,
+    apiPost: () => new Promise((res) => { release = res; }) };
+  const f = run(["OWN_FILL_KEYS", "ownFilled", "fillCurrent", "fillOwnFromBoat", "fleetOwnSet"],
+                Object.assign(ctx, { _fleetOwnCols: () => ({ rating: null, tod: null }) }));
+  const reply = { ok: true, json: async () => ({ own: { boat: "Hooligan", sail: "USA 52521", division: "orc" }, note: null }) };
+  // typing while the fill runs
+  let p = f.fillOwnFromBoat("hooligan");
+  f.fleetOwnSet("division", "dh");
+  release(reply); await p;
+  assert.equal(d.own.boat, "Old"); assert.equal(d.own.division, "dh");
+  // a second pick while the first is in flight: only the second lands
+  p = f.fillOwnFromBoat("a"); const r1 = release;
+  const p2 = f.fillOwnFromBoat("b"); const r2 = release;
+  r2({ ok: true, json: async () => ({ own: { boat: "B", sail: "" }, note: null }) }); await p2;
+  r1({ ok: true, json: async () => ({ own: { boat: "A", sail: "" }, note: null }) }); await p;
+  assert.equal(d.own.boat, "B"); assert.equal(d.own.division, "dh");
 });
 
 test("Fleet line: names the active boat with a Use it here button; nothing when they match", () => {

@@ -61,6 +61,7 @@ def _boat(bid, name, sail, cert=None, gph=None, mmsi=""):
 _boat("hooligan", "Hooligan", "USA 52521",
       cert={"ref_no": "045600052L8", "country": "USA", "gph": 438.9})
 _boat("plain", "Plain Jane", "CAN 9", gph=600.0, mmsi="316000001")
+_boat("nosail", "New", "")
 
 SCORING = {"rating_system": "ORC", "rating_column": "TMF_Offshore", "rating_column_tod": ""}
 RACE = {"race_id": "t-race", "name": "T", "rules_profile": {"scoring": SCORING},
@@ -126,6 +127,12 @@ stored["race"] = dict(RACE, own={"boat": "Plain Jane", "sail": "CAN 9", "rating"
 own = post({"race_id": "t-race", "boat_id": "plain"}).json()["own"]
 check("typed ToT kept", own["rating"] == 0.99 and own["rating_col"] == "manual")
 stored["race"] = RACE
+
+print("6b) a profile with no sail number never inherits the old boat's sail or numbers")
+j = post({"race_id": "t-race", "boat_id": "nosail"}).json()["own"]
+check("sail cleared", j["boat"] == "New" and j["sail"] == "")
+check("old boat's ToT and GPH dropped", j.get("rating") is None and j.get("orc_gph") is None
+      and "rating_col" not in j)
 
 print("7) the ORC list down: GPH from the profile, no ToT, a note")
 fleetimport._orc_dump = lambda cc: (_ for _ in ()).throw(RuntimeError("down"))

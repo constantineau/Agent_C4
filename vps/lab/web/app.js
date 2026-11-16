@@ -1781,24 +1781,35 @@ function ownMismatch(own, boats, activeId) {
   const ab = (boats || []).find((b) => b.boat_id === activeId);
   return ab && !sameOwnBoat(own, ab) ? ab : null;
 }
-// The server's filled "Our boat" replaces the race's: it was built from the one on screen, so
-// division, MMSI and anything else the pick doesn't touch come back as they were.
-function ownFilled(own, filled) {
-  return filled && typeof filled === "object" ? Object.assign({}, filled) : Object.assign({}, own || {});
+// The fields a fill owns. Division and anything else stay as on screen; MMSI only when the profile
+// gave one (the reply's MMSI differs from the one sent).
+const OWN_FILL_KEYS = ["boat", "sail", "orc_gph", "rating", "rating_col", "tod_allowance", "tod_col"];
+function ownFilled(own, filled, sent) {
+  const out = Object.assign({}, own || {});
+  if (!filled || typeof filled !== "object") return out;
+  for (const k of OWN_FILL_KEYS) {
+    if (k in filled) out[k] = filled[k]; else delete out[k];
+  }
+  if ((filled.mmsi || "") !== ((sent || {}).mmsi || "")) out.mmsi = filled.mmsi;
+  return out;
 }
+// A fill reply counts only when nothing newer happened: no later fill (gen) and no typing (rev).
+const fillCurrent = (t, d) => Lab.editDef === d && t.gen === (Lab.ownFillGen || 0) && t.rev === (Lab.ownRev || 0);
 // Fill the open race's "Our boat" from boat `id` (Fleet). An unsaved race edit, never a save.
 async function fillOwnFromBoat(id) {
   const d = Lab.editDef;
   if (!d || !d.race_id || Lab.isDraft) return;
+  const t = { gen: (Lab.ownFillGen = (Lab.ownFillGen || 0) + 1), rev: Lab.ownRev || 0 };
+  const sent = Object.assign({}, d.own || {});
   try {
     const r = await apiPost("/api/fleet/own-from-boat", { race_id: d.race_id, boat_id: id,
-      scoring: (d.rules_profile || {}).scoring || null, own: d.own || {} });
+      scoring: (d.rules_profile || {}).scoring || null, own: sent });
     const j = await r.json();
-    if (Lab.editDef !== d) return;                     // another race opened meanwhile
+    if (!fillCurrent(t, d)) return;   // another race, a later pick or typing since: that wins
     if (!r.ok) { Lab.fleetMsg = j.detail || "Couldn't fill our boat."; Lab.fleetMsgErr = true; return; }
-    d.own = ownFilled(d.own, j.own);
+    d.own = ownFilled(d.own, j.own, sent);
     Lab.fleetMsg = j.note || ""; Lab.fleetMsgErr = !!j.note;
-  } catch (e) { if (Lab.editDef === d) { Lab.fleetMsg = String(e.message || e); Lab.fleetMsgErr = true; } }
+  } catch (e) { if (fillCurrent(t, d)) { Lab.fleetMsg = String(e.message || e); Lab.fleetMsgErr = true; } }
 }
 async function pickBoat(id) {
   if (!(await boatGuard())) return repaintBoatPage();   // Stay → repaint puts the picker back
@@ -3259,6 +3270,7 @@ function fleetOwnSet(f, v) {
   if (!Lab.editDef) return;
   if (!Lab.editDef.own) Lab.editDef.own = {};
   const own = Lab.editDef.own;
+  Lab.ownRev = (Lab.ownRev || 0) + 1;   // typing outdates a fill still in flight
   own[f] = v;
   if (f === "rating") own.rating_col = _fleetOwnCols().rating;
   if (f === "tod_allowance") own.tod_col = _fleetOwnCols().tod;
