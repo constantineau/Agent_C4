@@ -378,7 +378,10 @@ def roster_from_text(text):
 
 # YachtScoring is a JS SPA, but its public API serves the entry list as JSON — fetch that directly
 # (like YB), instead of the HTML shell a server-side fetch gets ("You need to enable JavaScript").
-_YS_EVENT_RE = re.compile(r"(?:emenu/|e?id=|event/)(\d+)", re.I)
+# Any YachtScoring page of an event carries its number: emenu/<id>, event/<id>, eID=<id>, and the
+# newer per-page links (event_scratch_sheet/<id>, event_entry_list/<id>, ...). Else: a bare
+# all-digit path segment.
+_YS_EVENT_RE = re.compile(r"(?:emenu/|e?id=|event[a-z_]*/)(\d+)|/(\d{3,})(?=[/?#]|$)", re.I)
 _YS_API = "https://api.yachtscoring.com/v1/public/event/{eid}/boats?page={page}&size={size}"
 
 
@@ -484,7 +487,7 @@ def roster_from_url(url):
         if not m:
             return {"ok": False, "note": "That YachtScoring link has no event number "
                     "(it should look like .../emenu/<id>)."}
-        return roster_from_yachtscoring(m.group(1))
+        return roster_from_yachtscoring(m.group(1) or m.group(2))
     if "regattanetwork.com" in url.lower():
         m = _RN_EVENT_RE.search(url)
         if not m:
