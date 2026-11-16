@@ -3562,11 +3562,11 @@ const ORC_COLS = [
   { label: "Inshore triple: medium wind", tot: "TN_Inshore_Medium", tod: "TND_Inshore_Medium" },
   { label: "Inshore triple: high wind", tot: "TN_Inshore_High", tod: "TND_Inshore_High" },
   { label: "All purpose", tot: "APHT", tod: "APHD" },
-  { label: "GPH (distance only)", tot: "", tod: "GPH" },
 ];
-// Common US event columns, offered under Other until the Lab has read some certificates.
-const ORC_US_COLS = ["US_PREDRC", "US_PREDUP", "US_PREDDN", "US_AP",
-  "US_CHIMAC_CV", "US_CHIMAC_SH", "US_BAYMAC_CV", "US_BAYMAC_SH"];
+// Common US event columns, offered under Other until the Lab has read some certificates. Each is a
+// real X_TOT / X_TOD pair on a 2026 US certificate.
+const ORC_US_COLS = ["US_PREDRC", "US_PREDUP", "US_PREDDN", "US_APH",
+  "US_BAYMAC_CV", "US_BAYMAC_SH", "US_HARVMOON"];
 // Other: every X_TOT / X_TOD pair on the certificates the Lab has read (paired by name), else the US list.
 function orcOtherCols(seen) {
   const std = new Set(ORC_COLS.flatMap((o) => [o.tot, o.tod]).filter(Boolean));

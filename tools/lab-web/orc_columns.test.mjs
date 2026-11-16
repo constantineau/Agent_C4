@@ -39,7 +39,7 @@ test("standard options pair each ToT column with its ToD partner", () => {
   assert.equal(by.TN_Offshore_Low, "TND_Offshore_Low");
   assert.equal(by.TN_Inshore_High, "TND_Inshore_High");
   assert.equal(by.APHT, "APHD");
-  assert.equal(by.GPH, "GPH");
+  assert.equal(by.GPH, undefined);   // GPH has no ToT column: not offered (a saved one shows as Saved)
   const o = opts(f.orcColSelect("", "", "x("));
   assert.equal(o[0].v, "|");
   assert.ok(o[0].sel && o[0].text === "Not set");
