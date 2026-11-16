@@ -85,8 +85,6 @@ def make_box(units, reroute_env=None, c4_env=None):
         write(f"{sysd}/{u}", f"# old {u}\n{body}")
         write(f"{root}/state/{u}.en", en + "\n")
         write(f"{root}/state/{u}.act", act + "\n")
-    if "sr33-orin-copilot.service" in units:   # the box's own override, as an owner might add
-        write(f"{sysd}/sr33-orin-copilot.service.d/override.conf", "[Service]\nEnvironment=X=1\n")
     if any(u.startswith("sr33-orin") for u in units):
         write(f"{sysd}/ollama.service.d/sr33-oom.conf", "[Service]\nOOMScoreAdjust=500\n")
         write(f"{root}/etc/sr33/copilot.env", "ENGINE_URL=http://engine\n", 0o600)
@@ -170,10 +168,6 @@ check("REROUTE_BOAT moved into /etc/c4/reroute.env",
 check("ollama drop-in renamed, same setting",
       not os.path.exists(f"{sysd}/ollama.service.d/sr33-oom.conf")
       and "OOMScoreAdjust=500" in read(f"{sysd}/ollama.service.d/c4-oom.conf"))
-check("the copilot's override goes with it, the old one is gone (backed up)",
-      read(f"{sysd}/c4-orin-copilot.service.d/override.conf") == "[Service]\nEnvironment=X=1\n"
-      and not os.path.exists(f"{sysd}/sr33-orin-copilot.service.d")
-      and os.path.exists(f"{bk}/sr33-orin-copilot.service.d/override.conf"))
 check("says where the backup is", "Backup:" in r.stdout and os.path.exists(f"{bk}/plan"))
 
 print("orin, run again")
@@ -197,9 +191,6 @@ check("and are enabled again",
 log = calls(box)
 check("rollback stops the new plume pass before the old timer starts",
       log.index("stop c4-orin-plume.service") < log.index("start sr33-orin-plume.timer"))
-check("the override is back under the old name only",
-      os.path.exists(f"{sysd}/sr33-orin-copilot.service.d/override.conf")
-      and not os.path.exists(f"{sysd}/c4-orin-copilot.service.d"))
 check("the old drop-in is back", os.path.exists(f"{sysd}/ollama.service.d/sr33-oom.conf")
       and not os.path.exists(f"{sysd}/ollama.service.d/c4-oom.conf"))
 check("rollback says to put the Orin checkout back too", "checkout back" in r.stdout)
@@ -230,22 +221,22 @@ env = read(f"{box}/etc/c4/reroute.env")
 check(f"copy plus the unit's boat (rc {r.returncode})",
       r.returncode == 0 and env.startswith("REROUTE_MODELS=hrrr\n") and "\nREROUTE_BOAT=bravo\n" in env)
 
-print("orin, the boat set in a re-route override; a c4 override folder already there")
+print("orin, a unit with overrides: refused before any change")
+for folder in ("sr33-orin-copilot.service.d", "c4-orin-shed.service.d"):
+    box = make_box(ORIN_UNITS)
+    write(f"{box}/etc/systemd/system/{folder}/x.conf", "[Service]\nNice=1\n")
+    before = snapshot(box)
+    r = run(box, "orin", REPO, f"{box}/backup", "--apply")
+    check(f"{folder}: stops, says move them by hand, nothing changed (rc {r.returncode})",
+          r.returncode != 0 and "by hand" in r.stderr and snapshot(box) == before)
+
+print("orin, the boat set quoted beside another variable")
 box = make_box(ORIN_UNITS)
-sysd = f"{box}/etc/systemd/system"
-write(f"{sysd}/sr33-orin-reroute.service.d/boat.conf", "[Service]\nEnvironment=X=1 \"REROUTE_BOAT=echo\"\n")
-write(f"{sysd}/c4-orin-copilot.service.d/mine.conf", "[Service]\nNice=1\n")
+u = f"{box}/etc/systemd/system/sr33-orin-reroute.service"
+write(u, read(u).replace("Environment=REROUTE_BOAT=bravo", 'Environment=X=1 "REROUTE_BOAT=echo"'))
 r = run(box, "orin", REPO, f"{box}/backup", "--apply")
-check(f"the override's boat wins over the unit's (rc {r.returncode})",
+check(f"the quoted boat is moved (rc {r.returncode})",
       r.returncode == 0 and "\nREROUTE_BOAT=echo\n" in "\n" + read(f"{box}/etc/c4/reroute.env"))
-check("an existing c4 override folder is kept, not replaced",
-      os.listdir(f"{sysd}/c4-orin-copilot.service.d") == ["mine.conf"])
-r = run(box, "--rollback", f"{box}/backup", "--apply")
-check(f"and a rollback leaves it alone (rc {r.returncode})",
-      read(f"{sysd}/c4-orin-copilot.service.d/mine.conf") == "[Service]\nNice=1\n")
-check("while the folder the switch made is removed",
-      not os.path.exists(f"{sysd}/c4-orin-reroute.service.d")
-      and os.path.exists(f"{sysd}/sr33-orin-reroute.service.d/boat.conf"))
 
 print("orin, an indented boat in the old env file; both names installed")
 box = make_box(ORIN_UNITS, reroute_env="  REROUTE_BOAT=foxtrot\n")

@@ -55,9 +55,9 @@ boat_to_move() {
   [[ -f $env ]] || env=$OLD_ENV/reroute.env
   if grep -qs '^[[:space:]]*REROUTE_BOAT=.' "$env"; then return; fi
   v=$(sed -n 's/^[[:space:]]*REROUTE_BOAT=\(..*\)$/\1/p' "$OLD_ENV/reroute.env" 2>/dev/null | tail -1)
-  if [[ -z $v && -f $UNITS/sr33-orin-reroute.service ]]; then   # the unit, then its overrides
-    v=$(cat "$UNITS/sr33-orin-reroute.service" "$UNITS/sr33-orin-reroute.service.d"/*.conf 2>/dev/null \
-        | sed -n 's/^[[:space:]]*Environment=//p' | tr ' ' '\n' | tr -d "\"'" \
+  if [[ -z $v && -f $UNITS/sr33-orin-reroute.service ]]; then   # (a unit with overrides is refused)
+    v=$(sed -n 's/^[[:space:]]*Environment=//p' "$UNITS/sr33-orin-reroute.service" \
+        | tr ' ' '\n' | tr -d "\"'" \
         | sed -n 's/^REROUTE_BOAT=\(..*\)$/\1/p' | tail -1)   # Environment=A=1 "REROUTE_BOAT=x" too
   fi
   echo "$v"
@@ -77,12 +77,6 @@ rollback() {
 
   while read -r old en act; do
     cp -p "$bk/$old" "$UNITS/$old"
-    if [[ -d $bk/$old.d ]]; then
-      rm -rf "$UNITS/$old.d"
-      cp -rp "$bk/$old.d" "$UNITS/$old.d"
-    fi
-    # only the override folder the switch made; one the box already had stays
-    if [[ -f $bk/made-$(new_name "$old").d ]]; then rm -rf "$UNITS/$(new_name "$old").d"; fi
   done < "$bk/plan"
   if [[ -f $bk/$(basename "$DROPIN_OLD") ]]; then
     cp -p "$bk/$(basename "$DROPIN_OLD")" "$UNITS/$DROPIN_OLD"
@@ -125,10 +119,12 @@ switch() {
     [[ -f $src/pi/systemd/$new ]] || die "the checkout has no pi/systemd/$new. Nothing done."
     if [[ -f $UNITS/$old && -e $UNITS/$new ]]; then
       die "both $old and $new are installed; remove one by hand first. Nothing done."
+    elif [[ -d $UNITS/$old.d || -d $UNITS/$new.d ]]; then
+      # a box's own overrides can name old paths or clash with the new unit: a person moves them
+      die "$old has overrides ($old.d or $new.d); move them by hand first. Nothing done."
     elif [[ -f $UNITS/$old ]]; then
       en=$(state is-enabled "$old"); act=$(state is-active "$old")
       say "$old (${en:-?}, ${act:-?}) -> $new"
-      if [[ -d $UNITS/$old.d ]]; then say "  its overrides in $old.d/ go with it"; fi
       todo+=("$old ${en:-unknown} ${act:-unknown}")
     elif [[ -f $UNITS/$new ]]; then
       say "$new already in place"
@@ -158,7 +154,6 @@ switch() {
   for line in "${todo[@]}"; do
     read -r old en act <<< "$line"
     cp -p "$UNITS/$old" "$bk/$old"
-    if [[ -d $UNITS/$old.d ]]; then cp -rp "$UNITS/$old.d" "$bk/$old.d"; fi
     echo "$old $en $act" >> "$bk/plan"
   done
   if [[ -f $UNITS/$DROPIN_OLD ]]; then cp -p "$UNITS/$DROPIN_OLD" "$bk/"; fi
@@ -184,11 +179,6 @@ switch() {
     read -r old en act <<< "$line"
     new=$(new_name "$old")
     install -m 0644 "$src/pi/systemd/$new" "$UNITS/$new"
-    # the box's own overrides (unit.d/*.conf) go with the unit; a c4 one already there wins
-    if [[ -d $UNITS/$old.d && ! -e $UNITS/$new.d ]]; then
-      cp -rp "$UNITS/$old.d" "$UNITS/$new.d"
-      touch "$bk/made-$new.d"
-    fi
   done
   if [[ -f $UNITS/$DROPIN_OLD ]]; then
     install -m 0644 "$src/pi/systemd/$DROPIN_NEW" "$UNITS/$DROPIN_NEW"
@@ -226,7 +216,7 @@ switch() {
   # 5. remove the old unit files (backed up above)
   for line in "${todo[@]}"; do
     read -r old en act <<< "$line"
-    rm -rf "$UNITS/$old" "$UNITS/$old.d"
+    rm -f "$UNITS/$old"
   done
   systemctl daemon-reload
 

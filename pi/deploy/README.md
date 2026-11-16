@@ -169,5 +169,7 @@ pi/deploy/switch-units.sh <user@host> --rollback units-STAMP --apply
   `/etc/c4/reroute.env`.
 - On the Pi only `can0` changes, and it is never stopped or started: stopping it takes the NMEA
   2000 bus down. `c4-can0` is enabled and takes over at the next boot.
+- A unit with its own overrides (`unit.d/`) is refused before anything changes: those can name
+  the old paths, so a person moves them.
 - Backups land in `~/deploy-backups/units-STAMP` on the box. A rollback on the Orin also needs the
   checkout put back (`~/pre-pull-backup`), or the shed state goes unread.
