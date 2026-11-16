@@ -75,6 +75,10 @@ rollback() {
 
   while read -r old en act; do
     cp -p "$bk/$old" "$UNITS/$old"
+    if [[ -d $bk/$old.d ]]; then
+      rm -rf "$UNITS/$old.d" "$UNITS/$(new_name "$old").d"
+      cp -rp "$bk/$old.d" "$UNITS/$old.d"
+    fi
   done < "$bk/plan"
   if [[ -f $bk/$(basename "$DROPIN_OLD") ]]; then
     cp -p "$bk/$(basename "$DROPIN_OLD")" "$UNITS/$DROPIN_OLD"
@@ -87,6 +91,9 @@ rollback() {
       systemctl disable "$new" || true
     else
       systemctl disable --now "$new" || true
+    fi
+    if [[ $old == *.timer ]]; then
+      systemctl stop "$(new_name "${old%.timer}.service")" || true   # no pass beside the old timer's
     fi
     if [[ $en == enabled ]]; then systemctl enable "$old"; fi
     if [[ $act == active ]] && ! no_restart "$old"; then systemctl start "$old"; fi
@@ -115,6 +122,7 @@ switch() {
     if [[ -f $UNITS/$old ]]; then
       en=$(state is-enabled "$old"); act=$(state is-active "$old")
       say "$old (${en:-?}, ${act:-?}) -> $new"
+      if [[ -d $UNITS/$old.d ]]; then say "  its overrides in $old.d/ go with it"; fi
       todo+=("$old ${en:-unknown} ${act:-unknown}")
     elif [[ -f $UNITS/$new ]]; then
       say "$new already in place"
@@ -144,6 +152,7 @@ switch() {
   for line in "${todo[@]}"; do
     read -r old en act <<< "$line"
     cp -p "$UNITS/$old" "$bk/$old"
+    if [[ -d $UNITS/$old.d ]]; then cp -rp "$UNITS/$old.d" "$bk/$old.d"; fi
     echo "$old $en $act" >> "$bk/plan"
   done
   if [[ -f $UNITS/$DROPIN_OLD ]]; then cp -p "$UNITS/$DROPIN_OLD" "$bk/"; fi
@@ -167,7 +176,10 @@ switch() {
   # 3. install the new units next to the old ones
   for line in "${todo[@]}"; do
     read -r old en act <<< "$line"
-    install -m 0644 "$src/pi/systemd/$(new_name "$old")" "$UNITS/$(new_name "$old")"
+    new=$(new_name "$old")
+    install -m 0644 "$src/pi/systemd/$new" "$UNITS/$new"
+    # the box's own overrides (unit.d/*.conf) go with the unit; a c4 one already there wins
+    if [[ -d $UNITS/$old.d && ! -e $UNITS/$new.d ]]; then cp -rp "$UNITS/$old.d" "$UNITS/$new.d"; fi
   done
   if [[ -f $UNITS/$DROPIN_OLD ]]; then
     install -m 0644 "$src/pi/systemd/$DROPIN_NEW" "$UNITS/$DROPIN_NEW"
@@ -205,7 +217,7 @@ switch() {
   # 5. remove the old unit files (backed up above)
   for line in "${todo[@]}"; do
     read -r old en act <<< "$line"
-    rm -f "$UNITS/$old"
+    rm -rf "$UNITS/$old" "$UNITS/$old.d"
   done
   systemctl daemon-reload
 

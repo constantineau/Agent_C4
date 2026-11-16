@@ -85,6 +85,8 @@ def make_box(units, reroute_env=None, c4_env=None):
         write(f"{sysd}/{u}", f"# old {u}\n{body}")
         write(f"{root}/state/{u}.en", en + "\n")
         write(f"{root}/state/{u}.act", act + "\n")
+    if "sr33-orin-copilot.service" in units:   # the box's own override, as an owner might add
+        write(f"{sysd}/sr33-orin-copilot.service.d/override.conf", "[Service]\nEnvironment=X=1\n")
     if any(u.startswith("sr33-orin") for u in units):
         write(f"{sysd}/ollama.service.d/sr33-oom.conf", "[Service]\nOOMScoreAdjust=500\n")
         write(f"{root}/etc/sr33/copilot.env", "ENGINE_URL=http://engine\n", 0o600)
@@ -168,6 +170,10 @@ check("REROUTE_BOAT moved into /etc/c4/reroute.env",
 check("ollama drop-in renamed, same setting",
       not os.path.exists(f"{sysd}/ollama.service.d/sr33-oom.conf")
       and "OOMScoreAdjust=500" in read(f"{sysd}/ollama.service.d/c4-oom.conf"))
+check("the copilot's override goes with it, the old one is gone (backed up)",
+      read(f"{sysd}/c4-orin-copilot.service.d/override.conf") == "[Service]\nEnvironment=X=1\n"
+      and not os.path.exists(f"{sysd}/sr33-orin-copilot.service.d")
+      and os.path.exists(f"{bk}/sr33-orin-copilot.service.d/override.conf"))
 check("says where the backup is", "Backup:" in r.stdout and os.path.exists(f"{bk}/plan"))
 
 print("orin, run again")
@@ -188,6 +194,12 @@ check("the old units run again",
       all(st(box, u, "act") == "active" for u, (_, a) in ORIN_UNITS.items() if a == "active"))
 check("and are enabled again",
       all(st(box, u, "en") == "enabled" for u, (e, _) in ORIN_UNITS.items() if e == "enabled"))
+log = calls(box)
+check("rollback stops the new plume pass before the old timer starts",
+      log.index("stop c4-orin-plume.service") < log.index("start sr33-orin-plume.timer"))
+check("the override is back under the old name only",
+      os.path.exists(f"{sysd}/sr33-orin-copilot.service.d/override.conf")
+      and not os.path.exists(f"{sysd}/c4-orin-copilot.service.d"))
 check("the old drop-in is back", os.path.exists(f"{sysd}/ollama.service.d/sr33-oom.conf")
       and not os.path.exists(f"{sysd}/ollama.service.d/c4-oom.conf"))
 check("rollback says to put the Orin checkout back too", "checkout back" in r.stdout)
