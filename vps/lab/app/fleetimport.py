@@ -268,6 +268,8 @@ def enrich_from_orc(entries, country=None, definition=None, course_id=None):
            "tod_col": _tod_col(definition, course_id),
            # cleared and not read again off the new column (a re-read one isn't a loss)
            "stale_cleared": sum(1 for e in dropped if e.get("rating") is None)}
+    if seen_cols:      # every column the certs carry: the Lab's column picker offers them all
+        out["orc_columns"] = sorted(seen_cols)
     if not any(tc for tc, _dc in cols) and not (tot_col and not entries):
         out["note"] = COLUMN_UNKNOWN
         out["orc_columns"] = sorted(seen_cols)

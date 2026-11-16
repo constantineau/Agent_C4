@@ -3357,7 +3357,16 @@ function _fleetScoring() {
   const rp = (Lab.editDef.rules_profile = Lab.editDef.rules_profile || {});
   return (rp.scoring = rp.scoring || {});
 }
-function fleetColSet(v) { _fleetScoring().rating_column = (v || "").trim(); }
+function fleetColSet(v) {
+  const c = orcColSplit(v), sc = _fleetScoring();
+  sc.rating_column = c.tot; sc.rating_column_tod = c.tod;
+  // the whole tab repaints (ToD inputs come and go with the column), but a pasted entry list, a
+  // typed link and a chosen PDF are carried over: the very elements, so the PDF stays chosen
+  const keep = typeof document === "undefined" ? []
+    : ["fleetWebUrl", "fleetWebText", "fleetEntryPdf"].map((id) => document.getElementById(id)).filter(Boolean);
+  paintFleet();
+  keep.forEach((old) => { const nu = document.getElementById(old.id); if (nu && nu !== old) nu.replaceWith(old); });
+}
 function fleetCCSet(v) {
   _fleetScoring().rating_countries = (v || "").split(",").map((c) => c.trim().toUpperCase()).filter(Boolean);
 }
@@ -3545,6 +3554,59 @@ async function fleetSave() {
   return ok;
 }
 
+// The ORC certificate column picker (Rules race-wide, Rules per course, Fleet). One pick sets the
+// ToT column and its ToD partner (ToT = 600 / ToD s/nm), stored as rating_column + rating_column_tod
+// (or column + column_tod on a course row) exactly as before, so the server reads them unchanged.
+const ORC_COLS = [
+  { label: "Offshore, single number", tot: "TMF_Offshore", tod: "OSN" },
+  { label: "Inshore, single number", tot: "TMF_Inshore", tod: "ILCWA" },
+  { label: "Offshore triple: low wind", tot: "TN_Offshore_Low", tod: "TND_Offshore_Low" },
+  { label: "Offshore triple: medium wind", tot: "TN_Offshore_Medium", tod: "TND_Offshore_Medium" },
+  { label: "Offshore triple: high wind", tot: "TN_Offshore_High", tod: "TND_Offshore_High" },
+  { label: "Inshore triple: low wind", tot: "TN_Inshore_Low", tod: "TND_Inshore_Low" },
+  { label: "Inshore triple: medium wind", tot: "TN_Inshore_Medium", tod: "TND_Inshore_Medium" },
+  { label: "Inshore triple: high wind", tot: "TN_Inshore_High", tod: "TND_Inshore_High" },
+  { label: "All purpose", tot: "APHT", tod: "APHD" },
+];
+// Common US event columns, offered under Other until the Lab has read some certificates. Each is a
+// real X_TOT / X_TOD pair on a 2026 US certificate.
+const ORC_US_COLS = ["US_PREDRC", "US_PREDUP", "US_PREDDN", "US_APH",
+  "US_BAYMAC_CV", "US_BAYMAC_SH", "US_HARVMOON"];
+// Other: every X_TOT / X_TOD pair on the certificates the Lab has read (paired by name), else the US list.
+function orcOtherCols(seen) {
+  const std = new Set(ORC_COLS.flatMap((o) => [o.tot, o.tod]).filter(Boolean));
+  const pairs = new Map();
+  (seen || []).map(String).filter((c) => !std.has(c)).forEach((c) => {
+    const m = /^(.+)_(TOT|TOD)$/i.exec(c);
+    if (!m) return;
+    const p = pairs.get(m[1]) || { tot: "", tod: "" };
+    p[m[2].toUpperCase() === "TOT" ? "tot" : "tod"] = c;
+    pairs.set(m[1], p);
+  });
+  const list = pairs.size ? [...pairs] : ORC_US_COLS.map((b) => [b, { tot: b + "_TOT", tod: b + "_TOD" }]);
+  return list.sort((a, b) => a[0].localeCompare(b[0])).map(([b, p]) => ({ label: b, tot: p.tot, tod: p.tod }));
+}
+function orcColSplit(v) {
+  const [tot, tod] = String(v || "").split("|");
+  return { tot: (tot || "").trim(), tod: (tod || "").trim() };
+}
+const orcColRaw = (tot, tod) => [tot, tod].filter(Boolean).join(" / ");
+// `call` is a call prefix the picked "TOT|TOD" value is appended to, e.g. "rulesColPick(".
+// A saved pair the list doesn't hold shows as its own option, so it is never changed by a repaint.
+function orcColSelect(tot, tod, call, blank) {
+  tot = tot || ""; tod = tod || "";
+  const other = orcOtherCols(Lab.fleetCols);
+  const known = [...ORC_COLS, ...other].some((o) => o.tot === tot && o.tod === tod);
+  const opt = (o) => `<option value="${attr(o.tot + "|" + o.tod)}"${o.tot === tot && o.tod === tod ? " selected" : ""}>` +
+    `${esc(o.label)} · ${esc(orcColRaw(o.tot, o.tod))}</option>`;
+  return `<select class="esel" onchange="${call}this.value)">` +
+    `<option value="|"${!tot && !tod ? " selected" : ""}>${esc(blank || "Not set")}</option>` +
+    (!known && (tot || tod) ? opt({ label: "Saved", tot, tod }) : "") +
+    ORC_COLS.map(opt).join("") +
+    `<optgroup label="Other${(Lab.fleetCols || []).length ? "" : " (common US, load ratings for more)"}">${other.map(opt).join("")}</optgroup>` +
+    `</select>${tot || tod ? ` <span class="muted" style="font-size:11px">${esc(orcColRaw(tot, tod))}</span>` : ""}`;
+}
+
 // Which certificate number the race scores on (#311). Comes from the NOR/SI via Rules; set here when
 // the import says it's unknown. Per-course columns are edited in Rules.
 function fleetRatingCard(sc) {
@@ -3553,7 +3615,6 @@ function fleetRatingCard(sc) {
   if (sys && sys !== "ORC") {
     return `<div class="card"><h3>Ratings</h3><div class="muted" style="font-size:12px">${esc(sys)} race. ${sys === "ONE_DESIGN" ? "No ratings needed." : "No feed yet. Enter ratings by hand."}</div></div>`;
   }
-  const cols = Lab.fleetCols || [];
   const known = sc.rating_column || perCourse.length;
   const per = perCourse.length
     ? `<div class="muted" style="font-size:12px;margin-top:6px">By course: ${perCourse.map((r) => `${esc(r.course)} ${esc(r.column)}`).join(" · ")}. Edit in <a href="#rules">Rules</a>.</div>` : "";
@@ -3561,8 +3622,7 @@ function fleetRatingCard(sc) {
     <h3>Rating column ${known ? "" : '<span class="pill warn" style="margin-left:6px">unknown</span>'}</h3>
     ${known ? "" : '<div class="banner warn" style="margin-bottom:6px">Rating column unknown: pick one.</div>'}
     <div class="opt-controls">
-      <label>ORC column <input class="ein" list="fleetColList" style="width:170px" value="${esc(sc.rating_column || "")}" placeholder="e.g. TMF_Inshore" oninput="fleetColSet(this.value)"></label>
-      <datalist id="fleetColList">${cols.map((c) => `<option value="${esc(c)}">`).join("")}</datalist>
+      <label>ORC column ${orcColSelect(sc.rating_column, sc.rating_column_tod, "fleetColSet(")}</label>
       <button class="mini" onclick="fleetAutoImport('orc')" ${Lab.fleetBusy ? "disabled" : ""}>Re-read ratings</button>
       ${qhelp("The certificate number the race scores on. It's in the NOR or SI. Pick it, re-read, then Save.")}
     </div>${per}
@@ -3753,21 +3813,26 @@ function rulesCCSet(v) {
   Lab.editDef.rules_profile.scoring.rating_countries =
     (v || "").split(",").map((c) => c.trim().toUpperCase()).filter(Boolean);
 }
-// Per-course ORC columns, for a race whose courses score on different numbers. Blank = race-wide column.
+// The race-wide ORC column: one pick sets the ToT column and its ToD partner.
+function rulesColPick(v) {
+  const c = orcColSplit(v), sc = Lab.editDef.rules_profile.scoring;
+  sc.rating_column = c.tot; sc.rating_column_tod = c.tod;
+  paintRules();
+}
+// Per-course ORC columns, for a race whose courses score on different numbers. Not set = race-wide column.
 function rulesCourseCol(cid, v) {
-  const sc = Lab.editDef.rules_profile.scoring;
-  const old = (sc.course_columns || []).find((r) => r && r.course === cid) || {};
+  const c = orcColSplit(v), sc = Lab.editDef.rules_profile.scoring;
   const rows = (sc.course_columns || []).filter((r) => r && r.course !== cid);
-  // a blank ToT keeps the row while it still names a ToD column (typing over a column passes through "")
-  if ((v || "").trim() || old.column_tod) rows.push({ course: cid, column: (v || "").trim(), column_tod: old.column_tod || "" });
+  if (c.tot || c.tod) rows.push({ course: cid, column: c.tot, column_tod: c.tod });
   sc.course_columns = rows;
+  paintRules();
 }
 function rulesCourseCols(d, sc) {
   const courses = d.courses || [];
   if (courses.length < 2) return "";
-  const colOf = (cid) => ((sc.course_columns || []).find((r) => r && r.course === cid) || {}).column || "";
+  const rowOf = (cid) => (sc.course_columns || []).find((r) => r && r.course === cid) || {};
   return `<div class="opt-controls" style="margin-top:6px"><span class="muted" style="font-size:12px">Column by course:</span>
-    ${courses.map((c) => `<label>${esc(c.name || c.id)} <input class="ein" value="${attr(colOf(c.id))}" placeholder="same" oninput="rulesCourseCol('${attr(c.id)}', this.value)"></label>`).join("")}</div>`;
+    ${courses.map((c) => `<label>${esc(c.name || c.id)} ${orcColSelect(rowOf(c.id).column, rowOf(c.id).column_tod, `rulesCourseCol('${attr(c.id)}', `, "Same as race")}</label>`).join("")}</div>`;
 }
 function modAdd() { Lab.editDef.rules_profile.modifications.push({ ref: "", rule: "", summary: "" }); paintRules(); }
 function modRemove(i) { rulesRemove(Lab.editDef.rules_profile.modifications, i, "rule change"); }
@@ -3895,8 +3960,7 @@ function paintRules() {
       </div>
       <div class="opt-controls" style="margin-top:8px">
         <label>Rating ${esel("rules_profile.scoring.rating_system", sc.rating_system || "", ["", "ORC", "PHRF", "IRC", "ONE_DESIGN"])}</label>
-        <label>ORC column ${ein("rules_profile.scoring.rating_column", sc.rating_column, "e.g. TMF_Inshore")}</label>
-        <label>ToD column ${ein("rules_profile.scoring.rating_column_tod", sc.rating_column_tod, "optional")}</label>
+        <label>ORC column ${orcColSelect(sc.rating_column, sc.rating_column_tod, "rulesColPick(")}</label>
         <label>ORC countries <input class="ein" value="${attr((sc.rating_countries || []).join(","))}" placeholder="from venue + sail numbers" oninput="rulesCCSet(this.value)"></label>
       </div>
       ${rulesCourseCols(d, sc)}
