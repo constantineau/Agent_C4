@@ -55,8 +55,9 @@ boat_to_move() {
   [[ -f $env ]] || env=$OLD_ENV/reroute.env
   if grep -qs '^REROUTE_BOAT=.' "$env"; then return; fi
   v=$(sed -n 's/^REROUTE_BOAT=\(..*\)$/\1/p' "$OLD_ENV/reroute.env" 2>/dev/null | tail -1)
-  if [[ -z $v && -f $UNITS/sr33-orin-reroute.service ]]; then
-    v=$(sed -n 's/^Environment=REROUTE_BOAT=\(..*\)$/\1/p' "$UNITS/sr33-orin-reroute.service" | tail -1)
+  if [[ -z $v && -f $UNITS/sr33-orin-reroute.service ]]; then   # the unit, then its overrides
+    v=$(cat "$UNITS/sr33-orin-reroute.service" "$UNITS/sr33-orin-reroute.service.d"/*.conf 2>/dev/null \
+        | sed -n 's/^Environment=REROUTE_BOAT=\(..*\)$/\1/p' | tail -1)
   fi
   echo "$v"
 }
@@ -76,9 +77,11 @@ rollback() {
   while read -r old en act; do
     cp -p "$bk/$old" "$UNITS/$old"
     if [[ -d $bk/$old.d ]]; then
-      rm -rf "$UNITS/$old.d" "$UNITS/$(new_name "$old").d"
+      rm -rf "$UNITS/$old.d"
       cp -rp "$bk/$old.d" "$UNITS/$old.d"
     fi
+    # only the override folder the switch made; one the box already had stays
+    if [[ -f $bk/made-$(new_name "$old").d ]]; then rm -rf "$UNITS/$(new_name "$old").d"; fi
   done < "$bk/plan"
   if [[ -f $bk/$(basename "$DROPIN_OLD") ]]; then
     cp -p "$bk/$(basename "$DROPIN_OLD")" "$UNITS/$DROPIN_OLD"
@@ -179,7 +182,10 @@ switch() {
     new=$(new_name "$old")
     install -m 0644 "$src/pi/systemd/$new" "$UNITS/$new"
     # the box's own overrides (unit.d/*.conf) go with the unit; a c4 one already there wins
-    if [[ -d $UNITS/$old.d && ! -e $UNITS/$new.d ]]; then cp -rp "$UNITS/$old.d" "$UNITS/$new.d"; fi
+    if [[ -d $UNITS/$old.d && ! -e $UNITS/$new.d ]]; then
+      cp -rp "$UNITS/$old.d" "$UNITS/$new.d"
+      touch "$bk/made-$new.d"
+    fi
   done
   if [[ -f $UNITS/$DROPIN_OLD ]]; then
     install -m 0644 "$src/pi/systemd/$DROPIN_NEW" "$UNITS/$DROPIN_NEW"

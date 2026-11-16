@@ -230,6 +230,23 @@ env = read(f"{box}/etc/c4/reroute.env")
 check(f"copy plus the unit's boat (rc {r.returncode})",
       r.returncode == 0 and env.startswith("REROUTE_MODELS=hrrr\n") and "\nREROUTE_BOAT=bravo\n" in env)
 
+print("orin, the boat set in a re-route override; a c4 override folder already there")
+box = make_box(ORIN_UNITS)
+sysd = f"{box}/etc/systemd/system"
+write(f"{sysd}/sr33-orin-reroute.service.d/boat.conf", "[Service]\nEnvironment=REROUTE_BOAT=echo\n")
+write(f"{sysd}/c4-orin-copilot.service.d/mine.conf", "[Service]\nNice=1\n")
+r = run(box, "orin", REPO, f"{box}/backup", "--apply")
+check(f"the override's boat wins over the unit's (rc {r.returncode})",
+      r.returncode == 0 and "\nREROUTE_BOAT=echo\n" in "\n" + read(f"{box}/etc/c4/reroute.env"))
+check("an existing c4 override folder is kept, not replaced",
+      os.listdir(f"{sysd}/c4-orin-copilot.service.d") == ["mine.conf"])
+r = run(box, "--rollback", f"{box}/backup", "--apply")
+check(f"and a rollback leaves it alone (rc {r.returncode})",
+      read(f"{sysd}/c4-orin-copilot.service.d/mine.conf") == "[Service]\nNice=1\n")
+check("while the folder the switch made is removed",
+      not os.path.exists(f"{sysd}/c4-orin-reroute.service.d")
+      and os.path.exists(f"{sysd}/sr33-orin-reroute.service.d/boat.conf"))
+
 print("orin, a new unit won't start")
 box = make_box(ORIN_UNITS)
 r = run(box, "orin", REPO, f"{box}/backup", "--apply", FAIL_START="c4-orin-copilot.service")
