@@ -207,7 +207,7 @@ check("REROUTE_BOAT already in reroute.env: not added again",
 
 print("orin, /etc/c4/reroute.env has settings but no boat; /etc/sr33/reroute.env has the boat")
 box = make_box(ORIN_UNITS, reroute_env="REROUTE_BOAT=delta\n",
-               c4_env={"reroute.env": "REROUTE_MODELS=gfs\n"})
+               c4_env={"reroute.env": "REROUTE_MODELS=gfs"})   # no final newline
 r = run(box, "orin", REPO, f"{box}/backup", "--apply")
 env = read(f"{box}/etc/c4/reroute.env")
 check(f"the old env file's boat is added, settings kept (rc {r.returncode})",

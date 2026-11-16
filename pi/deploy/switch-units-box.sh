@@ -170,6 +170,9 @@ switch() {
   if [[ -n $boat ]]; then
     mkdir -p "$NEW_ENV"
     [[ -f $NEW_ENV/reroute.env ]] || install -m 0644 /dev/null "$NEW_ENV/reroute.env"
+    if [[ -s $NEW_ENV/reroute.env && $(tail -c1 "$NEW_ENV/reroute.env") != "" ]]; then
+      echo >> "$NEW_ENV/reroute.env"    # the file's last line had no newline
+    fi
     printf '# the boat this Orin re-routes (moved from the old setup, #314 PR D)\nREROUTE_BOAT=%s\n' \
       "$boat" >> "$NEW_ENV/reroute.env"
   fi
