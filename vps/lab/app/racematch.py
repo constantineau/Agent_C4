@@ -48,6 +48,9 @@ def _score(draft, saved):
     a, b = _words(draft.get("name")), _words(saved.get("name"))
     if not a or not b:
         return 0.0
+    na, nb = ({w for w in x if w[0].isdigit()} for x in (a, b))
+    if na and nb and na != nb:                      # "Race 1" vs "Race 2", "1st" vs "2nd"
+        return 0.0
     share = len(a & b) / len(a | b)
     if (a <= b or b <= a) and len(a & b) >= 2:      # "SORC Ocean" in "2026 SORC Ocean Race Offshore"
         share = max(share, 0.75)

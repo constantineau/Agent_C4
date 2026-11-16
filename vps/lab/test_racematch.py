@@ -72,7 +72,8 @@ check("a saved edition without a date: offered, not sure (could be last week's)"
       (racematch.find({"race_id": "wnr-new", "name": "Wednesday Night Race", "year": 2026,
                        "start_date": "2026-07-08"},
                       [{**WEEKLY[0], "start_date": ""}]) or {}).get("sure") is False)
-for one, two in (("1st Winter Series Race", "2nd Winter Series Race"), ("Winter Race 1", "Winter Race 2")):
+for one, two in (("1st Winter Series Race", "2nd Winter Series Race"), ("Winter Race 1", "Winter Race 2"),
+                 ("Wednesday Night Summer Series Race 1", "Wednesday Night Summer Series Race 2")):
     check(f"'{two}' a day after '{one}': a different race",
           racematch.find({"race_id": "b", "name": two, "year": 2026, "start_date": "2026-11-22"},
                          [{"race_id": "a", "name": one, "year": 2026, "start_date": "2026-11-21"}]) is None)
