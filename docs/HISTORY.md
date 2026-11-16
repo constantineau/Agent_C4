@@ -338,6 +338,22 @@ and the per-component READMEs. Detailed design rationale for the big arcs is in 
   runs; the box self-recovers via the OOM killer, and kernel-pings-but-no-ssh is the thrash
   signature (the Pi↔Orin ethernet is the diagnostic back door).
 
+## 2026-11-16 — RRFS replaces the retired NAM (#360)
+
+- NOAA retired **NAM on 2026-11-03**; **RRFS** (Rapid Refresh Forecast System) replaced it. NAM
+  is deleted from the router, plume, UI and docs. A saved selection that still names `nam` is
+  dropped quietly (model names resolve through `MODELS.get`).
+- **RRFS is a normal-weight model** (priority 1.0) in the default blend beside GFS and HRRR,
+  in the plume, the Orin re-route and the venue study. Venue-study weights take over once it
+  has enough scored hours (Open-Meteo's archive only starts ~2026-10).
+- **Source: Open-Meteo `ncep_rrfs_conus`**, not NOMADS. NOMADS has no grib filter for RRFS, so
+  one hour there is the whole-domain U+V messages (1.8 MB on the 13 km NA grid, 3.8 MB on the
+  3 km CONUS grid; 150-320 MB per 84 h forecast). Open-Meteo sends only the race box.
+  Its area is tested exactly on the CONUS 3 km Lambert grid (same grid as HRRR); Open-Meteo
+  refuses a whole batch if one point is off it.
+- No RRFS archive yet (AWS has only the rrfs_a prototype), so past-race replays and the deep
+  backfill stay on GFS + HRRR.
+
 ## Standing decisions (still binding)
 
 - **RRS 41 bright line**: all frontier/cloud work pre-start, frozen at the gun; in-race =

@@ -49,7 +49,7 @@
     if (h == null) return null;
     return h < 1 ? Math.max(1, Math.round(h * 60)) + " min" : (Math.round(h * 10) / 10) + " h";
   }
-  const MODEL = { gfs: "GFS", nam: "NAM", hrrr: "HRRR", ecmwf: "ECMWF", icon: "ICON", gem: "GEM",
+  const MODEL = { gfs: "GFS", hrrr: "HRRR", rrfs: "RRFS", ecmwf: "ECMWF", icon: "ICON", gem: "GEM",
     "open-meteo": "Open-Meteo" };
   const modelName = (m) => MODEL[String(m || "").toLowerCase()] || String(m || "").toUpperCase();
 

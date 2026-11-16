@@ -4,7 +4,7 @@ The C4 Performance Lab optimizer needs a spatially- and temporally-varying wind 
 race course, blended from several public weather models. This package provides:
 
   - `grib`      — download a 10 m UGRD/VGRD GRIB2 subset and parse it into a samplable grid frame;
-  - `models`    — per-model sources (GFS / GEFS / NAM / HRRR / ECMWF) that know their NOMADS /
+  - `models`    — per-model sources (GFS / GEFS / HRRR / RRFS / ECMWF / ...) that know their NOMADS /
                   open-data layout, run cadence, forecast-hour grid and availability lag;
   - `windfield` — `WindField`, which ingests selected models over a bbox + time window and exposes
                   `wind_at(lat, lon, epoch) -> (tws_kn, twd_deg)` (a drop-in for the agent's

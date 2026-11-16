@@ -5027,7 +5027,7 @@ function optDegradedBanner(r) {
     <ul style="margin:3px 0 0 16px;padding:0">
       <li>The newest forecast may not be out yet. Try again in 30 min, or add GFS.</li>
       <li>Uncheck ECMWF if it's slow.</li>
-      <li>HRRR only covers 48 h. For a long race, use GFS.</li>
+      <li>HRRR covers 48 h and RRFS 84 h. For a longer race, use GFS.</li>
       <li>If a Fine run ran out of time, set Detail to <b>Auto</b> or <b>Fast</b>.</li>
     </ul></div>` : "";
   return `<div class="pill ${cls}" style="display:block;margin-bottom:8px;text-align:left">

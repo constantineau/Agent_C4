@@ -707,9 +707,13 @@ check("a model per frame count, marked partial", w8["models"][0]["partial"] is T
 
 print("3e4) a requested model with nothing aboard is named")
 job.STATE_DIR = os.path.join(_tmp, "fresh")
-out9 = job.run(dict(REQ, models=["gfs", "nam"]), now=NOW, is_online=lambda: False)
-check("missing: nam, said in a warning", out9["weather"]["missing"] == ["nam"]
-      and "No forecast from nam." in out9["warnings"])
+out9 = job.run(dict(REQ, models=["gfs", "hrrr"]), now=NOW, is_online=lambda: False)
+check("missing: hrrr, said in a warning", out9["weather"]["missing"] == ["hrrr"]
+      and "No forecast from hrrr." in out9["warnings"])
+# a saved request naming the retired NAM (#360): dropped quietly, never a crash or a warning
+out9b = job.run(dict(REQ, models=["gfs", "nam"]), now=NOW, is_online=lambda: False)
+check("retired nam dropped quietly", out9b["weather"]["missing"] == []
+      and not any("nam" in w for w in out9b["warnings"]) and out9b["weather"]["models"])
 
 print("3e5) no boat profile → no polar → refused, never another boat's polar (#304)")
 _bid = job.BOAT_ID

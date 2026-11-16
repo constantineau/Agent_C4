@@ -256,7 +256,8 @@ class WindField:
             bias = self.model_bias.get(model)
             if bias:                                  # de-bias this model before it enters the mean
                 u, v = _debias_uv(u, v, bias[0], bias[1])
-            weight = MODELS[model].priority * self.model_weights.get(model, 1.0)
+            src = MODELS.get(model)            # a source not in the registry blends at x1, never raises
+            weight = (src.priority if src else 1.0) * self.model_weights.get(model, 1.0)
             samples.append((u, v, weight, model))
         return samples, side
 

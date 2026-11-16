@@ -9,7 +9,8 @@ just gets these wrapped model sources instead of the live ones:
     while the internet is up and the run's download budget lasts (each request is capped too).
   * Offline, `GribSource.pick_cycle` picks the cycle the cache covers best for this run's window
     (newest on a tie), and the caller turns the loader's step-back-a-cycle retry off.
-  * `ApiSource` (ICON/GEM via Open-Meteo) only runs online, inside the budget.
+  * `ApiSource` (RRFS/ICON/GEM via Open-Meteo) only runs online, inside the budget. Offline it
+    is skipped and named in the warnings ("No forecast from rrfs.").
 
 Cache files are keyed by the exact download box, so the run uses a box the cache already has when
 one covers the course (`choose_bbox`): the plume's box (its route + 0.5°) or one a past re-route
@@ -29,7 +30,7 @@ from app.wind import windfield as WFM
 
 REQUEST_TIMEOUT_S = float(os.environ.get("REROUTE_REQUEST_TIMEOUT_S", "20"))
 DOWNLOAD_BUDGET_S = float(os.environ.get("REROUTE_DOWNLOAD_BUDGET_S", "180"))
-API_TIMEOUT_S = float(os.environ.get("REROUTE_API_TIMEOUT_S", "60"))   # one ICON/GEM load, in all
+API_TIMEOUT_S = float(os.environ.get("REROUTE_API_TIMEOUT_S", "60"))   # one RRFS/ICON/GEM load, in all
 BOXES_FILE = "boxes.json"        # the boxes past re-routes downloaded for (in REROUTE_DIR)
 MAX_BOXES = 8
 
@@ -178,7 +179,7 @@ class GribSource:
 
 
 class ApiSource:
-    """ICON/GEM (Open-Meteo): no files to reuse, so online only, inside the budget."""
+    """RRFS/ICON/GEM (Open-Meteo): no files to reuse, so online only, inside the budget."""
 
     def __init__(self, src, budget):
         self._src, self._budget = src, budget
@@ -314,6 +315,9 @@ def summarize(status, now, budget, bbox_why, sources=(), requested=()):
                 reaches.append(until)
             if src.fell_back_to is not None and src.fell_back_to == cyc:
                 fell.append(m.get("model"))
+        elif m.get("last_valid"):                  # an API model (RRFS/ICON/GEM) says how far it reached
+            until = float(m["last_valid"])
+            reaches.append(until)
         used.append({"model": m.get("model"), "cycle": m.get("cycle"),
                      "cycle_epoch": int(ce) if ce else None, "age_h": age_h,
                      "frames": m.get("frames"), "expected_frames": m.get("expected_frames"),
@@ -325,15 +329,15 @@ def summarize(status, now, budget, bbox_why, sources=(), requested=()):
     # the route's data notes instead ("HRRR: not here (US only).")
     not_here = {m.get("model") for m in (status or {}).get("models") or []
                 if m.get("skipped") == M.NOT_HERE}
-    api_ok = any(u["model"] not in by_name or not isinstance(by_name[u["model"]], GribSource)
-                 for u in used)
+    api_ok = any((u["model"] not in by_name or not isinstance(by_name[u["model"]], GribSource))
+                 and not u["until"] for u in used)
     return {"models": used,
             "missing": [n for n in requested
                         if n not in got and n in by_name and n not in not_here],
             "newest_age_h": min(ages) if ages else None,
             "oldest_age_h": max(ages) if ages else None,
-            # past this, every GRIB model holds its last frame; unknown when an API model
-            # (ICON/GEM) is in the blend, whose series reaches the whole window
+            # past this, every model holds its last frame; unknown when an API model in the
+            # blend didn't say how far its series reaches
             "forecast_until": int(max(reaches)) if reaches and not api_ok else None,
             "online": budget.online, "downloads": budget.downloads,
             "download_budget_spent": budget.exhausted,

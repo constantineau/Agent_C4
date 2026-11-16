@@ -3,7 +3,7 @@
 One `GribFrame` holds a single (model, cycle, forecast-hour, member) field of 10 m wind over the
 race bbox: the U/V components as numpy arrays plus the lat/lon grid and the field's valid time.
 Regular lat/lon grids (GFS / GEFS / ECMWF) get proper bilinear interpolation; curvilinear Lambert
-grids (NAM / HRRR), after a small bbox subset, are sampled nearest-neighbour (≤ grid spacing
+grids (HRRR), after a small bbox subset, are sampled nearest-neighbour (≤ grid spacing
 error, fine for routing).
 
 Parsing uses cfgrib/eccodes; the eccodes pip wheel bundles the binary so the slim image needs no
@@ -189,10 +189,15 @@ class GribFrame:
         return cls(model, member, float(valid_time), lat, lon, u, v, regular)
 
     def sample_uv(self, lat: float, lon: float):
-        """(u, v) m/s at a position, or None if the position is outside the grid."""
+        """(u, v) m/s at a position, or None if the position is outside the grid or has no value
+        there (NaN: an API-grid point off a regional model's grid, #360)."""
         if self.regular:
-            return _bilinear(self.lat, self.lon, self.u, self.v, lat, lon)
-        return _nearest(self.lat, self.lon, self.u, self.v, lat, lon)
+            uv = _bilinear(self.lat, self.lon, self.u, self.v, lat, lon)
+        else:
+            uv = _nearest(self.lat, self.lon, self.u, self.v, lat, lon)
+        if uv is None or not (math.isfinite(uv[0]) and math.isfinite(uv[1])):
+            return None
+        return uv
 
     def crop(self, bbox, pad_deg: float = 0.5):
         """A copy cropped to bbox=(n,s,w,e)+pad. The live NOMADS path downloads bbox subsets, but

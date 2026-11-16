@@ -238,7 +238,7 @@ the Cove Island gate, then the finish. Same request, same GRIB files, same chart
 
 | | VPS | Orin |
 |---|---|---|
-| gfs + nam + hrrr, cached, warm | 6.4 s | 11–12 s |
+| gfs + nam + hrrr, cached, warm (measured before NAM's retirement) | 6.4 s | 11–12 s |
 | gfs + nam + hrrr, cached, first run (cold disk/imports) | — | 74 s |
 | + ecmwf, cached | 9.7 s | 27–28 s |
 | online, downloading all (gfs+nam+hrrr, 112 files) | 98 s | not run |
@@ -273,7 +273,7 @@ Remove: `sudo systemctl disable --now sr33-orin-reroute`, delete the unit, `rm -
 
 | var | default | |
 |---|---|---|
-| `REROUTE_MODELS` | `gfs,hrrr` | the Lab's default blend (NAM retired by NOAA 2026-11-03). Add `ecmwf` (+16 s on the Orin) or `icon,gem` (online only) |
+| `REROUTE_MODELS` | `gfs,hrrr,rrfs` | the Lab's default blend (NAM retired by NOAA 2026-11-03; RRFS replaced it). RRFS, like `icon,gem`, comes from Open-Meteo: online only, about 0.1-0.3 MB gzipped per run. Add `ecmwf` (+16 s on the Orin) |
 | `REROUTE_BIND` / `REROUTE_PORT` | `10.10.10.2` / `8210` | the cable address |
 | `REROUTE_ALLOW_FROM` | `10.10.10.1,127.0.0.1` | who may call it |
 | `GRIB_CACHE` | `~/c4-plume/gribcache` | the plume's cache |

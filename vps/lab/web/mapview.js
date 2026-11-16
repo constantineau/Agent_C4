@@ -28,7 +28,7 @@ const MapView = (function () {
                  sea: false, iso: false, laylines: true, models: true, scrim: true, stations: true };
 
   // a stable colour per weather model for the per-model candidate-route fan (PR-4)
-  const MODEL_COLORS = { gfs: "#1f77b4", nam: "#2ca02c", hrrr: "#d62728", gefs: "#9467bd",
+  const MODEL_COLORS = { gfs: "#1f77b4", hrrr: "#d62728", rrfs: "#2ca02c", gefs: "#9467bd",
     ecmwf: "#ff7f0e", "ecmwf-ens": "#8c564b", icon: "#e377c2", gem: "#bcbd22" };
   function modelColor(m) { return MODEL_COLORS[m] || "#7a7a7a"; }
 
