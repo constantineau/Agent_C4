@@ -96,16 +96,17 @@ test("Fleet: a pick sets both columns on the draft and repaints", () => {
   assert.equal(painted, 1);
 });
 
-test("Fleet: a pick repaints only the rating card, so a pasted entry list stays", () => {
-  let painted = 0, synced = 0;
-  const card = { outerHTML: "old" };
-  const ctx = { Lab: { editDef: {} }, paintFleet() { painted++; }, syncDirty() { synced++; },
-    fleetRatingCard: () => "new card", document: { getElementById: (id) => (id === "fleetRatingCard" ? card : null) } };
+test("Fleet: a pick repaints the tab but carries the pasted list, link and PDF over", () => {
+  let painted = 0;
+  const mk = (id) => ({ id, replaceWith(x) { dom[id] = x; } });
+  const olds = { fleetWebUrl: mk("fleetWebUrl"), fleetWebText: mk("fleetWebText"), fleetEntryPdf: mk("fleetEntryPdf") };
+  let dom = Object.assign({}, olds);
+  const ctx = { Lab: { editDef: {} }, document: { getElementById: (id) => dom[id] || null },
+    paintFleet() { painted++; dom = { fleetWebUrl: mk("fleetWebUrl"), fleetWebText: mk("fleetWebText"), fleetEntryPdf: mk("fleetEntryPdf") }; } };
   const f = run(["orcColSplit", "_fleetScoring", "fleetColSet"], ctx);
   f.fleetColSet("TMF_Offshore|OSN");
-  assert.equal(painted, 0);
-  assert.equal(card.outerHTML, "new card");
-  assert.equal(synced, 1);
+  assert.equal(painted, 1);
+  for (const id of Object.keys(olds)) assert.equal(dom[id], olds[id], id + " carried over");
 });
 
 test("the picker's onchange calls the given prefix with the picked value", () => {

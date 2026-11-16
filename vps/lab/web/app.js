@@ -3360,9 +3360,12 @@ function _fleetScoring() {
 function fleetColSet(v) {
   const c = orcColSplit(v), sc = _fleetScoring();
   sc.rating_column = c.tot; sc.rating_column_tod = c.tod;
-  // repaint only this card: a pasted entry list, a URL or a chosen PDF stay where they are
-  const el = typeof document !== "undefined" && document.getElementById("fleetRatingCard");
-  if (el) { el.outerHTML = fleetRatingCard(sc); syncDirty(); } else paintFleet();
+  // the whole tab repaints (ToD inputs come and go with the column), but a pasted entry list, a
+  // typed link and a chosen PDF are carried over: the very elements, so the PDF stays chosen
+  const keep = typeof document === "undefined" ? []
+    : ["fleetWebUrl", "fleetWebText", "fleetEntryPdf"].map((id) => document.getElementById(id)).filter(Boolean);
+  paintFleet();
+  keep.forEach((old) => { const nu = document.getElementById(old.id); if (nu && nu !== old) nu.replaceWith(old); });
 }
 function fleetCCSet(v) {
   _fleetScoring().rating_countries = (v || "").split(",").map((c) => c.trim().toUpperCase()).filter(Boolean);
@@ -3610,12 +3613,12 @@ function fleetRatingCard(sc) {
   const sys = sc.rating_system || "";
   const perCourse = (sc.course_columns || []).filter((r) => r && (r.column || r.column_tod));
   if (sys && sys !== "ORC") {
-    return `<div class="card" id="fleetRatingCard"><h3>Ratings</h3><div class="muted" style="font-size:12px">${esc(sys)} race. ${sys === "ONE_DESIGN" ? "No ratings needed." : "No feed yet. Enter ratings by hand."}</div></div>`;
+    return `<div class="card"><h3>Ratings</h3><div class="muted" style="font-size:12px">${esc(sys)} race. ${sys === "ONE_DESIGN" ? "No ratings needed." : "No feed yet. Enter ratings by hand."}</div></div>`;
   }
   const known = sc.rating_column || perCourse.length;
   const per = perCourse.length
     ? `<div class="muted" style="font-size:12px;margin-top:6px">By course: ${perCourse.map((r) => `${esc(r.course)} ${esc(r.column)}`).join(" · ")}. Edit in <a href="#rules">Rules</a>.</div>` : "";
-  return `<div class="card" id="fleetRatingCard">
+  return `<div class="card">
     <h3>Rating column ${known ? "" : '<span class="pill warn" style="margin-left:6px">unknown</span>'}</h3>
     ${known ? "" : '<div class="banner warn" style="margin-bottom:6px">Rating column unknown: pick one.</div>'}
     <div class="opt-controls">
