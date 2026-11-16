@@ -53,6 +53,16 @@ check("a different race the same year: nothing offered",
 check("one shared word is not enough",
       find(race_id="chicago-mackinac-2026", name="Chicago Mackinac Race", year=2026,
            start_date="2026-07-11") is None)
+check("a shared date and one shared word is not the same race",
+      racematch.find({"race_id": "chicago-mackinac-2026", "name": "Chicago Mackinac Race", "year": 2026,
+                      "start_date": "2026-07-18"}, SAVED) is None)
+WEEKLY = [{"race_id": "wnr-0701", "name": "Wednesday Night Race", "year": 2026, "start_date": "2026-07-01"},
+          {"race_id": "wnr-0708", "name": "Wednesday Night Race", "year": 2026, "start_date": "2026-07-08"}]
+check("two editions a week apart: the one on the draft's start date",
+      (racematch.find({"race_id": "wednesday-night-race-0708", "name": "Wednesday Night Race", "year": 2026,
+                       "start_date": "2026-07-08"}, WEEKLY) or {}).get("race_id") == "wnr-0708")
+check("two that fit equally (no date to tell): nothing offered",
+      racematch.find({"race_id": "wnr", "name": "Wednesday Night Race", "year": 2026}, WEEKLY) is None)
 check("no saved races: nothing", racematch.find({"race_id": "a", "name": "A Race"}, []) is None)
 check("a nameless draft: nothing", find(race_id="x", name="", year=2026) is None)
 check("junk input: nothing", racematch.find(None, SAVED) is None

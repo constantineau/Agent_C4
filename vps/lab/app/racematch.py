@@ -49,8 +49,8 @@ def _score(draft, saved):
     share = len(a & b) / len(a | b)
     if (a <= b or b <= a) and len(a & b) >= 2:      # "SORC Ocean" in "2026 SORC Ocean Race Offshore"
         share = max(share, 0.75)
-    if dd and ds and dd == ds and a & b:            # same start day and a word in common
-        share = max(share, 0.75)
+    if share and dd and ds and dd == ds:            # breaks a tie between two editions of a series
+        share += 0.01
     return share
 
 
@@ -64,11 +64,10 @@ def find(draft, saved_races, threshold=0.6):
     for s in saved:
         if rid and s["race_id"] == rid:
             return {"race_id": rid, "name": s.get("name") or rid, "same_id": True}
-    best, best_score = None, 0.0
-    for s in saved:
-        sc = _score(draft, s)
-        if sc > best_score:
-            best, best_score = s, sc
-    if best is None or best_score < threshold:
+    scored = sorted(((_score(draft, s), i) for i, s in enumerate(saved)), reverse=True)
+    if not scored or scored[0][0] < threshold:
         return None
+    if len(scored) > 1 and abs(scored[0][0] - scored[1][0]) < 1e-9:
+        return None                                 # two saved races fit equally: don't guess
+    best = saved[scored[0][1]]
     return {"race_id": best["race_id"], "name": best.get("name") or best["race_id"], "same_id": False}
