@@ -138,7 +138,7 @@ def preview(rec, country=None):
             "loa_m": _num(rec.get("LOA")), "gph": f["gph"], "ref_no": f["ref_no"],
             "issue_date": f["issue_date"], "country": f["country"],
             "builder": rec.get("Builder") or "", "designer": rec.get("Designer") or "",
-            "year": int(rec["Age_Year"]) if _num(rec.get("Age_Year")) else None,
+            "year": int(_num(rec.get("Age_Year"))) if _num(rec.get("Age_Year")) else None,
             "polar_rows": len(pol)}
 
 

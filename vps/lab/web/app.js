@@ -1819,6 +1819,10 @@ function newBoatFromCert() {
           [{ c: "no", label: "Not now", cls: "" }, { c: "yes", label: "Use this boat", cls: "primary" }], "yes", "no");
         if (c === "yes") await optPickBoat(j.boat_id);
       } else {
+        if (Opt.boatModel) {   // the active boat's polar changed: the open speeds card reloads
+          try { bmLoaded(await (await apiGet("/api/crossovers")).json()); } catch (e) { bmLoaded({ error: String(e) }); }
+          renderGameplan();
+        }
         await askModal("Boat updated", esc(j.note), [{ c: "ok", label: "OK", cls: "primary" }], "ok", "ok");
       }
     } catch (e) { out.innerHTML = `<p class="err">${esc(String(e.message || e))}</p>`; $("[data-c=create]").disabled = false; }
