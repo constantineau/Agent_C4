@@ -379,8 +379,14 @@ def test_yachtscoring_parse():
     ]}).encode()
     fleetimport._get = lambda url: page1
     for u in ("https://yachtscoring.com/emenu/50579",
-              "https://www.yachtscoring.com/event_entry_list.cfm?eID=50579"):
-        assert fleetimport._YS_EVENT_RE.search(u).group(1) == "50579", u
+              "https://www.yachtscoring.com/event_entry_list.cfm?eID=50579",
+              "https://yachtscoring.com/event_scratch_sheet/50579",
+              "https://yachtscoring.com/event_entry_list/50579?x=1",
+              "https://yachtscoring.com/something/50579"):
+        m = fleetimport._YS_EVENT_RE.search(u)
+        assert m and (m.group(1) or m.group(2)) == "50579", u
+    r = fleetimport.roster_from_url("https://yachtscoring.com/event_scratch_sheet/50579")
+    assert r["ok"] and r["count"] == 2, r
     r = fleetimport.roster_from_url("https://yachtscoring.com/emenu/50579")
     assert r["ok"] and r["count"] == 2, r
     e0 = r["entries"][0]
