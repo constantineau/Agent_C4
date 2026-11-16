@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Deploy the VPS services to the PROD stack. Run on the VPS after merging to main.
-# Prod has its own DB (sr33_prod) and env — dev work never touches it.
+# Prod has its own DB and env — dev work never touches it. compose.prod.yml takes its project,
+# database and volume names from .env (C4_PROD_PROJECT, C4_PROD_PGDATA, POSTGRES_DB/USER); an
+# existing install pins its live names there (#314, .env.example).
 set -euo pipefail
 cd "$(dirname "$0")/.."   # repo root
 

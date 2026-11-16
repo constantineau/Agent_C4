@@ -5,7 +5,7 @@ whichever row it scanned last, not the latest one. `MAX(time)` makes SQLite take
 the row holding the max.
 
 Run: docker run --rm --network none -v "$PWD:/repo:ro" -w /repo -e PYTHONPATH=/repo \
-       sr33-ci-agent python3 /repo/tools/replay/test_truth.py
+       c4-ci-agent python3 /repo/tools/replay/test_truth.py
 """
 import json
 import os

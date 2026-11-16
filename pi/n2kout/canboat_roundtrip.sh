@@ -7,7 +7,7 @@
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 SK_IMAGE=${SK_IMAGE:-cr.signalk.io/signalk/signalk-server:v2.27.0}
-N2K_IMAGE=${N2K_IMAGE:-sr33-ci-n2kout-base}
+N2K_IMAGE=${N2K_IMAGE:-${C4_CI_PREFIX:-c4-ci}-n2kout-base}
 docker image inspect "$N2K_IMAGE" >/dev/null 2>&1 \
   || docker build -q -t "$N2K_IMAGE" -f pi/n2kout/Dockerfile . >/dev/null
 

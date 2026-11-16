@@ -37,7 +37,7 @@ def default_path():
     explicit = os.environ.get("ARCHIVE_STATUS_FILE")
     if explicit:
         return Path(explicit)
-    db = Path(os.environ.get("ARCHIVE_DB", "/var/lib/sr33/archive/archive.db"))
+    db = Path(os.environ.get("ARCHIVE_DB", "/var/lib/c4/archive/archive.db"))
     return db.with_name(FILE_NAME)
 
 

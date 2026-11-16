@@ -31,6 +31,8 @@ TAILNET = re.compile(r"(?<![\d.])100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.(\d{1,3}
 # an ssh target or URL host, not a compose project / image / container name (sr33-pi-engine-1)
 HOST = re.compile(r"(sr33-pi|agent-c4)@|//sr33-pi(?![-\w])|\bssh\s+sr33-pi(?![-\w])"
                   r"|[\"'=]sr33-pi[\"']")
+# a compose-project pin names the project, not a host (C4_BOAT_PROJECT=sr33-pi, #314 PR C)
+PROJECT_PIN = re.compile(r"(?:C4_(?:DEV|PROD|BOAT|BENCH)_PROJECT|BOX_PROJECT)\W{1,4}sr33-pi[\"']")
 CODE = (".py", ".sh", ".yml", ".yaml", ".js", ".mjs", ".json", ".example", ".service",
         ".template", ".conf", ".env", ".toml", ".cfg", ".html")
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "vendor"}
@@ -42,6 +44,9 @@ check("an ordinary address is not", not TAILNET.search("http://100.1.2.3/ 10.10.
 check("an ssh target is caught", HOST.search("PI=sr33-pi@host") and HOST.search("ssh sr33-pi 'x'"))
 check("a container name is not", not HOST.search("docker exec sr33-pi-engine-1 ls"))
 check("the compose project name is not", not HOST.search("name: sr33-pi"))
+check("nor a project pin", not HOST.search(PROJECT_PIN.sub("", '"C4_BOAT_PROJECT": "sr33-pi",')))
+check("but a pin does not hide an ssh target on the same line",
+      HOST.search(PROJECT_PIN.sub("", 'C4_BOAT_PROJECT="sr33-pi" PI=sr33-pi@host')))
 
 print("no address or host defaults in code:")
 addr_hits, host_hits = [], []
@@ -57,7 +62,7 @@ for d, dirs, files in os.walk(ROOT):
                 for m in TAILNET.finditer(line):
                     if not (is_test and m.group(1) == "64" and m.group(2) == "0"):
                         addr_hits.append(f"{rel}:{i}")
-                if HOST.search(line):
+                if HOST.search(PROJECT_PIN.sub("", line)):
                     host_hits.append(f"{rel}:{i}")
 check("no Tailscale address" + (f" ({addr_hits})" if addr_hits else ""), not addr_hits)
 check("no boat host as an ssh target or URL" + (f" ({host_hits})" if host_hits else ""),

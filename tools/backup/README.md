@@ -43,13 +43,13 @@ gsutil cat gs://constantineau-c4-archive/bench/sk_archive-bench-2026-09-09.db.gz
 proven rather than assumed. Coldline has a 90-day minimum billing duration and a retrieval fee of
 roughly $0.02/GB — the whole bucket is ~5.2 GiB, about two cents a month.
 
-## Nightly Lab + sr33_dev backup (#180)
+## Nightly Lab + dev database backup (#180)
 
 `lab_backup.py` backs up the Lab's Docker volumes (ingested, learning, retro, playbooks, shares,
 plume, coastline, enc — not gribcache, a refillable download cache) and the dev Postgres
 (`pg_dump -Fc`, read-only) into one **set** per run: `<dest>/backup-YYYY-MM-DDTHHMMSSZ/`, with
 the same file names as the manual `backup-2026-10-31/` (`vps-lab_<vol>.tar.gz`,
-`vps-sr33_dev.pgdump`, `MANIFEST-sha256.txt`) plus `INDEX.json`, written last, which is what
+`vps-<db>.pgdump`, e.g. `vps-sr33_dev.pgdump` on the VPS, `MANIFEST-sha256.txt`) plus `INDEX.json`, written last, which is what
 makes a set a backup: per-artifact sha256, the sha256 of every file in each volume, the row
 counts of every SQLite table, and the row count of every Postgres table as read back out of the
 dump. A set without INDEX.json is an unfinished run and nothing treats it as a backup.

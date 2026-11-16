@@ -36,7 +36,7 @@ _NUM_FIELDS = ("generated_at", "built_at", "race_start", "race_end")
 
 
 def _path():
-    base = os.path.dirname(os.environ.get("ENGINE_DB", "/var/lib/sr33/engine/engine.db"))
+    base = os.path.dirname(os.environ.get("ENGINE_DB", "/var/lib/c4/engine/engine.db"))
     return os.environ.get("PLUME_CACHE", os.path.join(base, "plume.json"))
 
 

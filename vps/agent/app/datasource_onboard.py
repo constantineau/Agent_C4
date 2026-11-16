@@ -52,8 +52,8 @@ def _mmsi_from_context(ctx):
     return None
 
 
-ARCHIVE_DB = os.environ.get("ARCHIVE_DB", "/var/lib/sr33/archive/archive.db")
-ENGINE_DB = os.environ.get("ENGINE_DB", "/var/lib/sr33/engine/engine.db")
+ARCHIVE_DB = os.environ.get("ARCHIVE_DB", "/var/lib/c4/archive/archive.db")
+ENGINE_DB = os.environ.get("ENGINE_DB", "/var/lib/c4/engine/engine.db")
 POLARS_FILE = os.environ.get("POLARS_FILE") or None     # explicit override only (replay); no default
 SIGNALK_WS = os.environ.get(
     "SIGNALK_WS", "ws://localhost:3010/signalk/v1/stream?subscribe=all"

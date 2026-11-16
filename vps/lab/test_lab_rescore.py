@@ -17,7 +17,7 @@ re-score module, `learning.refine` and `judge.score_recording` did not exist).
 
 Run in the CI image:
   docker run --rm --network none -v "$PWD:/repo:ro" -w /srv -e PYTHONPATH=/repo/vps/lab:/repo \
-    -e C4_CI=1 sr33-ci-lab python3 /repo/vps/lab/test_lab_rescore.py
+    -e C4_CI=1 c4-ci-lab python3 /repo/vps/lab/test_lab_rescore.py
 """
 import json
 import os

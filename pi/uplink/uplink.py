@@ -51,7 +51,7 @@ INGEST_TOKEN = os.environ.get("INGEST_TOKEN", "dev-ingest-token")
 from shared.boat_id import require as _require_setting  # noqa: E402
 BOAT_ID = _require_setting("BOAT_ID")   # no default: another boat must never write as sr33 (#307)
 AGG_SECONDS = int(os.environ.get("AGG_SECONDS", "15"))
-QUEUE_DIR = Path(os.environ.get("QUEUE_DIR", "/var/lib/sr33/queue"))
+QUEUE_DIR = Path(os.environ.get("QUEUE_DIR", "/var/lib/c4/queue"))
 # Sits inside QUEUE_DIR but out of its `*.json` glob, so quarantined files stay on the
 # boat for inspection without ever being retried.
 QUARANTINE_DIR = QUEUE_DIR / "quarantine"

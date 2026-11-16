@@ -18,7 +18,8 @@ import sqlite3
 import sys
 import urllib.request
 
-DB = "/var/lib/sr33/archive/archive.db"
+# The archiver container's own ARCHIVE_DB (compose sets it next to the volume mount).
+DB = os.environ.get("ARCHIVE_DB", "/var/lib/c4/archive/archive.db")
 VPS = os.environ.get("VPS_URL", "").strip() or sys.exit(
     "VPS_URL is not set. Run with VPS_URL=http://<vps>:8101. Not starting.")   # no default (#314)
 TOKEN = os.environ.get("INGEST_TOKEN", "dev-ingest-token")

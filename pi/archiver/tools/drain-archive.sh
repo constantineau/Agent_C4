@@ -26,13 +26,23 @@ if [ -z "$VPS" ]; then
   exit 2
 fi
 STRIDE=3000
-# The archiver container: <compose project>-archiver-1 (COMPOSE_PROJECT as in pi/deploy/*.sh).
-ARCHIVER="${COMPOSE_PROJECT:-sr33-pi}-archiver-1"
+# Runs ON the Pi. The archiver container is <compose project>-archiver-1. The project is
+# COMPOSE_PROJECT if set (as in pi/deploy/*.sh), else the `name:` that `docker compose config`
+# resolves in the Pi's clone (C4_REPO, default ~/Agent_C4): compose.pi.yml + the Pi's .env pin
+# C4_BOAT_PROJECT, unset = c4-boat (#314).
+if [ -z "$COMPOSE_PROJECT" ]; then
+  REPO=${C4_REPO:-$HOME/Agent_C4}
+  COMPOSE_PROJECT=$(cd "$REPO" 2>/dev/null && docker compose -f compose.pi.yml config 2>/dev/null \
+                    | sed -n 's/^name: //p' | head -1)
+  COMPOSE_PROJECT=${COMPOSE_PROJECT:-c4-boat}
+fi
+ARCHIVER="$COMPOSE_PROJECT-archiver-1"
 
 cursor() {
   docker exec "$ARCHIVER" python -c "
 import sqlite3
-c=sqlite3.connect('file:/var/lib/sr33/archive/archive.db?mode=ro',uri=True,timeout=30)
+import os
+c=sqlite3.connect('file:'+os.environ['ARCHIVE_DB']+'?mode=ro',uri=True,timeout=30)
 print(c.execute(\"select v from sync_state where k='backfill_last_id'\").fetchone()[0])" 2>/dev/null
 }
 

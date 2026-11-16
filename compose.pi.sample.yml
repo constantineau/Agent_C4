@@ -2,7 +2,9 @@
 # Pi -> cloud pipeline is testable with no boat and no recorded log.
 #   docker compose -f compose.pi.yml -f compose.pi.sample.yml up
 # Remove this override (and replay a real candump onto vcan0) once a boat log exists.
-name: sr33-pi
+# The bench is its own project (default c4-bench), never the boat's. A box that already has a bench
+# under another name pins it in .env (C4_BENCH_PROJECT) to keep its volumes.
+name: ${C4_BENCH_PROJECT:-c4-bench}
 
 services:
   signalk:
@@ -20,7 +22,7 @@ services:
       # "out of session and old" (wipe the bench volume by hand when it gets fat)
       ARCHIVE_RETAIN_DAYS: "0"
       # bench data must NEVER be mistaken for the boat's. The bench uplink once posted the 2014
-      # sample loop into sr33_dev under boat_id=sr33; its battery-bank-1 / set-drift / keel-offset
+      # sample loop into the dev database under boat_id=sr33; its battery-bank-1 / set-drift / keel-offset
       # channels then read exactly like a boat losing instruments between Jul 15 and Jul 18 2026,
       # and an analysis published that conclusion before catching it. Found 2026-09-09.
       BOAT_ID: sr33-bench

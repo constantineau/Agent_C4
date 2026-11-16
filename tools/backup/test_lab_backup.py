@@ -665,5 +665,28 @@ with tempfile.TemporaryDirectory() as tmp:
     check(f"the volume fails, to be retried ({failed!r})",
           failed is not None and "became a database" in str(failed))
 
+print("the dev stack's names (#314):")
+with tempfile.TemporaryDirectory() as tmp:
+    envf = os.path.join(tmp, ".env")
+    with open(envf, "w") as f:
+        f.write("POSTGRES_PASSWORD=x\nC4_DEV_PROJECT=old\nexport C4_DEV_PROJECT=\"live-dev\"\n")
+    check("a pin in the checkout's .env names the project (last line wins, quotes stripped)",
+          lb.stack_pin("C4_DEV_PROJECT", "c4-dev", env={}, env_file=envf) == "live-dev")
+    check("an exported value beats the .env",
+          lb.stack_pin("C4_DEV_PROJECT", "c4-dev", env={"C4_DEV_PROJECT": "x"}, env_file=envf) == "x")
+    check("no pin anywhere: the neutral default",
+          lb.stack_pin("POSTGRES_DB", "c4_dev", env={}, env_file=envf) == "c4_dev"
+          and lb.stack_pin("C4_DEV_PROJECT", "c4-dev", env={},
+                           env_file=os.path.join(tmp, "missing")) == "c4-dev")
+    with open(envf, "w") as f:
+        f.write("C4_DEV_PROJECT=live-dev   # keep the live stack\nPOSTGRES_DB='a #b'\n"
+                "POSTGRES_USER=\"sr33\" # quoted, then a comment\n")
+    check("an inline comment after an unquoted pin is dropped, as compose reads it",
+          lb.stack_pin("C4_DEV_PROJECT", "c4-dev", env={}, env_file=envf) == "live-dev")
+    check("a # inside quotes is kept",
+          lb.stack_pin("POSTGRES_DB", "c4_dev", env={}, env_file=envf) == "a #b")
+    check("a quoted pin followed by a comment loses both",
+          lb.stack_pin("POSTGRES_USER", "c4", env={}, env_file=envf) == "sr33")
+
 print("\nALL OK" if ok else "\nFAILURES")
 sys.exit(0 if ok else 1)
