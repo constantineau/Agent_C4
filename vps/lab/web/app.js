@@ -1819,9 +1819,13 @@ function newBoatFromCert() {
           [{ c: "no", label: "Not now", cls: "" }, { c: "yes", label: "Use this boat", cls: "primary" }], "yes", "no");
         if (c === "yes") await optPickBoat(j.boat_id);
       } else {
-        if (Opt.boatModel) {   // the active boat's polar changed: the open speeds card reloads
-          try { bmLoaded(await (await apiGet("/api/crossovers")).json()); } catch (e) { bmLoaded({ error: String(e) }); }
-          renderGameplan();
+        // the active boat's polar changed: the open speeds card reloads, but never over unsaved
+        // edits (confirmLeave asks) and never with a failed fetch (the card keeps what it had)
+        if (Opt.boatModel && await confirmLeave()) {
+          try {
+            const cr = await apiGet("/api/crossovers");
+            if (cr.ok) { bmLoaded(await cr.json()); renderGameplan(); }
+          } catch (e) { /* keep the card as it was */ }
         }
         await askModal("Boat updated", esc(j.note), [{ c: "ok", label: "OK", cls: "primary" }], "ok", "ok");
       }
