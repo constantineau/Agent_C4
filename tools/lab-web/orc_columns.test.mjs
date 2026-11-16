@@ -96,6 +96,18 @@ test("Fleet: a pick sets both columns on the draft and repaints", () => {
   assert.equal(painted, 1);
 });
 
+test("Fleet: a pick repaints only the rating card, so a pasted entry list stays", () => {
+  let painted = 0, synced = 0;
+  const card = { outerHTML: "old" };
+  const ctx = { Lab: { editDef: {} }, paintFleet() { painted++; }, syncDirty() { synced++; },
+    fleetRatingCard: () => "new card", document: { getElementById: (id) => (id === "fleetRatingCard" ? card : null) } };
+  const f = run(["orcColSplit", "_fleetScoring", "fleetColSet"], ctx);
+  f.fleetColSet("TMF_Offshore|OSN");
+  assert.equal(painted, 0);
+  assert.equal(card.outerHTML, "new card");
+  assert.equal(synced, 1);
+});
+
 test("the picker's onchange calls the given prefix with the picked value", () => {
   const f = run(PICKER, { Lab: {}, esc, attr });
   assert.ok(f.orcColSelect("", "", "rulesCourseCol('c1', ").includes(`onchange="rulesCourseCol('c1', this.value)"`));
