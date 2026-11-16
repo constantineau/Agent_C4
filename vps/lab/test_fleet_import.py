@@ -228,6 +228,9 @@ def test_missing_column_no_guess():
     # a race with no definition at all is no different
     en = fleetimport.enrich_from_orc([{"boat": "Il Mostro", "sail": "USA 60"}], country="USA")
     assert en["entries"][0].get("rating") is None and en["note"] == "Rating column unknown: pick one"
+    # a race that already names a column still gets every cert column (the picker's Other list)
+    en = fleetimport.enrich_from_orc(entries, country="USA", definition=_race(rating_column="TMF_Inshore"))
+    assert "TMF_Offshore" in en.get("orc_columns", []) and en.get("note") != "Rating column unknown: pick one", en
     print("PASS missing_column: no column named → ratings empty, 'Rating column unknown: pick one'")
 
 
