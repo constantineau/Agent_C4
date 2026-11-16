@@ -1737,8 +1737,10 @@ function updateEnsembleControl() {
 /* Boat profile ([B]): active boat + editable draft + chart source. Draft sets the ENC depth no-go,
    so it drives the route. Draft and depths show in feet or metres per the Lab's depth unit (#312);
    stored in metres either way. */
-async function reloadBoats() {
+// `still` (optional): checked after the fetch, before anything is applied; false → nothing changes.
+async function reloadBoats(still) {
   const bd = await (await apiGet("/api/boats")).json();
+  if (still && !still()) return false;
   Opt.boats = bd.boats || []; Opt.activeBoat = bd.active; Opt.chartSource = bd.chart_source;
   Opt.depthUnit = bd.depth_unit === "m" ? "m" : "ft";
 }
@@ -1758,11 +1760,7 @@ function optBoatControls() {
   const ab = (Opt.boats || []).find((b) => b.boat_id === Opt.activeBoat) || {};
   const u = depthUnit();
   const isEnc = Opt.chartSource === "enc";
-  return `<label>Boat
-      <select id="optBoat" onchange="optPickBoat(this.value)">
-        ${(Opt.boats || []).map((b) => `<option value="${esc(b.boat_id)}" ${b.boat_id === Opt.activeBoat ? "selected" : ""}>${esc(b.name)} (${depthTxt(b.draft_m)})</option>`).join("")}
-      </select></label>
-    <button type="button" class="mini" onclick="newBoatFromCert()">New boat</button>
+  return `${boatPickerHtml("optBoat")}
     <label>Draft <input type="number" id="optDraft" step="0.1" min="0" value="${depthVal(ab.draft_m)}" style="width:64px" onchange="optSaveDraft()">
       <select id="optDepthUnit" onchange="optSetDepthUnit(this.value)" aria-label="Depth unit">
         <option value="ft" ${u === "ft" ? "selected" : ""}>ft</option>
@@ -1775,6 +1773,123 @@ function optBoatControls() {
         <option value="enc" ${isEnc ? "selected" : ""}>NOAA charts (uses draft)</option>
       </select></label>
     <span class="muted">${isEnc ? "avoids water under " + depthTxt(ab.safety_depth_m) : "coastline only, no depths"}</span>`;
+}
+/* One boat, two places (Gameplan "Boat & charts" and Fleet "Our boat"): the same picker and the
+   same New boat button. Picking sets the Lab's active boat AND fills the race's "Our boat" from it
+   (an unsaved race edit, like typing). The latest pick or typed value wins. */
+function boatPickerHtml(id) {
+  return `<label>Boat
+      <select id="${id}" onchange="pickBoat(this.value)">
+        ${(Opt.boats || []).map((b) => `<option value="${esc(b.boat_id)}" ${b.boat_id === Opt.activeBoat ? "selected" : ""}>${esc(b.name)} (${depthTxt(b.draft_m)})</option>`).join("")}
+      </select></label>
+    <button type="button" class="mini" onclick="newBoatFromCert()">New boat</button>`;
+}
+// The page the picker sits on, repainted after a pick.
+const repaintBoatPage = () => (activeSec === "fleet" ? (Lab.editDef ? paintFleet() : renderFleet()) : renderGameplan());
+// The race a new boat's cert lookup leans on (its rating countries).
+const boatRaceId = () => (activeSec === "fleet" ? Lab.sel : Opt.raceId) || null;
+// The boat model's unsaved thresholds belong to the ACTIVE boat: settle them before it changes. They
+// live on Gameplan/Learnings only, so Fleet never asks (its unsaved race edits stay as they are).
+const boatGuard = () => (activeSec === "fleet" ? Promise.resolve(true) : confirmLeave());
+// Same boat? Sail numbers when both have one (case, spaces and dashes ignored), else the names.
+// Same rule as the server's certboat._same_boat.
+function sameOwnBoat(own, boat) {
+  const n = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const a = n((own || {}).sail), b = n((boat || {}).sail_number);
+  if (a && b) return a === b;
+  return n((own || {}).boat) === n((boat || {}).name);
+}
+// The active boat when the race's "Our boat" is another boat (or empty), else null.
+function ownMismatch(own, boats, activeId) {
+  const ab = (boats || []).find((b) => b.boat_id === activeId);
+  return ab && !sameOwnBoat(own, ab) ? ab : null;
+}
+// The fields a fill owns. Division and anything else stay as on screen; MMSI only when the profile
+// gave one (the reply's MMSI differs from the one sent).
+const OWN_FILL_KEYS = ["boat", "sail", "orc_gph", "rating", "rating_col", "tod_allowance", "tod_col"];
+function ownFilled(own, filled, sent) {
+  const out = Object.assign({}, own || {});
+  if (!filled || typeof filled !== "object") return out;
+  for (const k of OWN_FILL_KEYS) {
+    if (k in filled) out[k] = filled[k]; else delete out[k];
+  }
+  if ((filled.mmsi || "") !== ((sent || {}).mmsi || "")) out.mmsi = filled.mmsi;
+  return out;
+}
+// A pick's token, taken once when it starts: a later pick (gen), typing in "Our boat" (rev),
+// another race (d) or another tab (sec) since then means this pick's fill must not land.
+function fillToken() {
+  return { gen: (Lab.ownFillGen = (Lab.ownFillGen || 0) + 1), rev: Lab.ownRev || 0, d: Lab.editDef,
+           sec: activeSec };
+}
+const fillCurrent = (t) => Lab.editDef === t.d && t.gen === (Lab.ownFillGen || 0) &&
+  t.rev === (Lab.ownRev || 0) && activeSec === t.sec;
+// Active-boat writes go one at a time, in pick order, so the last pick is the one the server
+// keeps; a pick overtaken before its turn skips its write.
+let boatWrite = Promise.resolve();
+// Fill the open race's "Our boat" from boat `id` (Fleet). An unsaved race edit, never a save.
+async function fillOwnFromBoat(id, t) {
+  t = t || fillToken();
+  const d = t.d;
+  if (!d || !d.race_id || Lab.isDraft || !fillCurrent(t)) return;
+  const sent = Object.assign({}, d.own || {});
+  try {
+    const r = await apiPost("/api/fleet/own-from-boat", { race_id: d.race_id, boat_id: id,
+      scoring: (d.rules_profile || {}).scoring || null, own: sent });
+    const j = await r.json();
+    if (!fillCurrent(t)) return;   // another race, a later pick or typing since: that wins
+    if (!r.ok) { Lab.fleetMsg = j.detail || "Couldn't fill our boat."; Lab.fleetMsgErr = true; return; }
+    d.own = ownFilled(d.own, j.own, sent);
+    Lab.fleetMsg = j.note || ""; Lab.fleetMsgErr = !!j.note;
+  } catch (e) { if (fillCurrent(t)) { Lab.fleetMsg = String(e.message || e); Lab.fleetMsgErr = true; } }
+}
+async function pickBoat(id) {
+  const t = fillToken();                         // once, up front: a later pick or typing wins
+  const later = () => t.gen !== Lab.ownFillGen;  // a later pick owns the rest (fill + repaint)
+  const here = () => activeSec === t.sec;          // repaint only the tab the pick was made on
+  if (!(await boatGuard())) return later() || !here() ? undefined : repaintBoatPage();   // Stay → repaint puts the picker back
+  if (later()) return;
+  Opt.activeBoat = id;
+  // the old boat's speeds card can't be edited while the new boat loads: it reloads below
+  // (a hidden card just drops it; opening the card loads the new boat's)
+  const hadModel = !!Opt.showBoatModel;
+  Opt.boatModel = null;
+  const post = boatWrite.then(() => (later() ? null : apiPost("/api/boats/active", { boat_id: id })));
+  boatWrite = post.catch(() => {});
+  let saved = null;
+  try { saved = await post; } catch (e) { saved = { ok: false }; }
+  if (later()) return;
+  if (!saved || !saved.ok) {                     // the server kept the old boat: say so, fill nothing
+    await reloadBoats(() => !later());
+    if (hadModel && !later()) {                  // the card goes back to the boat still active
+      try { const bm = await (await apiGet("/api/crossovers")).json(); if (!later()) bmLoaded(bm); }
+      catch (e) { if (!later()) bmLoaded({ error: String(e) }); }
+    }
+    if (!later() && here()) { repaintBoatPage(); alert("Couldn't switch the boat. Try again."); }
+    return;
+  }
+  await reloadBoats(() => !later());            // a later pick's list and active boat stand
+  if (later()) return;
+  if (hadModel) {   // the card shows the new boat's model, not the old one's
+    let bm;
+    try { bm = await (await apiGet("/api/crossovers")).json(); } catch (e) { bm = { error: String(e) }; }
+    if (later()) return;                         // never over a later pick's model
+    bmLoaded(bm);
+  }
+  // Fleet: fill the open race now (unless typed over since). Gameplan: Fleet fills when it next opens.
+  if (t.sec === "fleet") {
+    if (!here()) return;                         // left Fleet: no race edit behind the leave check
+    Lab.ownFill = null; await fillOwnFromBoat(id, t);
+    if (later() || !here()) return;
+    syncDirty();
+  } else Lab.ownFill = id;
+  if (here()) repaintBoatPage();
+}
+// Fleet, "Our boat" is another boat than the Lab's active one → one line to fill it from there.
+function fleetBoatLine(own) {
+  const ab = ownMismatch(own, Opt.boats, Opt.activeBoat);
+  return ab ? `<div class="muted" style="font-size:13px;margin-top:6px">Gameplan uses <b>${esc(ab.name)}</b>.
+    <button type="button" class="mini" onclick="pickBoat(Opt.activeBoat)">Use it here</button></div>` : "";
 }
 /* New boat from its ORC certificate: paste the cert link, its number or the sail number → Look up
    shows what the public ORC list holds → Create boat saves it (the link itself is never opened). */
@@ -1803,7 +1918,7 @@ function newBoatFromCert() {
   const out = $("#nbOut");
   let found = null, gen = 0;
   const body = (save) => ({ cert: $("#nbCert").value.trim(), country: $("#nbCountry").value.trim() || null,
-                            race_id: Opt.raceId || null, save });
+                            race_id: boatRaceId(), save });
   // a typed change outdates the preview: Create saves only the certificate shown
   const stale = () => { gen++; found = null; $("[data-c=create]").hidden = true; out.innerHTML = ""; };
   async function look() {
@@ -1829,23 +1944,23 @@ function newBoatFromCert() {
     $("[data-c=create]").disabled = true;
     try {
       const r = await apiPost("/api/boats/from-orc", { cert: found.preview.ref_no, country: found.country,
-                                                       race_id: Opt.raceId || null, save: true });
+                                                       race_id: boatRaceId(), save: true });
       const j = await r.json();
       if (!r.ok) { out.innerHTML = `<p class="err">${esc(j.detail || "Not saved.")}</p>`; $("[data-c=create]").disabled = false; return; }
       el.remove();
-      await reloadBoats(); renderGameplan();
+      await reloadBoats(); repaintBoatPage();
       if (j.boat_id !== Opt.activeBoat) {
         const c = await askModal(j.updated ? "Boat updated" : "Boat added",
           `${esc(j.note)} Use <b>${esc(j.summary.name)}</b> now?`,
           [{ c: "no", label: "Not now", cls: "" }, { c: "yes", label: "Use this boat", cls: "primary" }], "yes", "no");
-        if (c === "yes") await optPickBoat(j.boat_id);
+        if (c === "yes") await pickBoat(j.boat_id);
       } else {
         // the active boat's polar changed: the open speeds card reloads, but never over unsaved
         // edits (confirmLeave asks) and never with a failed fetch (the card keeps what it had)
-        if (Opt.boatModel && await confirmLeave()) {
+        if (Opt.boatModel && await boatGuard()) {
           try {
             const cr = await apiGet("/api/crossovers");
-            if (cr.ok) { bmLoaded(await cr.json()); renderGameplan(); }
+            if (cr.ok) { bmLoaded(await cr.json()); repaintBoatPage(); }
           } catch (e) { /* keep the card as it was */ }
         }
         await askModal("Boat updated", esc(j.note), [{ c: "ok", label: "OK", cls: "primary" }], "ok", "ok");
@@ -1865,17 +1980,6 @@ function newBoatFromCert() {
   });
   document.body.appendChild(el);
   $("#nbCert").focus();
-}
-async function optPickBoat(id) {
-  // the boat-model thresholds save to the ACTIVE boat — settle unsaved ones before it changes
-  if (!(await confirmLeave())) return renderGameplan();   // Stay → repaint puts the picker back
-  Opt.activeBoat = id;
-  await apiPost("/api/boats/active", { boat_id: id });
-  await reloadBoats();
-  if (Opt.boatModel) {   // the card shows the new boat's model, not the old one's
-    try { bmLoaded(await (await apiGet("/api/crossovers")).json()); } catch (e) { bmLoaded({ error: String(e) }); }
-  }
-  renderGameplan();
 }
 async function optSetChart(src) {
   Opt.chartSource = src;
@@ -3182,6 +3286,15 @@ async function renderFleet() {
   if (!Lab.editDef.own || typeof Lab.editDef.own !== "object") Lab.editDef.own = {};
   Lab.fleetEdit = !Lab.editDef.fleet.length;   // empty roster → open the editor; populated → show the read-only view
   if (!keepDirty) markClean();            // freshly loaded from disk = in sync
+  if (!Opt.boats) { try { await reloadBoats(); } catch (e) { /* the card shows no boats */ } }
+  if (stale("fleet")) return;
+  // a boat picked on Gameplan since: fill this race's "Our boat" from it (an unsaved edit)
+  const pend = Lab.ownFill; Lab.ownFill = null;
+  if (pend && pend === Opt.activeBoat && ownMismatch(Lab.editDef.own, Opt.boats, Opt.activeBoat)) {
+    await fillOwnFromBoat(pend);
+    if (stale("fleet")) return;
+    syncDirty();
+  }
   paintFleet();
 }
 
@@ -3218,6 +3331,7 @@ function fleetOwnSet(f, v) {
   if (!Lab.editDef) return;
   if (!Lab.editDef.own) Lab.editDef.own = {};
   const own = Lab.editDef.own;
+  Lab.ownRev = (Lab.ownRev || 0) + 1;   // typing outdates a fill still in flight
   own[f] = v;
   if (f === "rating") own.rating_col = _fleetOwnCols().rating;
   if (f === "tod_allowance") own.tod_col = _fleetOwnCols().tod;
@@ -3531,8 +3645,10 @@ function paintFleet() {
 
     <div class="card">
       <h3>Our boat</h3>
-      <div class="opt-controls">
-        <label>Boat ${inp(own.boat, "SR33 \"C4\"", "fleetOwnSet('boat',this.value)", 150)}</label>
+      <div class="opt-controls">${boatPickerHtml("fleetBoat")}</div>
+      ${fleetBoatLine(own)}
+      <div class="opt-controls" style="margin-top:6px">
+        <label>Name ${inp(own.boat, "Boat name", "fleetOwnSet('boat',this.value)", 150)}</label>
         <label>Division ${inp(own.division, "div", "fleetOwnSet('division',this.value)", 70)}</label>
         <label>ORC GPH (s/nm) ${inp(own.orc_gph, "GPH", "fleetOwnSet('orc_gph',this.value)", 70)}</label>
         <label>Sail # ${inp(own.sail, "sail #", "fleetOwnSet('sail',this.value)", 80)}</label>

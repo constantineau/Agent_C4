@@ -215,3 +215,60 @@ def create(rec, country=None):
     boats.save_boat(b)
     return {"ok": True, "boat_id": b["boat_id"], "updated": False, "boat": b,
             "note": f"{b['name']} added."}
+
+
+# ---- a boat profile → the race's "Our boat" ------------------------------------------------------
+OWN_NUMBERS = ("orc_gph", "rating", "rating_col", "tod_allowance", "tod_col")
+OWN_NO_LIST = "The ORC list didn't load. GPH is from the boat; type the ToT."
+
+
+def _same_boat(a, b):
+    """Same boat when the sail numbers match, else (no sail on one side) the names."""
+    sa, sb = fleetimport._norm_sail(a.get("sail")), fleetimport._norm_sail(b.get("sail"))
+    if sa and sb:
+        return sa == sb
+    return fleetimport._norm(a.get("boat")) == fleetimport._norm(b.get("boat"))
+
+
+def own_from_boat(boat, definition):
+    """The race's `own` filled from a boat profile. → (own, note|None).
+
+    Name and sail come from the profile; division and MMSI stay as the race has them (MMSI from
+    the profile when it has one). With an ORC cert (`provenance.cert.ref_no`) the cert record is
+    looked up again and gives GPH plus the ToT (and ToD) for the race's columns for our boat.
+    Numbers typed for another boat are dropped; for the same boat without a cert they stay."""
+    d = definition or {}
+    old = dict(d.get("own") or {})
+    own = dict(old)
+    own["boat"] = str(boat.get("name") or boat.get("boat_id") or "")
+    # the profile's sail, even when blank: an inherited sail would make another boat look like this one
+    own["sail"] = str(boat.get("sail_number") or "").strip()
+    if str(boat.get("mmsi") or "").strip():
+        own["mmsi"] = str(boat["mmsi"]).strip()
+    if not _same_boat(old, own):
+        for k in OWN_NUMBERS:
+            own.pop(k, None)
+    cert = (boat.get("provenance") or {}).get("cert") or {}
+    ref = str(cert.get("ref_no") or "").strip().upper()
+    gph = _num(cert.get("gph")) or _num((boat.get("orc") or {}).get("gph"))
+    if not ref:
+        if gph is not None:
+            own["orc_gph"] = gph
+        return own, None
+    found = lookup(ref, country=cert.get("country") or None, definition=d)
+    if not found["ok"]:
+        if gph is not None:
+            own["orc_gph"] = gph
+        for k in ("rating", "rating_col", "tod_allowance", "tod_col"):
+            own.pop(k, None)
+        return own, OWN_NO_LIST if found.get("failed") and not found["searched"] else found["note"]
+    tot_col, tod_col = fleetimport._cols(d, own)
+    fleetimport._set_numbers(own, found["rec"], tot_col, tod_col)
+    if own.get("orc_gph") is None and gph is not None:
+        own["orc_gph"] = gph
+    note = None
+    if tot_col and own.get("rating") is None:
+        note = f"This certificate has no {tot_col}. Type the ToT."
+    elif not tot_col:
+        note = "The race has no rating column yet. Set it in Rules."
+    return own, note

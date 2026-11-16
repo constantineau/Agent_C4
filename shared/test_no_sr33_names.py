@@ -97,7 +97,6 @@ ALLOWED = [
     (["vps/lab/app/geo/enc.py", "vps/lab/app/geo/obstacles.py", "compose.dev.yml"],
      r"SR33 (?:= )?7 ft", "sr33's draft"),
     (["vps/lab/races/*.json"], r"\"cls\": \"[^\"]*SR33\"", "a fleet entry's class"),
-    (["vps/lab/web/app.js"], r"SR33 \\\"C4\\\"", "placeholder: the own boat's name"),
 ]
 
 # File NAMES that may say sr33: group 2 units (PR D) and group 3 data files.
