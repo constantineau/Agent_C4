@@ -103,7 +103,7 @@ COPILOT_ALLOW_FROM = os.environ.get("COPILOT_ALLOW_FROM", "10.10.10.1,127.0.0.1"
 # BENCH override (added to the boat defaults above, never replacing them): the bench console
 # (compose.pi.sample.yml) reaches the Orin over Tailscale, so the bench adds the Orin's Tailscale
 # address to listen on and the bench host's Tailscale address as a caller. In
-# /etc/sr33/copilot.env on a bench Orin:
+# /etc/c4/copilot.env on a bench Orin:
 #   COPILOT_BENCH_BIND=<orin-tailscale-ip>         (tailscale ip -4, on the Orin)
 #   COPILOT_BENCH_ALLOW_FROM=<bench-host-tailscale-ip>   (tailscale ip -4, on the bench host)
 # Leave both unset on the boat.

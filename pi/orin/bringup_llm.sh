@@ -193,7 +193,7 @@ cat <<EOF
    Next steps (separate, not done here):
      1. If tok/s ≥ ~20 at MAXN SUPER, the runtime-bring-up MILESTONE is met.
      2. Persist it: add a systemd unit that runs this serve line on boot (adapt
-        pi/systemd/sr33-orin-llm.service from the MLC wrapper to llama-server) so it autostarts.
+        pi/systemd/c4-orin-llm.service from the MLC wrapper to llama-server) so it autostarts.
      3. Update SETUP.md / serve.sh / bench.sh / models.md to the 7.2 + llama.cpp reality and
         delete pi/orin/BRINGUP_STATE.md.
      4. Then the next 9.4 increment: the copilot service feeding engine facts + the playbook.

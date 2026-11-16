@@ -83,7 +83,7 @@ def main():
     try:
         data, dt = post_chat(args.base_url, model, args.timeout)
     except urllib.error.URLError as e:
-        print(f"!! request failed: {e}\n   is `serve.sh` up? check `docker logs sr33-orin-llm`",
+        print(f"!! request failed: {e}\n   is `serve.sh` up? check `docker logs c4-orin-llm`",
               file=sys.stderr)
         sys.exit(1)
 

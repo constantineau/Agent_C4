@@ -11,19 +11,19 @@ Type=simple
 User=agent-c4
 # Adjust if you clone elsewhere than /home/agent-c4/Agent_C4.
 WorkingDirectory=/home/agent-c4/Agent_C4/pi/orin
-# Drop real values in /etc/sr33/copilot.env on the Orin:
+# Drop real values in /etc/c4/copilot.env on the Orin:
 #   ENGINE_URL=http://<pi-ip>:8200      (the Pi-4 deterministic engine)
 #   LLM_BASE_URL=http://127.0.0.1:11434/v1
 #   LLM_MODEL=qwen2.5:7b-instruct-q4_K_M
 #   LLM_TIMEOUT=180                       (cover the ~2 min cold model load, or pre-warm)
-#   PLAYBOOK_PATH=/home/agent-c4/sr33/playbook.json   (written by the Pi's /playbook/load; never by hand)
+#   PLAYBOOK_PATH=/home/agent-c4/c4-playbook/playbook.json   (written by the Pi's /playbook/load; never by hand)
 #   PLAYBOOK_LOAD_FROM=10.10.10.1             (who may load a playbook: the Pi engine, on the cable)
 #   COPILOT_ROUTE=bayview-mackinac-2026   (the loaded homework route)
-EnvironmentFile=-/etc/sr33/copilot.env
+EnvironmentFile=-/etc/c4/copilot.env
 Environment=COPILOT_PORT=8300
 # Listen on the boat cable interface (10.10.10.2) and loopback only; answer only the Pi's end of
 # the cable and loopback (the iPad reaches the copilot through the Pi console's /copilot proxy).
-# Override with COPILOT_BIND / COPILOT_ALLOW_FROM in /etc/sr33/copilot.env. A bench Orin (reached
+# Override with COPILOT_BIND / COPILOT_ALLOW_FROM in /etc/c4/copilot.env. A bench Orin (reached
 # over Tailscale) ADDS COPILOT_BENCH_BIND / COPILOT_BENCH_ALLOW_FROM there. See copilot/serve.py.
 # Runs from an isolated venv: the Orin's system Python is PEP-668 externally-managed (no --user /
 # system pip installs of fastapi/uvicorn). Create it once with:

@@ -7,7 +7,7 @@ Levels (each includes the ones below it):
   2  also no plume passes (the timer still fires; each pass exits at once)
   3  also no new re-route runs ("Re-route paused: Orin low on memory."); a run already going finishes
 
-How it works: this file runs as a small daemon (sr33-orin-shed.service). Every SHED_INTERVAL_S it
+How it works: this file runs as a small daemon (c4-orin-shed.service). Every SHED_INTERVAL_S it
 reads MemAvailable (/proc/meminfo), the junction temperature (thermal zone "tj-thermal") and the
 over-current throttle counters (hwmon "soctherm_oc"), works out the level, and writes it to
 SHED_STATE (a JSON file under /run). The copilot, the plume and the re-route service only read that
@@ -24,7 +24,7 @@ the new level is written, and again every 30 s while memory stays short if a mod
 narration paused nothing would use it, and Ollama would otherwise hold the ~5 GB for its 5 min
 keep-alive. Heat and power don't unload: an idle model draws no GPU power.
 
-Stdlib only; runs on the Orin's system python3. Config: /etc/sr33/shed.env (see DEPLOYMENT.md §10).
+Stdlib only; runs on the Orin's system python3. Config: /etc/c4/shed.env (see DEPLOYMENT.md §10).
 """
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ CAUSE_WORDS = {"memory": "Orin low on memory", "heat": "Orin running hot",
                "power": "Orin short of power"}
 PAUSED_AT = {1: ["narration"], 2: ["narration", "plume"], 3: ["narration", "plume", "reroute"]}
 
-DEFAULT_STATE = "/run/sr33-shed/state.json"
+DEFAULT_STATE = "/run/c4-shed/state.json"
 DEFAULTS = {
     # MemAvailable, MB: enter level 1/2/3 below these ...
     "SHED_MEM_MB": "750,600,500",

@@ -30,7 +30,7 @@ boxes (and Starlink) doesn't matter — everything reconnects when its counterpa
   boxes (default ~180-day node keys) does not apply.
 - **Power-cycle survival**: every `compose.pi.yml` service is `restart: unless-stopped`;
   `docker` + `tailscaled` enabled at boot on the Pi; `docker`, `tailscaled`, `ollama`,
-  `sr33-orin-copilot` enabled on the Orin (reboot-verified earlier — turnkey appliance).
+  `c4-orin-copilot` enabled on the Orin (reboot-verified earlier — turnkey appliance).
 - **Storage self-limits**: the archiver's retention prune (7 d outside race sessions,
   fail-safe) keeps the SD card from filling; the archive DB is WAL + `synchronous=FULL`
   (power-loss-safe writes).
@@ -49,7 +49,7 @@ boxes (and Starlink) doesn't matter — everything reconnects when its counterpa
    or `git reset` there would switch every service at once. Never `compose down` remotely (a
    failed rebuild after a down = dead stack); `up -d --no-deps` replaces in place.
    **Orin:** the copilot runs straight from its clone (systemd units, no images). Tag the old
-   HEAD `pre-deploy-<stamp>`, back up any `/etc/sr33` or unit file you change, then
+   HEAD `pre-deploy-<stamp>`, back up any `/etc/c4` or unit file you change, then
    `git fetch && git merge --ff-only origin/main` and restart the units. Rollback: check out the
    tag, restore the backups, restart.
    **Every deploy is recorded on the box**: `pi/deploy/record-deployed.sh` appends the commit,
@@ -89,5 +89,5 @@ boxes (and Starlink) doesn't matter — everything reconnects when its counterpa
 
 ```bash
 ssh sr33-pi@100.79.180.102 'tailscale status | head -3; docker ps --format "{{.Names}} {{.Status}}"; curl -s localhost:8200/health; df -h / | tail -1'
-ssh agent-c4@100.70.110.72 'tailscale status | head -3; systemctl is-active ollama sr33-orin-copilot; curl -s localhost:8300/health | head -c 200; tegrastats --interval 1000 | head -1'
+ssh agent-c4@100.70.110.72 'tailscale status | head -3; systemctl is-active ollama c4-orin-copilot; curl -s localhost:8300/health | head -c 200; tegrastats --interval 1000 | head -1'
 ```

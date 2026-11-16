@@ -159,7 +159,7 @@ Env: `ENGINE_URL` (Pi engine), `LLM_BASE_URL` (default `http://127.0.0.1:11434/v
 `LLM_TIMEOUT`, `MAX_TOOL_ROUNDS`, `PLAYBOOK_PATH` (where the Pi's load writes it),
 `PLAYBOOK_LOAD_FROM` (the Pi's cable IP), `PLAYBOOK_COMMIT_TTL_S`, `COPILOT_ROUTE`, `COPILOT_PORT`,
 `COPILOT_USE_LLM` (false → always deterministic). Systemd unit:
-`pi/systemd/sr33-orin-copilot.service`.
+`pi/systemd/c4-orin-copilot.service`.
 
 ## Bench / exit test
 

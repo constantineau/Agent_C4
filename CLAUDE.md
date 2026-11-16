@@ -138,7 +138,7 @@ docker compose -f compose.pi.yml -f compose.pi.sample.yml down            # take
 backup, rebuild only the changed services (`build` + `up -d --no-deps`), keep the rollback:
 `pi/deploy/README.md` (archiver/uplink: `pi/deploy/deploy-data-path.sh`). **Orin**
 (`agent-c4@100.70.110.72`): tag the old HEAD, `git merge --ff-only origin/main`, restart
-`sr33-orin-copilot` (runtime as-built: `pi/orin/DEPLOYMENT.md`; rules: `docs/REMOTE_OPS.md`).
+`c4-orin-copilot` (runtime as-built: `pi/orin/DEPLOYMENT.md`; rules: `docs/REMOTE_OPS.md`).
 Every deploy ends with `pi/deploy/record-deployed.sh`, which writes what landed to the box's
 `~/DEPLOYED`. Tailscale SSH may require a fresh browser check-mode approval (~12 h validity).
 
@@ -323,7 +323,7 @@ appliance. **Deployed model (2026-07-11): `qwen2.5-matcher:7b-q4_K_M`** — the 
 `qwen2.5:7b-instruct-q4_K_M` fine-tuned for playbook condition-matching (QLoRA;
 results + known /brief-forgetting caveat in `docs/MATCHER_LORA_PLAN.md`; eval harness
 `pi/orin/copilot/eval/`, GPU runbook `training/matcher_lora/`). Stock model stays installed;
-**rollback = flip `LLM_MODEL` in `/etc/sr33/copilot.env` + restart**. (The original
+**rollback = flip `LLM_MODEL` in `/etc/c4/copilot.env` + restart**. (The original
 MLC-on-:9000 plan is superseded history — `pi/orin/SETUP.md`/`models.md` are kept but
 marked.) The copilot only sees the OpenAI contract, so the runtime stays swappable.
 

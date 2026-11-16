@@ -62,6 +62,22 @@ def list_races():
     return races
 
 
+def race_idents():
+    """{race_id, name, year, start_date} of every saved race (racematch.find's input)."""
+    out, seen = [], set()
+    for f in _files():
+        d = _load(f)
+        if not d:
+            continue
+        rid = d.get("race_id") or os.path.splitext(os.path.basename(f))[0]
+        if rid in seen:
+            continue
+        seen.add(rid)
+        out.append({"race_id": rid, "name": d.get("name"), "year": d.get("year"),
+                    "start_date": d.get("start_date")})
+    return out
+
+
 def get_race(rid):
     for f in _files():
         d = _load(f)
