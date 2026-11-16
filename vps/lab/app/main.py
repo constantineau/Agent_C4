@@ -1942,6 +1942,25 @@ def fleet_orc_candidates(body: dict):
                                   division=body.get("division"))
 
 
+@app.post("/api/fleet/own-from-boat")
+async def fleet_own_from_boat(body: dict):
+    """The race's "Our boat" filled from a boat profile: {race_id, boat_id, scoring?, own?} →
+    {own, note}. Name and sail from the profile; with an ORC cert, GPH and the ToT (and ToD) for
+    the race's columns, read off the cert again. Nothing is saved: the Lab shows it as an unsaved
+    race edit. scoring / own = the unsaved draft on screen."""
+    from . import certboat
+    b = body or {}
+    d = store.get_race(b.get("race_id")) if b.get("race_id") else None
+    if not d:
+        return JSONResponse({"detail": "unknown race"}, status_code=404)
+    boat = boats.get_boat(b.get("boat_id")) if b.get("boat_id") else None
+    if not boat:
+        return JSONResponse({"detail": "unknown boat_id"}, status_code=404)
+    d = _with_draft_rating(d, b.get("scoring"), b.get("own"))
+    own, note = await run_in_threadpool(certboat.own_from_boat, boat, d)
+    return {"own": own, "note": note, "boat_id": boat["boat_id"]}
+
+
 @app.post("/api/fleet/import/upload")
 async def fleet_import_upload(race_id: str, country: str = None, course_id: str = None,
                              file: UploadFile = File(...), fleet: str = Form(None),
