@@ -64,7 +64,7 @@ test("fill: only the fields a fill owns; division as on screen; MMSI only from t
 test("a fill reply is dropped after a later fill or typing", async () => {
   const d = { race_id: "r", own: { boat: "Old", division: "orc" } };
   let release;
-  const ctx = { Lab: { editDef: d, ownRev: 0, ownFillGen: 0 }, Object,
+  const ctx = { Lab: { editDef: d, ownRev: 0, ownFillGen: 0 }, Object, activeSec: "fleet",
     apiPost: () => new Promise((res) => { release = res; }) };
   const f = run(["OWN_FILL_KEYS", "ownFilled", "fillToken", "fillCurrent", "fillOwnFromBoat", "fleetOwnSet"],
                 Object.assign(ctx, { _fleetOwnCols: () => ({ rating: null, tod: null }) }));
@@ -114,7 +114,7 @@ function pickRig() {
     _fleetOwnCols: () => ({ rating: null, tod: null }) };
   ctx.repaintBoatPage = () => { ctx.repaints++; };
   ctx.apiPost = (path, body) => path === "/api/boats/active"
-    ? hold("active", body.boat_id, {})
+    ? (ctx.posts.push(body.boat_id), hold("active", body.boat_id, {}))
     : hold("fill", body.boat_id, { ok: true, json: async () => ({ note: null,
         own: Object.assign({}, body.own, { boat: body.boat_id.toUpperCase(), sail: "" }) }) });
   let reloadFor = null;
@@ -126,8 +126,9 @@ function pickRig() {
       : hold("model", id, { json: async () => ({ boat: id }) });
   };
   ctx.bmLoaded = (m) => { ctx.model = m.boat; };
-  const f = run(["OWN_FILL_KEYS", "ownFilled", "fillToken", "fillCurrent", "fillOwnFromBoat", "fleetOwnSet",
-                 "reloadBoats", "pickBoat"], ctx);
+  ctx.posts = [];
+  const f = run(["OWN_FILL_KEYS", "ownFilled", "fillToken", "fillCurrent", "boatWrite", "fillOwnFromBoat",
+                 "fleetOwnSet", "reloadBoats", "pickBoat"], ctx);
   const tick = () => new Promise((r) => setTimeout(r, 0));
   async function release(what, id) {
     const i = held.findIndex((h) => h.what === what && (id == null || h.id === id));
@@ -198,4 +199,45 @@ test("pick A then B: A's late model reply never replaces B's", async () => {
   await release("fill", "b"); await pb;
   await release("model", "a"); await pa;
   assert.equal(ctx.model, "b"); assert.equal(ctx.Opt.activeBoat, "b");
+});
+
+test("active-boat writes go in pick order; an overtaken pick skips its write", async () => {
+  const { ctx, f, release, tick } = pickRig();
+  const pa = f.pickBoat("a"); await tick();
+  const pb = f.pickBoat("b"), pc = f.pickBoat("c"); await tick();
+  assert.deepEqual([...ctx.posts], ["a"]);            // B and C wait for A's write
+  await release("active", "a"); await tick();
+  assert.deepEqual([...ctx.posts], ["a", "c"]);       // B was overtaken by C before its turn
+  await release("active", "c"); await release("reload", "c"); await release("fill", "c");
+  await Promise.all([pa, pb, pc]);
+  assert.equal(ctx.Opt.activeBoat, "c");
+});
+
+test("left the tab mid-pick: no repaint of the old tab, no fill of the race", async () => {
+  const { d, ctx, f, release, tick, held } = pickRig();
+  const p = f.pickBoat("a"); await tick();
+  await release("active", "a");
+  ctx.activeSec = "races";                            // navigated away while the list loads
+  await release("reload", "a"); await p;
+  assert.ok(!held.some((h) => h.what === "fill"), "no fill sent");
+  assert.equal(d.own.boat, "Old"); assert.equal(ctx.repaints, 0);
+  // and a fill already in flight is dropped when its tab is left
+  ctx.activeSec = "fleet";
+  const p2 = f.pickBoat("b"); await tick();
+  await release("active", "b"); await release("reload", "b");
+  ctx.activeSec = "races";
+  await release("fill", "b"); await p2;
+  assert.equal(d.own.boat, "Old"); assert.equal(ctx.repaints, 0);
+});
+
+test("a Gameplan pick repaints Gameplan only while it is still open", async () => {
+  const { ctx, f, release, tick } = pickRig();
+  ctx.activeSec = "gameplan";
+  let p = f.pickBoat("a"); await tick();
+  await release("active", "a"); await release("reload", "a"); await p;
+  assert.equal(ctx.repaints, 1); assert.equal(ctx.Lab.ownFill, "a");
+  p = f.pickBoat("b"); await tick();
+  await release("active", "b"); ctx.activeSec = "races";
+  await release("reload", "b"); await p;
+  assert.equal(ctx.repaints, 1);
 });

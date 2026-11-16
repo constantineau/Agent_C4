@@ -1795,12 +1795,17 @@ function ownFilled(own, filled, sent) {
   if ((filled.mmsi || "") !== ((sent || {}).mmsi || "")) out.mmsi = filled.mmsi;
   return out;
 }
-// A pick's token, taken once when it starts: a later pick (gen), typing in "Our boat" (rev) or
-// another race (d) since then means this pick's fill must not land.
+// A pick's token, taken once when it starts: a later pick (gen), typing in "Our boat" (rev),
+// another race (d) or another tab (sec) since then means this pick's fill must not land.
 function fillToken() {
-  return { gen: (Lab.ownFillGen = (Lab.ownFillGen || 0) + 1), rev: Lab.ownRev || 0, d: Lab.editDef };
+  return { gen: (Lab.ownFillGen = (Lab.ownFillGen || 0) + 1), rev: Lab.ownRev || 0, d: Lab.editDef,
+           sec: activeSec };
 }
-const fillCurrent = (t) => Lab.editDef === t.d && t.gen === (Lab.ownFillGen || 0) && t.rev === (Lab.ownRev || 0);
+const fillCurrent = (t) => Lab.editDef === t.d && t.gen === (Lab.ownFillGen || 0) &&
+  t.rev === (Lab.ownRev || 0) && activeSec === t.sec;
+// Active-boat writes go one at a time, in pick order, so the last pick is the one the server
+// keeps; a pick overtaken before its turn skips its write.
+let boatWrite = Promise.resolve();
 // Fill the open race's "Our boat" from boat `id` (Fleet). An unsaved race edit, never a save.
 async function fillOwnFromBoat(id, t) {
   t = t || fillToken();
@@ -1820,10 +1825,13 @@ async function fillOwnFromBoat(id, t) {
 async function pickBoat(id) {
   const t = fillToken();                         // once, up front: a later pick or typing wins
   const later = () => t.gen !== Lab.ownFillGen;  // a later pick owns the rest (fill + repaint)
-  if (!(await boatGuard())) return later() ? undefined : repaintBoatPage();   // Stay → repaint puts the picker back
+  const here = () => activeSec === t.sec;          // repaint only the tab the pick was made on
+  if (!(await boatGuard())) return later() || !here() ? undefined : repaintBoatPage();   // Stay → repaint puts the picker back
   if (later()) return;
   Opt.activeBoat = id;
-  await apiPost("/api/boats/active", { boat_id: id });
+  const post = boatWrite.then(() => (later() ? null : apiPost("/api/boats/active", { boat_id: id })));
+  boatWrite = post.catch(() => {});
+  await post;
   if (later()) return;
   await reloadBoats(() => !later());            // a later pick's list and active boat stand
   if (later()) return;
@@ -1834,9 +1842,13 @@ async function pickBoat(id) {
     bmLoaded(bm);
   }
   // Fleet: fill the open race now (unless typed over since). Gameplan: Fleet fills when it next opens.
-  if (activeSec === "fleet") { Lab.ownFill = null; await fillOwnFromBoat(id, t); if (later()) return; syncDirty(); }
-  else Lab.ownFill = id;
-  repaintBoatPage();
+  if (t.sec === "fleet") {
+    if (!here()) return;                         // left Fleet: no race edit behind the leave check
+    Lab.ownFill = null; await fillOwnFromBoat(id, t);
+    if (later() || !here()) return;
+    syncDirty();
+  } else Lab.ownFill = id;
+  if (here()) repaintBoatPage();
 }
 // Fleet, "Our boat" is another boat than the Lab's active one → one line to fill it from there.
 function fleetBoatLine(own) {
