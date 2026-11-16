@@ -53,8 +53,8 @@ wait_active() {   # unit -> 0 once active, 1 after WAIT_S
 boat_to_move() {
   local env=$NEW_ENV/reroute.env v
   [[ -f $env ]] || env=$OLD_ENV/reroute.env
-  if grep -qs '^REROUTE_BOAT=.' "$env"; then return; fi
-  v=$(sed -n 's/^REROUTE_BOAT=\(..*\)$/\1/p' "$OLD_ENV/reroute.env" 2>/dev/null | tail -1)
+  if grep -qs '^[[:space:]]*REROUTE_BOAT=.' "$env"; then return; fi
+  v=$(sed -n 's/^[[:space:]]*REROUTE_BOAT=\(..*\)$/\1/p' "$OLD_ENV/reroute.env" 2>/dev/null | tail -1)
   if [[ -z $v && -f $UNITS/sr33-orin-reroute.service ]]; then   # the unit, then its overrides
     v=$(cat "$UNITS/sr33-orin-reroute.service" "$UNITS/sr33-orin-reroute.service.d"/*.conf 2>/dev/null \
         | sed -n 's/^[[:space:]]*Environment=//p' | tr ' ' '\n' | tr -d "\"'" \
@@ -123,7 +123,9 @@ switch() {
   for old in "${list[@]}"; do
     new=$(new_name "$old")
     [[ -f $src/pi/systemd/$new ]] || die "the checkout has no pi/systemd/$new. Nothing done."
-    if [[ -f $UNITS/$old ]]; then
+    if [[ -f $UNITS/$old && -e $UNITS/$new ]]; then
+      die "both $old and $new are installed; remove one by hand first. Nothing done."
+    elif [[ -f $UNITS/$old ]]; then
       en=$(state is-enabled "$old"); act=$(state is-active "$old")
       say "$old (${en:-?}, ${act:-?}) -> $new"
       if [[ -d $UNITS/$old.d ]]; then say "  its overrides in $old.d/ go with it"; fi

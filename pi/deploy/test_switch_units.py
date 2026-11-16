@@ -247,6 +247,18 @@ check("while the folder the switch made is removed",
       not os.path.exists(f"{sysd}/c4-orin-reroute.service.d")
       and os.path.exists(f"{sysd}/sr33-orin-reroute.service.d/boat.conf"))
 
+print("orin, an indented boat in the old env file; both names installed")
+box = make_box(ORIN_UNITS, reroute_env="  REROUTE_BOAT=foxtrot\n")
+r = run(box, "orin", REPO, f"{box}/backup", "--apply")
+check(f"the indented boat is kept, the unit's not added (rc {r.returncode})",
+      r.returncode == 0 and "bravo" not in read(f"{box}/etc/c4/reroute.env"))
+box = make_box(ORIN_UNITS)
+write(f"{box}/etc/systemd/system/c4-orin-copilot.service", "# mine\n")
+before = snapshot(box)
+r = run(box, "orin", REPO, f"{box}/backup", "--apply")
+check(f"both names installed: stops before changing anything (rc {r.returncode})",
+      r.returncode != 0 and "both" in r.stderr and snapshot(box) == before)
+
 print("orin, a new unit won't start")
 box = make_box(ORIN_UNITS)
 r = run(box, "orin", REPO, f"{box}/backup", "--apply", FAIL_START="c4-orin-copilot.service")
