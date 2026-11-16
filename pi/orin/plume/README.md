@@ -79,20 +79,20 @@ mkdir -p ~/c4-plume
 cd ~/Agent_C4/pi/orin/plume && ENGINE_URL=http://10.10.10.1:8200 \
   PYTHONPATH=~/Agent_C4/vps/lab ~/plume-venv/bin/python onboard_plume.py
 
-sudo cp ~/Agent_C4/pi/systemd/sr33-orin-plume.{service,timer} /etc/systemd/system/
+sudo cp ~/Agent_C4/pi/systemd/c4-orin-plume.{service,timer} /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now sr33-orin-plume.timer
-journalctl -u sr33-orin-plume -n 30                   # one line per model + the push result
+sudo systemctl enable --now c4-orin-plume.timer
+journalctl -u c4-orin-plume -n 30                   # one line per model + the push result
 ```
 
 Separate venv on purpose: the copilot's `~/copilot-venv` stays untouched. The Pi engine needs
 the matching engine build (the `/plume/onboard` endpoint, and ETAs on `/playbook/track`) before
 the push is accepted.
 
-Remove: `sudo systemctl disable --now sr33-orin-plume.timer`, delete the two unit files,
+Remove: `sudo systemctl disable --now c4-orin-plume.timer`, delete the two unit files,
 `rm -rf ~/plume-venv ~/c4-plume`.
 
-## Settings (env, or `/etc/sr33/plume.env`)
+## Settings (env, or `/etc/c4/plume.env`)
 
 | var | default | |
 |---|---|---|

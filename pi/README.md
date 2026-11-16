@@ -5,7 +5,7 @@ deploy over Tailscale SSH: on the Pi, `cd ~/Agent_C4 && git pull && docker compo
 compose.pi.yml up -d --build` (the whole stack runs as compose containers).
 
 **▶ Bringing up a fresh Pi from a blank SD card?** Follow **[`SETUP.md`](SETUP.md)** — OS choice,
-headless flash, Docker/Tailscale, PICAN-M `can0` bring-up (`systemd/sr33-can0.service`), and
+headless flash, Docker/Tailscale, PICAN-M `can0` bring-up (`systemd/c4-can0.service`), and
 deploying the stack.
 
 Stack (brief §4):

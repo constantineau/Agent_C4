@@ -8,7 +8,7 @@ nothing installed. Listens on :8300 (the copilot port); reaches the local Ollama
 
 Run from this directory (pi/orin) so the `copilot` package imports:
     COPILOT_USE_LLM=true LLM_BASE_URL=http://127.0.0.1:11434/v1 python3 serve_dashboard.py
-or via pi/systemd/sr33-orin-copilot-dashboard.service.
+or via pi/systemd/c4-orin-copilot-dashboard.service.
 """
 import json
 import os

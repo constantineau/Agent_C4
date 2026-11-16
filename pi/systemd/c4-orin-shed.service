@@ -1,7 +1,7 @@
 [Unit]
 Description=Orin load shed — pause narration, then the plume, then re-route when memory, heat or power run short
 # Reads MemAvailable, the junction temperature and the over-current counters every few seconds and
-# writes the shed level to /run/sr33-shed/state.json. The copilot, the plume and the re-route
+# writes the shed level to /run/c4-shed/state.json. The copilot, the plume and the re-route
 # service read that file; if it's missing or stale they run as normal (pi/orin/shed/guard.py, #248).
 # Install notes: pi/orin/DEPLOYMENT.md §10. Not installed by any script — the owner enables it.
 After=ollama.service
@@ -10,13 +10,13 @@ After=ollama.service
 Type=simple
 User=agent-c4
 WorkingDirectory=/home/agent-c4/Agent_C4/pi/orin
-# /run/sr33-shed, readable by everyone (the readers run as agent-c4 too); gone when the guard stops
-RuntimeDirectory=sr33-shed
+# /run/c4-shed, readable by everyone (the readers run as agent-c4 too); gone when the guard stops
+RuntimeDirectory=c4-shed
 RuntimeDirectoryMode=0755
-Environment=SHED_STATE=/run/sr33-shed/state.json
+Environment=SHED_STATE=/run/c4-shed/state.json
 Environment=PYTHONUNBUFFERED=1
-# Optional threshold overrides (SHED_MEM_MB, SHED_TJ_C, SHED_HOLD_S, ...) in /etc/sr33/shed.env
-EnvironmentFile=-/etc/sr33/shed.env
+# Optional threshold overrides (SHED_MEM_MB, SHED_TJ_C, SHED_HOLD_S, ...) in /etc/c4/shed.env
+EnvironmentFile=-/etc/c4/shed.env
 ExecStart=/usr/bin/python3 /home/agent-c4/Agent_C4/pi/orin/shed/guard.py
 Restart=always
 RestartSec=5

@@ -256,10 +256,12 @@ On the Orin, as `agent-c4`, from an up-to-date `~/Agent_C4` checkout. It uses th
 mkdir -p ~/c4-reroute
 # the chart and the reviewed boat profile come with the Deploy push (see "Chart and boat profile")
 
-sudo cp ~/Agent_C4/pi/systemd/sr33-orin-reroute.service /etc/systemd/system/
+# the boat this Orin re-routes (its boat profile id); the service won't start without it
+sudo mkdir -p /etc/c4 && echo 'REROUTE_BOAT=<boat-id>' | sudo tee -a /etc/c4/reroute.env
+sudo cp ~/Agent_C4/pi/systemd/c4-orin-reroute.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now sr33-orin-reroute
-journalctl -u sr33-orin-reroute -n 20    # "listening on 10.10.10.2:8210; runs only when asked"
+sudo systemctl enable --now c4-orin-reroute
+journalctl -u c4-orin-reroute -n 20    # "listening on 10.10.10.2:8210; runs only when asked"
 # then, from the Pi:  curl -s http://10.10.10.2:8210/status   → {"state": "idle", ...}
 ```
 
@@ -267,9 +269,9 @@ The Pi engine needs this build (the `/reroute` endpoints, `/reroute/assets`, and
 keeping the definition). Push from the Lab's Deploy tab once after the engine update, so the
 definition, the chart and the boat profile are aboard.
 
-Remove: `sudo systemctl disable --now sr33-orin-reroute`, delete the unit, `rm -rf ~/c4-reroute`.
+Remove: `sudo systemctl disable --now c4-orin-reroute`, delete the unit, `rm -rf ~/c4-reroute`.
 
-## Settings (env, or `/etc/sr33/reroute.env`)
+## Settings (env, or `/etc/c4/reroute.env`)
 
 | var | default | |
 |---|---|---|

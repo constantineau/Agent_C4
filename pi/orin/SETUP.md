@@ -2,7 +2,7 @@
 
 > **SUPERSEDED (historical record).** This is the original **MLC-on-:9000 / JetPack-6.2** plan;
 > the unit was actually brought up on **JetPack 7.2 + from-source Ollama on :11434** — the
-> as-built runbook is **`DEPLOYMENT.md`**. §9's `sr33-orin-llm.service` was removed from the
+> as-built runbook is **`DEPLOYMENT.md`**. §9's `c4-orin-llm.service` was removed from the
 > repo. Kept because the flashing/Super-mode/thermal steps and the research remain useful.
 
 
@@ -172,7 +172,7 @@ stable, boring contract: **OpenAI `/v1/chat/completions`**. MLC serves this via 
 launcher inside the MLC container. The documented form (confirm exact flags with `sudonim serve
 --help` on-unit):
 ```bash
-jetson-containers run -d --name sr33-orin-llm --restart unless-stopped \
+jetson-containers run -d --name c4-orin-llm --restart unless-stopped \
   -p 9000:9000 $(autotag mlc) \
   sudonim serve \
     --model <Qwen2.5-7B q4f16_ft MLC id from §5>  \
@@ -202,11 +202,11 @@ tokens). No SR33 tool-calling yet — that's the next increment.
 For the boat, the server should come up on power-on with clocks pinned. Install the unit:
 ```bash
 sudo mkdir -p /opt/sr33 && sudo cp -r <repo>/pi /opt/sr33/pi
-sudo cp /opt/sr33/pi/systemd/sr33-orin-llm.service /etc/systemd/system/
-sudo mkdir -p /etc/sr33 && sudoedit /etc/sr33/orin.env   # set MODEL, PORT (see serve.sh)
+sudo cp /opt/sr33/pi/systemd/c4-orin-llm.service /etc/systemd/system/
+sudo mkdir -p /etc/c4 && sudoedit /etc/c4/orin.env   # set MODEL, PORT (see serve.sh)
 sudo systemctl daemon-reload
-sudo systemctl enable --now sr33-orin-llm
-journalctl -u sr33-orin-llm -f
+sudo systemctl enable --now c4-orin-llm
+journalctl -u c4-orin-llm -f
 ```
 The unit re-applies `nvpmodel -m 2` + `jetson_clocks` on boot (via `ExecStartPre`) then runs
 `serve.sh`. Confirm after a reboot that `/health` (or `/v1/models`) answers.

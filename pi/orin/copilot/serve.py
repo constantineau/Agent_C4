@@ -12,7 +12,7 @@ the Orin itself (bench_copilot, smoke_api). Same shape as pi/orin/reroute/servic
   COPILOT_ALLOW_FROM  caller addresses allowed     (default 10.10.10.1,127.0.0.1)
 
 Bench (compose.pi.sample.yml: the bench console proxies to the Orin's Tailscale address) ADDS, on
-top of the boat defaults, in /etc/sr33/copilot.env:
+top of the boat defaults, in /etc/c4/copilot.env:
   COPILOT_BENCH_BIND        the Orin's Tailscale address         (tailscale ip -4, on the Orin)
   COPILOT_BENCH_ALLOW_FROM  the bench host's Tailscale address   (tailscale ip -4, on that host)
   COPILOT_PORT        port                         (default 8300)
