@@ -118,13 +118,21 @@ function pickRig() {
     : hold("fill", body.boat_id, { ok: true, json: async () => ({ note: null,
         own: Object.assign({}, body.own, { boat: body.boat_id.toUpperCase(), sail: "" }) }) });
   let reloadFor = null;
-  ctx.reloadBoats = () => hold("reload", reloadFor, {});
-  const f = run(["OWN_FILL_KEYS", "ownFilled", "fillToken", "fillCurrent", "fillOwnFromBoat", "fleetOwnSet", "pickBoat"], ctx);
+  // the REAL reloadBoats: its GET is held, and answers with the active boat as of that pick
+  ctx.apiGet = (path) => {
+    const id = reloadFor;
+    return path === "/api/boats"
+      ? hold("reload", id, { json: async () => ({ boats: BOATS, active: id, chart_source: "enc" }) })
+      : hold("model", id, { json: async () => ({ boat: id }) });
+  };
+  ctx.bmLoaded = (m) => { ctx.model = m.boat; };
+  const f = run(["OWN_FILL_KEYS", "ownFilled", "fillToken", "fillCurrent", "fillOwnFromBoat", "fleetOwnSet",
+                 "reloadBoats", "pickBoat"], ctx);
   const tick = () => new Promise((r) => setTimeout(r, 0));
   async function release(what, id) {
     const i = held.findIndex((h) => h.what === what && (id == null || h.id === id));
     assert.ok(i >= 0, `${what} ${id} pending`);
-    if (what === "active") reloadFor = held[i].id;    // that pick's reloadBoats comes next
+    if (what === "active") reloadFor = held[i].id;   // that pick's GETs come next
     held.splice(i, 1)[0].res(); await tick(); await tick();
   }
   return { d, ctx, f, release, held, tick };
@@ -165,4 +173,29 @@ test("typing while the active-boat save is pending wins over the pick's fill", a
   await p;
   assert.equal(d.own.boat, "Typed");
   assert.equal(ctx.repaints, 1);
+});
+
+test("pick A then B: A's late boat list and model never replace B's", async () => {
+  const { ctx, f, release, tick } = pickRig();
+  ctx.Opt.boatModel = { boat: "old" };
+  const pa = f.pickBoat("a"); await tick();
+  await release("active", "a");                       // A's GET /api/boats now held (says active: a)
+  const pb = f.pickBoat("b"); await tick();
+  await release("active", "b"); await release("reload", "b"); await release("model", "b");
+  await release("fill", "b"); await pb;
+  assert.equal(ctx.Opt.activeBoat, "b"); assert.equal(ctx.model, "b");
+  await release("reload", "a"); await pa;             // A's list answers last, saying active: a
+  assert.equal(ctx.Opt.activeBoat, "b");
+});
+
+test("pick A then B: A's late model reply never replaces B's", async () => {
+  const { ctx, f, release, tick } = pickRig();
+  ctx.Opt.boatModel = { boat: "old" };
+  const pa = f.pickBoat("a"); await tick();
+  await release("active", "a"); await release("reload", "a");   // A's /api/crossovers held
+  const pb = f.pickBoat("b"); await tick();
+  await release("active", "b"); await release("reload", "b"); await release("model", "b");
+  await release("fill", "b"); await pb;
+  await release("model", "a"); await pa;
+  assert.equal(ctx.model, "b"); assert.equal(ctx.Opt.activeBoat, "b");
 });

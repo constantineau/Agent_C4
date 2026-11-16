@@ -1716,8 +1716,10 @@ function updateEnsembleControl() {
 /* Boat profile ([B]): active boat + editable draft + chart source. Draft sets the ENC depth no-go,
    so it drives the route. Draft and depths show in feet or metres per the Lab's depth unit (#312);
    stored in metres either way. */
-async function reloadBoats() {
+// `still` (optional): checked after the fetch, before anything is applied; false → nothing changes.
+async function reloadBoats(still) {
   const bd = await (await apiGet("/api/boats")).json();
+  if (still && !still()) return false;
   Opt.boats = bd.boats || []; Opt.activeBoat = bd.active; Opt.chartSource = bd.chart_source;
   Opt.depthUnit = bd.depth_unit === "m" ? "m" : "ft";
 }
@@ -1823,11 +1825,13 @@ async function pickBoat(id) {
   Opt.activeBoat = id;
   await apiPost("/api/boats/active", { boat_id: id });
   if (later()) return;
-  await reloadBoats();
+  await reloadBoats(() => !later());            // a later pick's list and active boat stand
   if (later()) return;
   if (Opt.boatModel) {   // the card shows the new boat's model, not the old one's
-    try { bmLoaded(await (await apiGet("/api/crossovers")).json()); } catch (e) { bmLoaded({ error: String(e) }); }
-    if (later()) return;
+    let bm;
+    try { bm = await (await apiGet("/api/crossovers")).json(); } catch (e) { bm = { error: String(e) }; }
+    if (later()) return;                         // never over a later pick's model
+    bmLoaded(bm);
   }
   // Fleet: fill the open race now (unless typed over since). Gameplan: Fleet fills when it next opens.
   if (activeSec === "fleet") { Lab.ownFill = null; await fillOwnFromBoat(id, t); if (later()) return; syncDirty(); }
