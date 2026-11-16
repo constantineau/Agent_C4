@@ -61,6 +61,12 @@ WEEKLY = [{"race_id": "wnr-0701", "name": "Wednesday Night Race", "year": 2026, 
 check("two editions a week apart: the one on the draft's start date",
       (racematch.find({"race_id": "wednesday-night-race-0708", "name": "Wednesday Night Race", "year": 2026,
                        "start_date": "2026-07-08"}, WEEKLY) or {}).get("race_id") == "wnr-0708")
+check("only last week's edition saved: this week's is a new race",
+      racematch.find({"race_id": "wnr-new", "name": "Wednesday Night Race", "year": 2026,
+                      "start_date": "2026-07-08"}, WEEKLY[:1]) is None)
+check("a start moved a day: still the same race",
+      (find(race_id="x", name="SORC Ocean Race", year=2026, start_date="2026-11-21") or {}).get("race_id")
+      == "sorc-ocean-race-2026")
 check("two that fit equally (no date to tell): nothing offered",
       racematch.find({"race_id": "wnr", "name": "Wednesday Night Race", "year": 2026}, WEEKLY) is None)
 check("no saved races: nothing", racematch.find({"race_id": "a", "name": "A Race"}, []) is None)

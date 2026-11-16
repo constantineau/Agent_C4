@@ -35,13 +35,14 @@ def _year(d):
 
 
 def _score(draft, saved):
-    """0 (not the same race) .. 1. Same year needed when both know it; start dates more than a month
-    apart are different races; then how much of the name the two share."""
+    """0 (not the same race) .. 1. Same year needed when both know it; start dates more than two days
+    apart are different races (a weekly series is a week apart; a postponed start moves a day or
+    two); then how much of the name the two share."""
     yd, ys = _year(draft), _year(saved)
     if yd and ys and yd != ys:
         return 0.0
     dd, ds = _date(draft.get("start_date")), _date(saved.get("start_date"))
-    if dd and ds and abs((dd - ds).days) > 31:
+    if dd and ds and abs((dd - ds).days) > 2:
         return 0.0
     a, b = _words(draft.get("name")), _words(saved.get("name"))
     if not a or not b:
