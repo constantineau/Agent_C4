@@ -13,6 +13,10 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const src = fs.readFileSync(path.join(here, "..", "..", "vps", "lab", "web", "app.js"), "utf8");
 const a = src.indexOf("/* ---------- Debrief"), b = src.indexOf("function debTrackScore");
 assert.ok(a > 0 && b > a, "Debrief section found in app.js");
+// the shared race pick (one race for every tab) the Debrief tab reads and writes
+const r0 = src.indexOf("const RACE_KEY"), r1 = src.indexOf("\n}\n", src.indexOf("function pickRace")) + 3;
+assert.ok(r0 > 0 && r1 > r0, "race pick helpers found in app.js");
+const racePick = src.slice(r0, r1).replace("const RACE_KEY", "var RACE_KEY");
 
 function harness() {
   const pending = [];                       // [{url, resolve}]
@@ -25,7 +29,7 @@ function harness() {
     apiGet: (url) => new Promise((resolve) => pending.push({ url, resolve })),
   };
   vm.createContext(ctx);
-  vm.runInContext(src.slice(a, b).replace("const Deb =", "var Deb =").replace("const Retro =", "var Retro =")
+  vm.runInContext(racePick + "\n" + src.slice(a, b).replace("const Deb =", "var Deb =").replace("const Retro =", "var Retro =")
     + "\nthis.Deb = Deb; this.renderDebrief = renderDebrief; this.debPickRace = debPickRace;"
     + "\nthis.debReport = (r) => 'REPORT ' + r.race_name; this.debTrackCard = () => ''; this.retroCard = () => '';", ctx);
   const answer = (pred, body) => {

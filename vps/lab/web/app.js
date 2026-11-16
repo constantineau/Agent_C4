@@ -101,6 +101,24 @@ async function unlock() {
   } catch (e) { err.textContent = "Can't reach the Lab. Try again."; }
 }
 function logout() { sessionStorage.removeItem("c4lab.token"); Lab.token = null; location.reload(); }
+
+/* One race for every tab: picking a race anywhere makes it the race on Races, Fleet, Rules,
+   Gameplan, Deploy, Monitor, Debrief and Learnings, and a reload keeps it (this browser only). */
+const RACE_KEY = "c4lab.race";
+function rememberRace(id) {
+  Lab.sel = id;
+  try { if (id) localStorage.setItem(RACE_KEY, id); } catch (e) { /* private window: this visit only */ }
+}
+// The race a tab should show from `list`: the one picked anywhere, else the remembered one, else the
+// tab's own, else the first.
+function pickRace(list, own) {
+  const has = (id) => !!id && (list || []).some((r) => r.race_id === id);
+  let saved = null;
+  try { saved = localStorage.getItem(RACE_KEY); } catch (e) { saved = null; }
+  const id = [Lab.sel, saved, own].find(has) || ((list || [])[0] || {}).race_id || null;
+  if (id && id !== Lab.sel) rememberRace(id);
+  return id;
+}
 /* Show / Hide the typed password (#106 G99): easy to mistype on an iPad keyboard. */
 function pwToggle() {
   const pw = document.getElementById("pw"), b = document.getElementById("pwShow");
@@ -463,7 +481,7 @@ async function renderRaces() {
     try { Lab.races = (await (await apiGet("/api/races")).json()).races || []; }
     catch (e) { view.innerHTML = '<div class="placeholder">Failed to load races.</div>'; return; }
   }
-  if (!Lab.sel && Lab.races.length) Lab.sel = Lab.races[0].race_id;
+  if (!Lab.sel) pickRace(Lab.races, null);
   if (stale("races")) return;
   view.innerHTML = `<div class="races">
     <div>
@@ -497,7 +515,7 @@ function raceItem(r) {
 }
 async function selectRace(id) {
   if (!(await confirmLeave())) return;
-  Lab.sel = id; Lab.draft = null; Lab.isDraft = false;
+  rememberRace(id); Lab.draft = null; Lab.isDraft = false;
   document.querySelectorAll(".raceitem").forEach((el) =>
     el.classList.toggle("sel", el.dataset.id === id));
   loadRace(id);
@@ -636,12 +654,12 @@ async function saveDraft() {
     } else {
       // Saved, but the stored copy didn't come back: stay a draft (its empty roster/notes would
       // otherwise read as real values, and the next ordinary save would clear the stored ones).
-      ed.race_id = r.race_id; Lab.sel = r.race_id; refreshRaceList();
+      ed.race_id = r.race_id; rememberRace(r.race_id); refreshRaceList();
       const m = document.getElementById("ingMsg");
       if (m) { m.textContent = "Saved, but couldn't reload it. Click Save again."; m.style.color = "var(--warn)"; }
       return false;
     }
-    Lab.sel = r.race_id; Lab.draft = null; Lab.sources = []; Lab.isDraft = false;
+    rememberRace(r.race_id); Lab.draft = null; Lab.sources = []; Lab.isDraft = false;
     Lab.editVal = { errors: r.errors || [], warnings: r.warnings || [] };
     if (activeSec === "races") paintDetail();
     if (clean === null) markClean(); else markClean(clean);   // after the paint, as loadRace does
@@ -1170,7 +1188,7 @@ async function refreshRaceList() {
 async function renderCourse() {
   const view = document.getElementById("view");
   if (!Lab.races) { try { Lab.races = (await (await apiGet("/api/races")).json()).races || []; } catch (e) {} }
-  if (!Lab.sel && Lab.races && Lab.races.length) Lab.sel = Lab.races[0].race_id;
+  if (!Lab.sel) pickRace(Lab.races, null);
   if (!Lab.sel) { view.innerHTML = noRaceYet(); return; }
   view.innerHTML = '<div class="loading">Loading course…</div>';
   try { Lab.editDef = await (await apiGet("/api/races/" + encodeURIComponent(Lab.sel))).json(); }
@@ -1567,7 +1585,8 @@ async function renderGameplan() {
       await reloadBoats();
     } catch (e) { view.innerHTML = '<div class="placeholder">Couldn\'t load Gameplan.</div>'; return; }
   }
-  if (!Opt.raceId && Opt.races.length) await optPickRace(Opt.races[0].race_id, false);
+  { const want = pickRace(Opt.races, Opt.raceId);          // the race picked on any tab
+    if (want && want !== Opt.raceId) await optPickRace(want, false); }
   await optLoadStartDefault();
   if (stale("gameplan")) return;
   view.innerHTML = `<div class="opt">
@@ -2147,7 +2166,7 @@ function renderPolarGrid() {
 }
 
 async function optPickRace(id, rerender = true) {
-  Opt.raceId = id; Opt.courseId = null; Opt.result = null; Pb.result = null;
+  Opt.raceId = id; rememberRace(id); Opt.courseId = null; Opt.result = null; Pb.result = null;
   try { Opt.def = await (await apiGet("/api/races/" + encodeURIComponent(id))).json(); }
   catch (e) { Opt.def = null; }
   if (rerender) renderGameplan();
@@ -2796,7 +2815,7 @@ async function renderDeploy() {
     try { Dep.races = (await (await apiGet("/api/races")).json()).races || []; }
     catch (e) { view.innerHTML = '<div class="placeholder">Failed to load.</div>'; return; }
   }
-  if (!Dep.raceId) Dep.raceId = Lab.sel || (Dep.races[0] && Dep.races[0].race_id) || null;
+  Dep.raceId = pickRace(Dep.races, Dep.raceId);
   if (!Dep.raceId) { view.innerHTML = noRaceYet(); return; }
   try { Dep.ready = await (await apiGet("/api/deploy?race_id=" + encodeURIComponent(Dep.raceId))).json(); }
   catch (e) { view.innerHTML = '<div class="placeholder">Couldn\'t load the deploy page.</div>'; return; }
@@ -2890,7 +2909,7 @@ function depPaintBoat() {
   if (el && Dep.ready) el.innerHTML = boatPanelInner();
 }
 
-async function depPickRace(id) { Dep.raceId = id; Lab.sel = id; Dep.sel = null; renderDeploy(); }
+async function depPickRace(id) { Dep.raceId = id; rememberRace(id); Dep.sel = null; renderDeploy(); }
 
 const depPill = (ok, label) => `<span class="pill ${ok ? "ok" : "warn"}">${ok ? "✓" : "⚠"} ${esc(label)}</span>`;
 
@@ -3147,7 +3166,7 @@ async function renderFleet() {
     try { Lab.races = (await (await apiGet("/api/races")).json()).races || []; }
     catch (e) { view.innerHTML = '<div class="placeholder">Failed to load.</div>'; return; }
   }
-  if (!Lab.sel && Lab.races.length) Lab.sel = Lab.races[0].race_id;
+  if (!Lab.sel) pickRace(Lab.races, null);
   if (!Lab.sel) { view.innerHTML = noRaceYet(); return; }
   let fetched = false;
   if (!Lab.editDef || Lab.editDef.race_id !== Lab.sel) {
@@ -3166,7 +3185,7 @@ async function renderFleet() {
 
 async function fleetPickRace(id) {
   if (!(await confirmLeave())) return paintFleet();   // Stay → repaint puts the picker back
-  Lab.sel = id; Lab.editDef = null; Lab.fleetMsg = ""; Lab.fleetCols = []; renderFleet(); }
+  rememberRace(id); Lab.editDef = null; Lab.fleetMsg = ""; Lab.fleetCols = []; renderFleet(); }
 // A number typed by hand is tagged "manual" (#311): the Lab keeps hand-typed competitor numbers
 // across a column switch, and only clears numbers it imported off another column.
 const _FLEET_TAG = { rating: "rating_col", tod_allowance: "tod_col" };
@@ -3588,7 +3607,7 @@ async function renderRules() {
     try { Lab.races = (await (await apiGet("/api/races")).json()).races || []; }
     catch (e) { view.innerHTML = '<div class="placeholder">Failed to load.</div>'; return; }
   }
-  if (!Lab.sel && Lab.races.length) Lab.sel = Lab.races[0].race_id;
+  if (!Lab.sel) pickRace(Lab.races, null);
   if (!Lab.sel) { view.innerHTML = noRaceYet(); return; }
   let fetched = false;
   if (!Lab.editDef || Lab.editDef.race_id !== Lab.sel) {
@@ -3610,7 +3629,7 @@ async function renderRules() {
 
 async function rulesPickRace(id) {
   if (!(await confirmLeave())) return paintRules();   // Stay → repaint puts the picker back
-  Lab.sel = id; Lab.editDef = null; renderRules();
+  rememberRace(id); Lab.editDef = null; renderRules();
 }
 function rulesCCSet(v) {
   Lab.editDef.rules_profile.scoring.rating_countries =
@@ -3795,7 +3814,7 @@ async function renderMonitor() {
     try { Lab.races = (await (await apiGet("/api/races")).json()).races || []; }
     catch (e) { view.innerHTML = '<div class="placeholder">Failed to load.</div>'; return; }
   }
-  if (!Mon.raceId) Mon.raceId = Lab.sel || (Lab.races[0] && Lab.races[0].race_id) || null;
+  Mon.raceId = pickRace(Lab.races, Mon.raceId);
   if (!Mon.raceId) { view.innerHTML = '<div class="placeholder">No race yet. <a href="#races">Add one in Races</a>.</div>'; return; }
   await monFetch();
   if (stale("monitor")) return;
@@ -3809,7 +3828,7 @@ async function monFetch() {
   } catch (e) { Mon.data = { error: String(e) }; }
 }
 
-async function monPickRace(id) { Mon.raceId = id; Lab.sel = id; renderMonitor(); }
+async function monPickRace(id) { Mon.raceId = id; rememberRace(id); renderMonitor(); }
 async function monToggleDemo(on) { Mon.demo = on; await monFetch(); paintMonitor(); }
 async function monRefresh() {
   if ((location.hash || "").slice(1) !== "monitor") { if (Mon.timer) { clearInterval(Mon.timer); Mon.timer = null; } return; }
@@ -4071,7 +4090,7 @@ async function renderDebrief() {
     try { Lab.races = (await (await apiGet("/api/races")).json()).races || []; }
     catch (e) { view.innerHTML = '<div class="placeholder">Failed to load.</div>'; return; }
   }
-  if (!Deb.raceId) Deb.raceId = Lab.sel || (Lab.races[0] && Lab.races[0].race_id) || null;
+  Deb.raceId = pickRace(Lab.races, Deb.raceId);
   if (!Deb.raceId) {
     // Fleet retro and the practice sails need no race of ours, so they still show (G66, #322)
     await debLoadPractice();
@@ -4405,7 +4424,7 @@ async function debClearTrack() {
 }
 
 async function debPickRace(id) {
-  Deb.raceId = id; Lab.sel = id; Deb.report = null; Deb.viewing = null; Deb.playbookId = null;
+  Deb.raceId = id; rememberRace(id); Deb.report = null; Deb.viewing = null; Deb.playbookId = null;
   Deb.recordings = null; renderDebrief();
 }
 
@@ -4727,7 +4746,7 @@ async function renderLearnings() {
     Opt.polarGrid = await (await apiGet("/api/polars")).json();
     if (!Lab.races) Lab.races = (await (await apiGet("/api/races")).json()).races || [];
   } catch (e) { view.innerHTML = '<div class="placeholder">Failed to load learnings.</div>'; return; }
-  if (!Lab.sel && Lab.races.length) Lab.sel = Lab.races[0].race_id;
+  if (!Lab.sel) pickRace(Lab.races, null);
   let fetched = false;
   if (Lab.sel && (!Lab.editDef || Lab.editDef.race_id !== Lab.sel)) {
     try { Lab.editDef = await (await apiGet("/api/races/" + encodeURIComponent(Lab.sel))).json(); fetched = true; } catch (e) {}
@@ -4741,7 +4760,7 @@ async function renderLearnings() {
 
 async function learnPickRace(id) {
   if (!(await confirmLeave())) return paintLearnings();   // Stay → repaint puts the picker back
-  Lab.sel = id; Lab.editDef = null; renderLearnings();
+  rememberRace(id); Lab.editDef = null; renderLearnings();
 }
 async function learnSaveNotes() {
   if (!Lab.editDef) return false;
