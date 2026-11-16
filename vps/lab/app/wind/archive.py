@@ -11,6 +11,8 @@ retro archive** (`retrostore.pin_grib`) so the study's inputs survive any cache 
 that moment (lag-aware), exactly what was knowable at the gun. Buckets:
   - GFS  0.25°  `noaa-gfs-bdp-pds`   (complete since ~2021-02)
   - HRRR CONUS  `noaa-hrrr-bdp-pds`  (complete since 2014-08; f48 on synoptic cycles from ~2019)
+RRFS (NOAA's NAM replacement, operational 2026-11, #360) has no source here on purpose: its AWS
+bucket holds only the pre-operational rrfs_a prototype, so a past race replays on GFS + HRRR.
 
 Note: archive messages are WHOLE-DOMAIN (byte-range selects the variable, not a bbox) — heavier in
 RAM than the live bbox-subset path but correct; crop-at-parse is a future optimization if fleet

@@ -30,10 +30,16 @@ import datetime as dt
 OM_MODELS = {
     "gfs": "gfs_global",
     "hrrr": "gfs_hrrr",
+    "rrfs": "ncep_rrfs_conus",      # NOAA's NAM replacement (#360); archive from ~2026-10 only
     "ecmwf": "ecmwf_ifs025",
     "icon": "icon_global",
     "gem": "gem_global",
 }
+
+# The first year Open-Meteo's archive holds a model, where that is later than OPENMETEO_FIRST_YEAR.
+# Older windows are not asked for (they would only come back empty). RRFS went operational in
+# 2026, so its venue weight stays x1 until a study finds MIN_N matched hours.
+OM_FIRST_YEAR = {"rrfs": 2026}
 
 _HIST_FC = "https://historical-forecast-api.open-meteo.com/v1/forecast"
 _METAR = "https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py"
@@ -333,7 +339,7 @@ def score(obs, fc):
     return _acc_final(_acc_add(_acc_new(), _match(obs, fc)))
 
 
-def verify_venue(lat, lon, station, start_date, end_date, models=("gfs", "hrrr", "ecmwf", "icon", "gem"),
+def verify_venue(lat, lon, station, start_date, end_date, models=("gfs", "hrrr", "rrfs", "ecmwf", "icon", "gem"),
                  obs_source="metar"):
     """Standalone 'which model was right here' report: observed vs each model's past forecast over a
     venue window. Returns {station, obs_n, models: {name: score|None}} sorted by vector RMSE."""
@@ -356,7 +362,7 @@ MIN_N = int(os.environ.get("MODEL_SKILL_MIN_N", "12"))                  # need t
 SHRINK_N = float(os.environ.get("MODEL_SKILL_SHRINK_N", "30"))          # pseudo-count: shrink to priors
 CAP_LO = float(os.environ.get("MODEL_SKILL_CAP_LO", "0.5"))
 CAP_HI = float(os.environ.get("MODEL_SKILL_CAP_HI", "2.0"))
-DEFAULT_MODELS = ("gfs", "hrrr", "ecmwf", "icon", "gem", "gefs")
+DEFAULT_MODELS = ("gfs", "hrrr", "rrfs", "ecmwf", "icon", "gem", "gefs")
 # tracked for reference but NOT blended → kept out of the weight-derivation geomean so it can't distort
 # the models that ARE routed on. (GEFS reforecast is our deep NCEP-global history; it isn't in the blend.)
 REFERENCE_ONLY = {"gefs"}
@@ -480,6 +486,8 @@ def forecast_series(lat, lon, sd, ed, model, year, include_deep=False):
     (>=2021); the heavier reforecast/GRIB-archive pipeline for older years, but ONLY when include_deep
     (the offline backfill) — the inline optimize path never triggers the heavy deep pulls."""
     if year >= OPENMETEO_FIRST_YEAR:
+        if year < OM_FIRST_YEAR.get(model, OPENMETEO_FIRST_YEAR):
+            return {}
         return fetch_forecast(lat, lon, sd, ed, model)
     return fetch_reforecast(lat, lon, sd, ed, model, year) if include_deep else {}
 

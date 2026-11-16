@@ -90,8 +90,8 @@ check("estimated-cycle source serving the same numbers → not a new run",
       and not P.add_run(st, "icon", t0 + 6 * H, [list(p) for p in a], NOW + H, estimated=True))
 check("...but different numbers are", P.add_run(st, "icon", t0 + 6 * H, [[t0, 14.0, 220]], NOW + 2 * H,
                                                 estimated=True))
-check("empty runs never stored", not P.add_run(st, "nam", t0, [], NOW))
-check("latest cycle per model", P.latest_cycle(st, "gfs") == t0 + 2 * H and P.latest_cycle(st, "nam") is None)
+check("empty runs never stored", not P.add_run(st, "rrfs", t0, [], NOW))
+check("latest cycle per model", P.latest_cycle(st, "gfs") == t0 + 2 * H and P.latest_cycle(st, "rrfs") is None)
 P.prune(st, NOW + 48 * H + 1800)
 check("history older than 48 h pruned", [r["cycle"] for r in st["runs"]["gfs"]] == [t0 + 2 * H])
 

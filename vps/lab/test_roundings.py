@@ -32,7 +32,7 @@ try:
     result = {
         "available": True, "total_hours": 42.5, "total_sailed_nm": 306.0, "total_tacks": 9,
         "route_confidence": 0.39, "min_confidence": 0.3, "wind_coverage": 1.0, "degraded": False,
-        "warnings": [], "windfield": {"models": [{"model": "gfs"}, {"model": "nam"}, {"model": "hrrr"}]},
+        "warnings": [], "windfield": {"models": [{"model": "gfs"}, {"model": "rrfs"}, {"model": "hrrr"}]},
         "roundings": rs,
         "legs": [{"to": "Finish", "leg_minutes": 2550, "point_of_sail": "reach", "tacks": 5,
                   "wind": {"tws": 8, "twd": 250, "confidence": 0.4}}],

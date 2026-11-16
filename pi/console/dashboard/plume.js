@@ -13,8 +13,8 @@
 (function (root) {
   "use strict";
 
-  const ORDER = ["gfs", "nam", "hrrr", "ecmwf", "icon", "gem"];
-  const LABEL = { gfs: "GFS", nam: "NAM", hrrr: "HRRR", ecmwf: "ECMWF", icon: "ICON", gem: "GEM" };
+  const ORDER = ["gfs", "hrrr", "rrfs", "ecmwf", "icon", "gem"];
+  const LABEL = { gfs: "GFS", hrrr: "HRRR", rrfs: "RRFS", ecmwf: "ECMWF", icon: "ICON", gem: "GEM" };
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g,
     (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const known = (m) => Object.prototype.hasOwnProperty.call(LABEL, m);

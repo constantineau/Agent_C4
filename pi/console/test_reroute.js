@@ -19,7 +19,7 @@ const IDLE = { orin: { reachable: true }, state: "idle", result: null, latest: n
 const ORIN_ROUTE = { available: true, source: "orin", label: "Off the playbook", off_playbook: true,
   asked_by: "Nav iPad", asked_at: S - 1500, finished_at: S - 1440, sailed_nm: 181.3, tacks: 2,
   sail_plan: ["J1", "A3"], vs_plan: { available: true, gain_min: 12 },
-  weather: { newest_age_h: 2.4, models: [{ model: "gfs" }, { model: "nam" }, { model: "hrrr" }] },
+  weather: { newest_age_h: 2.4, models: [{ model: "gfs" }, { model: "hrrr" }, { model: "rrfs" }] },
   warnings: ["Chart is out of date. Route doesn't check the shore.", "Route incomplete."],
   chart: { land: false } };
 const v = (o) => RT.view(Object.assign({ nowMs: NOW, rrAgeMs: 1000, rrAt: NOW - 1000, press: {} }, o));
@@ -99,7 +99,7 @@ test("done: the last route, gain vs the plan, forecast age, models, who asked, l
   assert.equal(x.say, "12 min faster than the plan · 24 min ago");
   const L = x.last;
   assert.equal(L.head, "12 min faster than the plan");
-  assert.equal(L.wx, "Forecast 2.4 h old · GFS, NAM, HRRR");
+  assert.equal(L.wx, "Forecast 2.4 h old · GFS, HRRR, RRFS");
   assert.match(L.who, /^Asked by Nav iPad at \d\d:\d\d$/);
   assert.equal(L.shape, "181 nm · 2 tacks · J1→A3");
   assert.deepEqual(L.labels, ["Off the playbook", "Route doesn't check the shore"]);

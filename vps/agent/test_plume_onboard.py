@@ -123,8 +123,8 @@ check("shore GFS 12Z recorded 16:00 beats onboard GFS 06Z sampled 16:15",
 check("onboard GFS 18Z beats shore GFS 12Z (the frozen shore plume mid-race)",
       plume.prefer_onboard(mk({"gfs": C12 + 6 * H}, NOW - 9000), mk({"gfs": C12}, NOW)) is True)
 check("more shared models newer onboard → onboard, even if shore's HRRR is an hour newer",
-      plume.prefer_onboard(mk({"gfs": C12 + 6 * H, "nam": C12 + 6 * H, "hrrr": C12}, NOW),
-                           mk({"gfs": C12, "nam": C12, "hrrr": C12 + H}, NOW)) is True)
+      plume.prefer_onboard(mk({"gfs": C12 + 6 * H, "rrfs": C12 + 6 * H, "hrrr": C12}, NOW),
+                           mk({"gfs": C12, "rrfs": C12, "hrrr": C12 + H}, NOW)) is True)
 check("split vote → the freshest shared model decides",
       plume.prefer_onboard(mk({"gfs": C12 + 6 * H, "hrrr": C12}, NOW), mk({"gfs": C12, "hrrr": C12 + 7 * H}, NOW)) is False)
 check("models only one side has don't vote (ECMWF only ashore)",

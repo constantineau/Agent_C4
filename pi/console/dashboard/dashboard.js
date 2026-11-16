@@ -388,7 +388,7 @@
           asked_by: "Nav iPad", asked_at: Math.floor(Date.now() / 1000) - 1500,
           finished_at: Math.floor(Date.now() / 1000) - 1440, sailed_nm: 46.2, tacks: 9,
           sail_plan: ["J1", "A3", "S1"], vs_plan: { available: true, gain_min: 12 },
-          weather: { newest_age_h: 2.4, models: [{ model: "gfs" }, { model: "nam" }, { model: "hrrr" }] },
+          weather: { newest_age_h: 2.4, models: [{ model: "gfs" }, { model: "hrrr" }, { model: "rrfs" }] },
           warnings: ["No chart aboard. Route doesn't check the shore."] } },
       synthesis: { available: true, mode: "llm", confidence: "med",
         assessment: "Right has taken over, past what the plan covers. Commit right.",

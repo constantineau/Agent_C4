@@ -23,11 +23,21 @@ const PLUME = { available: true, schema: "c4.plume/v1", basis: "route", label: "
 const cases = [];
 const test = (name, fn) => cases.push([name, fn]);
 
-test("models come out in the router's order (gfs, nam, hrrr, ecmwf, icon, gem)", () => {
+test("models come out in the router's order (gfs, hrrr, rrfs, ecmwf, icon, gem)", () => {
   assert.deepEqual(PL.models(PLUME).map((m) => m.model), ["gfs", "hrrr", "icon"]);
   assert.equal(PL.available(PLUME), true);
   assert.equal(PL.available({ available: false }), false);
   assert.equal(PL.available({ models: [{ model: "gfs", runs: [] }] }), false);
+});
+
+test("RRFS has its own label, colour class and slot after HRRR; NAM is gone (#360)", () => {
+  assert.equal(PL.label("rrfs"), "RRFS");
+  assert.equal(PL.ORDER.indexOf("rrfs"), PL.ORDER.indexOf("hrrr") + 1);
+  assert.equal(PL.known("nam"), false);
+  const pl = { models: [{ model: "rrfs", runs: [{ cycle: NOW - H, at: NOW, pts: [[NOW, 10, 90], [NOW + H, 11, 95]] }] },
+                        { model: "gfs", runs: [{ cycle: NOW - H, at: NOW, pts: [[NOW, 9, 90], [NOW + H, 9, 95]] }] }] };
+  assert.deepEqual(PL.models(pl).map((m) => m.model), ["gfs", "rrfs"]);
+  assert.match(PL.chartSvg(pl, { now: NOW }), /pl-rrfs/);
 });
 
 test("a run's value interpolates inside its span and is null outside it", () => {

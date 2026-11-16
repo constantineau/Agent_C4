@@ -12,7 +12,7 @@ Model skill is venue- and regime-dependent. ECMWF is usually the best global mod
 near shorelines; HRRR/NAM resolve mesoscale lake-breeze and lake-effect structure that GFS/ICON
 smear out — which matters enormously on the Great Lakes (Bayview Mackinac) and much less offshore.
 Our blend currently combines models with a **static** per-model priority
-(`wind/models.py`: GFS 1.0, NAM 1.1, HRRR 1.2, ECMWF 1.15…). That leaves skill on the table.
+(`wind/models.py`: GFS 1.0, RRFS 1.0, HRRR 1.2, ECMWF 1.15…; NAM was 1.1 until NOAA retired it 2026-11-03). That leaves skill on the table.
 
 Instead: **look back at what each model actually forecast for past race windows at a venue,
 compare it to what was actually observed, compute each model's real error, and weight by that.**
@@ -123,7 +123,7 @@ a Phase-3 item. Relative model ranking within a comparison stays fair (all model
 | ecmwf | `ecmwf_ifs025` | |
 | icon | `icon_global` | |
 | gem | `gem_global` | Canadian |
-| nam | *best-effort* | skipped if the archive lacks it |
+| rrfs | `ncep_rrfs_conus` | NAM's replacement (#360); archive from ~2026-10 only, earlier years not asked |
 | gefs / ecmwf-ens | — | ensembles verified via their mean (v2) |
 
 ## Storage (learning volume `/srv/learning`, in `learning.db` beside the Lab-4 tables)
