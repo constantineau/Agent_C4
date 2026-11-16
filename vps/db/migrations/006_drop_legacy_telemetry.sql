@@ -5,6 +5,6 @@
 -- fake_telemetry.py (now repointed at /ingest/raw). Nothing ever read it back.
 --
 -- Migrations auto-run on first DB init only; apply to a running DB by hand:
---   docker compose -f compose.dev.yml exec -T timescaledb psql -U sr33 -d sr33_dev \
+--   docker compose -f compose.dev.yml exec -T timescaledb sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
 --     < vps/db/migrations/006_drop_legacy_telemetry.sql
 DROP TABLE IF EXISTS telemetry;

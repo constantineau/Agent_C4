@@ -16,7 +16,7 @@ Each block below failed on the code before the fix:
 
 Run in the CI image:
   docker run --rm --network none -v "$PWD:/repo:ro" -w /srv -e PYTHONPATH=/repo/vps/lab:/repo \
-    -e C4_CI=1 sr33-ci-lab python3 /repo/vps/lab/test_lab_learning_evidence.py
+    -e C4_CI=1 c4-ci-lab python3 /repo/vps/lab/test_lab_learning_evidence.py
 """
 import os
 import sqlite3

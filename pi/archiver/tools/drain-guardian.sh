@@ -14,9 +14,18 @@
 #
 # Run detached (setsid) so it outlives the shell that started it.
 LOG=${GUARDIAN_LOG:-$HOME/backups/drain-guardian.log}
-# The VPS Postgres the drain lands in: its container, user and db (the dev stack's by default).
-DB_CONTAINER=${DB_CONTAINER:-sr33-dev-timescaledb-1}
-PSQL="docker exec $DB_CONTAINER psql -U ${POSTGRES_USER:-sr33} -d ${POSTGRES_DB:-sr33_dev} -tAc"
+# Runs on the VPS, from its checkout. The Postgres the drain lands in is the dev stack's:
+# container <project>-timescaledb-1, where the project is DB_CONTAINER's if given, else
+# C4_DEV_PROJECT from the environment, else from this checkout's .env (C4_ENV_FILE overrides the
+# path), else c4-dev (#314). User and database are the container's own POSTGRES_USER/POSTGRES_DB.
+envpin() {   # envpin NAME DEFAULT: exported, else the .env value, else DEFAULT
+  local v=${!1:-}
+  [[ -n $v ]] || v=$(sed -n "s/^$1=//p" "${C4_ENV_FILE:-$(dirname "$0")/../../../.env}" 2>/dev/null \
+                     | tail -1 | sed -E 's/[[:space:]]+#.*$//' | tr -d "\"'")
+  echo "${v:-$2}"
+}
+DB_CONTAINER=${DB_CONTAINER:-$(envpin C4_DEV_PROJECT c4-dev)-timescaledb-1}
+psql_q() { docker exec "$DB_CONTAINER" sh -c 'exec psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "$1"' sh "$1"; }
 # the boat's Pi as an ssh target (user@host). No default in code (#314).
 PI=${PI_HOST:-}
 if [ -z "$PI" ]; then
@@ -31,12 +40,12 @@ echo "=== $(date -u +%FT%TZ) guardian started ===" >> $LOG
 while true; do
   # 1. compact every chunk with uncompressed rows. One statement per chunk in its own
   #    transaction: a multi-chunk statement deadlocks against live uplink inserts.
-  for c in $($PSQL "select show_chunks('telemetry_raw');" 2>/dev/null); do
-    $PSQL "select compress_chunk('$c', if_not_compressed => true);" >/dev/null 2>&1
+  for c in $(psql_q "select show_chunks('telemetry_raw');" 2>/dev/null); do
+    psql_q "select compress_chunk('$c', if_not_compressed => true);" >/dev/null 2>&1
   done
 
-  rows=$($PSQL "select count(*) from telemetry_raw;" 2>/dev/null)
-  size=$($PSQL "select pg_size_pretty(hypertable_size('telemetry_raw'));" 2>/dev/null)
+  rows=$(psql_q "select count(*) from telemetry_raw;" 2>/dev/null)
+  size=$(psql_q "select pg_size_pretty(hypertable_size('telemetry_raw'));" 2>/dev/null)
   avail=$(df / | tail -1 | awk '{print $4}')
   free=$(df -h / | tail -1 | awk '{print $4}')
   pos=$(timeout 25 ssh -o ConnectTimeout=10 -o BatchMode=yes $PI \
@@ -56,11 +65,11 @@ while true; do
   if timeout 25 ssh -o ConnectTimeout=10 -o BatchMode=yes $PI \
        'grep -q "DRAIN COMPLETE" /tmp/drain-archive.log' 2>/dev/null; then
     echo "$(date -u +%FT%TZ) DRAIN COMPLETE — final compaction pass" >> $LOG
-    for c in $($PSQL "select show_chunks('telemetry_raw');" 2>/dev/null); do
-      $PSQL "select compress_chunk('$c', if_not_compressed => true);" >/dev/null 2>&1
+    for c in $(psql_q "select show_chunks('telemetry_raw');" 2>/dev/null); do
+      psql_q "select compress_chunk('$c', if_not_compressed => true);" >/dev/null 2>&1
     done
-    rows=$($PSQL "select count(*) from telemetry_raw;" 2>/dev/null)
-    size=$($PSQL "select pg_size_pretty(hypertable_size('telemetry_raw'));" 2>/dev/null)
+    rows=$(psql_q "select count(*) from telemetry_raw;" 2>/dev/null)
+    size=$(psql_q "select pg_size_pretty(hypertable_size('telemetry_raw'));" 2>/dev/null)
     echo "$(date -u +%FT%TZ) FINAL rows=$rows size=$size free=$(df -h / | tail -1 | awk '{print $4}')" >> $LOG
     exit 0
   fi

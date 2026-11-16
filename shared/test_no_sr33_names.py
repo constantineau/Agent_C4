@@ -5,9 +5,11 @@ events, container names, help text), which a second boat would inherit. #314 PR 
 lives only in code. What is left is listed below, each entry a file (glob) plus the exact pattern
 that may appear there, and why:
 
-  * group 2 — names that hold state on live machines (compose projects, database names, volumes,
-    in-container paths, systemd units, browser storage keys). Later #314 PRs move them to neutral
-    defaults and SHRINK THIS LIST; delete an entry in the same PR that removes its last use.
+  * group 2 — names that hold state on live machines (systemd units, browser storage keys). Later
+    #314 PRs move them to neutral defaults and SHRINK THIS LIST; delete an entry in the same PR
+    that removes its last use. PR C did compose projects, databases, volumes, in-container paths
+    and CI image tags: code has only neutral defaults, and the live boxes keep their names through
+    pins in their own .env (shared/test_stack_names.py checks both).
   * group 3 — places where sr33 really is that boat: its data files, its boat_id, its history,
     and migrations that stay as written.
 
@@ -39,28 +41,17 @@ SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", "vendor", "
              ".coastline_cache"}
 
 # Group 2: state on live machines. Later #314 PRs shrink this.
-PROJECT = r"\bsr33-(?:dev|prod|pi)(?![a-z0-9])"   # compose projects (+ their containers/volumes)
-DB = r"\bsr33_(?:dev|prod)(?:_pgdata)?\b"             # database names and their volumes
-DB_USER = r"(?:POSTGRES_USER[=:]-?|-U |//|\"|:)sr33(?=[:}\"\s]|$)"
-DATA_PATH = r"/var/lib/sr33/"                         # volume mount points inside Pi containers
 UNIT = r"\bsr33-(?:can0|orin-[\w-]+)|\bsr33-oom\.conf|/etc/sr33/|/run/sr33-shed|=sr33-shed\b"
 ORIN_HOME = r"/home/agent-c4/sr33/"                   # the Orin's playbook directory
 OLD_STORAGE = r"OLD = \"sr33\.\"|OLD = \"sr33\.dash\.\""  # the old browser-key prefix, read once
-CI_IMAGE = r"\bsr33-ci-[\w%$-]*"                      # CI image tags other checkouts reuse
-
-STACK_FILES = ["compose.*.yml", ".env.example", "deploy/deploy_prod.sh", "vps/db/seed/seed_dev.sh",
-               "vps/db/migrations/006_drop_legacy_telemetry.sql", "pi/deploy/*.sh",
-               "pi/archiver/tools/drain-*.sh", "tools/backup/lab_backup.py",
-               "tools/backup/archive_bench_to_gcs.sh", "tools/analysis/perf_by_config.py",
-               "tools/grill-ui-gemini/src/env.mjs"]
+# The names a box set up before #314 PR C pins in its .env, shown as examples (commented out).
+LIVE_PINS = (r"^#C4_(?:DEV|PROD|BOAT|BENCH)_(?:PROJECT|PGDATA)="
+             r"sr33-(?:dev|prod|pi)(?:_sr33_(?:dev|prod)_pgdata)?(?=\s|$)")
 
 ALLOWED = [
     # ---- group 2 ----
-    (STACK_FILES, PROJECT, "compose project names (PR C)"),
-    (STACK_FILES, DB, "database names / volumes (PR C)"),
-    (STACK_FILES, DB_USER, "database user (PR C)"),
-    (["compose.pi*.yml", "pi/*", "vps/agent/app/*.py", "shared/archiver_status.py"], DATA_PATH,
-     "in-container data paths (PR C)"),
+    ([".env.example"], LIVE_PINS,
+     "the pins an existing install sets to keep its live names (PR C: neutral defaults, live boxes pinned)"),
     (["pi/systemd/*", "pi/orin/*"], UNIT, "systemd units and their config paths (PR D)"),
     (["pi/systemd/sr33-orin-copilot.service"], ORIN_HOME, "Orin playbook directory (PR D)"),
     (["vps/web/public/app.js", "pi/console/dashboard/dashboard.js"], OLD_STORAGE,
@@ -71,8 +62,6 @@ ALLOWED = [
     (["vps/web/public/app.js", "pi/console/default.conf.template"], r"window\.SR33_ONBOARD\b",
      "onboard flag under the old name too, for a script pair loaded mid-deploy; remove after 2027-04 (PR B)"),
     (["vps/agent/app/auth.py"], r"\"sr33-auth:\"", "token key salt: changing it logs every device out"),
-    (["tools/ci/run.sh", "pi/n2kout/canboat_roundtrip.sh", "tools/seamasks/build.py"], CI_IMAGE,
-     "CI image tags (PR C)"),
 
     # ---- group 3: sr33 is that boat ----
     (["*"], r"\bpolars_sr33\.sql|\bsr33_(?:sail_polars|crossovers|wardrobe|speed_guide)\.\w+"
@@ -140,8 +129,12 @@ check("the old storage prefix is allowed in the carry-over helper",
       not SR33.search(leftover("vps/web/public/app.js", 'const OLD = "sr33.";')))
 check("but a storage key under the old name is not",
       SR33.search(leftover("vps/web/public/app.js", "localStorage.getItem('sr33.mode')")))
-check("a container name in an ops script is allowed",
-      not SR33.search(leftover("pi/deploy/deploy-data-path.sh", "P=${COMPOSE_PROJECT:-sr33-pi}")))
+check("a live name as an ops script's default is not (PR C: it comes from the box's pin)",
+      SR33.search(leftover("pi/deploy/deploy-data-path.sh", "P=${COMPOSE_PROJECT:-sr33-pi}")))
+check("a live-name pin is allowed as a commented example in .env.example",
+      not SR33.search(leftover(".env.example", "#C4_DEV_PGDATA=sr33-dev_sr33_dev_pgdata")))
+check("but not as a live setting there",
+      SR33.search(leftover(".env.example", "C4_DEV_PROJECT=sr33-dev")))
 check("help text naming sr33 is not",
       SR33.search(leftover("pi/deploy/deploy-data-path.sh", "# deploy to the SR33")))
 check("a line is cleared only when EVERY sr33 in it is allowed",

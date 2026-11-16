@@ -46,8 +46,10 @@ check("another boat gets none (label-only), never sr33's", n2k_sources.devices_f
 
 print("no default boat or password anywhere:")
 SETTINGS = "BOAT_ID|REROUTE_BOAT|DEPLOY_BOAT_ID|BOAT_PASSWORD|DATABASE_URL|POSTGRES_PASSWORD"
-# the old dev password as a value; "sr33-dev-lab" / "sr33-dev_lab_..." / "name: sr33-dev" are names
+# the old dev password as a value; "sr33-dev-lab" / "sr33-dev_lab_..." / "name: sr33-dev" are names,
+# and so is a compose-project pin (C4_DEV_PROJECT=sr33-dev, #314 PR C)
 OLD_PW = re.compile(r"sr33-dev(?![-_\w])")
+PROJECT_PIN = re.compile(r"C4_(?:DEV|PROD|BOAT|BENCH)_PROJECT\W{1,4}sr33-dev\b")
 PY_DEFAULT = re.compile(r"""environ\.get\(\s*["'](%s)["']\s*,\s*["'][^"']+["']""" % SETTINGS)
 COMPOSE_DEFAULT = re.compile(r"\$\{(%s):?-[^}]" % SETTINGS)   # an empty default is fine
 SKIP_DIRS = {".git", "node_modules", "__pycache__", "docs"}
@@ -61,7 +63,8 @@ for d, dirs, files in os.walk(ROOT):
                        ".env", ".service")) and rel != os.path.join("shared", "test_boat_id.py"):
             with open(p, encoding="utf-8", errors="replace") as fh:
                 pw_hits += [f"{rel}:{i}" for i, line in enumerate(fh, 1)
-                            if OLD_PW.search(line) and not re.match(r"\s*name:\s*sr33-dev\s*$", line)]
+                            if OLD_PW.search(PROJECT_PIN.sub("", line))
+                            and not re.match(r"\s*name:\s*sr33-dev\s*$", line)]
         if f.endswith(".py") and not f.startswith("test_"):
             with open(p, encoding="utf-8", errors="replace") as fh:
                 py_hits += [f"{rel}: {m.group(0)}" for m in PY_DEFAULT.finditer(fh.read())]

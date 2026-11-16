@@ -65,7 +65,7 @@ SIGNALK_WS = os.environ.get(
 )
 from shared.boat_id import require as _require_setting  # noqa: E402
 BOAT_ID = _require_setting("BOAT_ID")   # no default: another boat must never write as sr33 (#307)
-ARCHIVE_DB = Path(os.environ.get("ARCHIVE_DB", "/var/lib/sr33/archive/archive.db"))
+ARCHIVE_DB = Path(os.environ.get("ARCHIVE_DB", "/var/lib/c4/archive/archive.db"))
 # Crash-safety vs. throughput: flush the buffer to disk whenever it reaches FLUSH_ROWS or
 # every FLUSH_SECONDS, whichever comes first. With WAL + synchronous=FULL each flush fsyncs,
 # so at most the last (<FLUSH_SECONDS) of readings is at risk on power loss — acceptable for
@@ -1385,7 +1385,7 @@ def _requeue(buf, rows, state, why):
 # replayed sample data).
 # 7 days on the boat (compose.pi.yml); the default matches so a bare run behaves the same.
 RETAIN_DAYS = float(os.environ.get("ARCHIVE_RETAIN_DAYS", "7"))
-ENGINE_DB = os.environ.get("ENGINE_DB", "/var/lib/sr33/engine/engine.db")
+ENGINE_DB = os.environ.get("ENGINE_DB", "/var/lib/c4/engine/engine.db")
 PRUNE_EVERY_S = float(os.environ.get("ARCHIVE_PRUNE_EVERY_S", "3600"))
 CLOCK_RECHECK_S = float(os.environ.get("ARCHIVE_CLOCK_RECHECK_S", "30"))
 # Off-boat gate (#181). When set, the prune deletes only rows that copyoff.py has already copied

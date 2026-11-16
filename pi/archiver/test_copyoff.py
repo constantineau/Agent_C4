@@ -11,7 +11,7 @@ What must hold, because the boat's copy is the only one:
     all for a rotated (new-inode) file, and nothing when the ledger is unreadable.
 
 Run (needs `websockets` for the archiver import — the archiver image has it):
-  docker run --rm -v $PWD:/repo:ro -e PYTHONPATH=/repo/pi/archiver:/repo -w /repo sr33-ci-archiver \
+  docker run --rm -v $PWD:/repo:ro -e PYTHONPATH=/repo/pi/archiver:/repo -w /repo c4-ci-archiver \
     python3 pi/archiver/test_copyoff.py
 """
 import json

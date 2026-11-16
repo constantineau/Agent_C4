@@ -58,7 +58,7 @@ def _timeout():
 
 
 def _dir():
-    return os.path.dirname(os.environ.get("ENGINE_DB", "/var/lib/sr33/engine/engine.db"))
+    return os.path.dirname(os.environ.get("ENGINE_DB", "/var/lib/c4/engine/engine.db"))
 
 
 def _result_path():

@@ -93,8 +93,14 @@ compose.dev.yml     dev cloud stack · compose.prod.yml prod (managed, leave alo
 compose.pi.yml      Pi stack (boat or bench) · compose.pi.sample.yml bench sample-data overlay
 ```
 
-**Isolation:** two compose projects, separate ports and DBs (`sr33_prod` vs `sr33_dev`);
-develop on `dev`, ff-merge to `main`, deploy `main`. The only bench↔boat difference is
+**Isolation:** two compose projects, separate ports and DBs (`sr33_prod` vs `sr33_dev` on this
+VPS); develop on `dev`, ff-merge to `main`, deploy `main`. **Stack names (#314):** a new install
+gets neutral defaults (projects `c4-dev`/`c4-prod`/`c4-boat`/`c4-bench`, DBs `c4_dev`/`c4_prod`,
+user `c4`, in-container data under `/var/lib/c4/`); the live boxes keep their `sr33-*` names
+through pins in their `.env` (`C4_DEV_PROJECT`, `C4_PROD_PROJECT`, `C4_DEV_PGDATA`,
+`C4_PROD_PGDATA`, `C4_BOAT_PROJECT`, `POSTGRES_DB/USER`; `.env.example`). `docker compose -f
+<file> config` shows the names a box will use; check them against `docker ps`/`docker volume ls`
+before any rebuild. The only bench↔boat difference is
 `CAN_IFACE` (`vcan0` vs `can0`).
 
 ## Dev environments — ports & commands
@@ -137,7 +143,7 @@ Every deploy ends with `pi/deploy/record-deployed.sh`, which writes what landed 
 `~/DEPLOYED`. Tailscale SSH may require a fresh browser check-mode approval (~12 h validity).
 
 **Migrations auto-run only on first DB init.** Apply to a running DB by hand:
-`docker compose -f compose.dev.yml exec -T timescaledb psql -U sr33 -d sr33_dev < vps/db/migrations/<file>.sql`
+`docker compose -f compose.dev.yml exec -T timescaledb sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < vps/db/migrations/<file>.sql`
 (001 init · 002 telemetry_raw · 003 source_priority · 004 alerts · 005 race_mode+audit ·
 006 drops the legacy wide `telemetry` table).
 
@@ -389,8 +395,8 @@ Checklists, Fleet, Learnings, Gameplan, Lock-in & Deploy) · RACE (Monitor) · D
 
 - **`make ci` = `make lint` (ruff, `ruff.toml`) + every test file**, and GitHub CI runs exactly
   that on every push/PR to `dev`/`main` (`.github/workflows/ci.yml`). Tests (`tools/ci/run.sh`): each in a throwaway container off its
-  own service's image, built fresh from the tree as `sr33-ci-*` (never the standing stack's
-  images). `make ci ONLY=<path part>` runs a subset. Add a new test file's image/path there if
+  own service's image, built fresh from the tree as `c4-ci-*` (never the standing stack's
+  images; `C4_CI_PREFIX=<x>` gives a checkout its own tags so parallel runs don't collide). `make ci ONLY=<path part>` runs a subset. Add a new test file's image/path there if
   the defaults don't fit. Build agents follow `tools/agents/agent-rules.md`.
 - One file by hand: `PYTHONPATH=vps/agent:. python3 vps/agent/test_<x>.py` (agent tests; the
   system python lacks some deps, so prefer `make ci ONLY=test_<x>`).
@@ -424,8 +430,8 @@ Checklists, Fleet, Learnings, Gameplan, Lock-in & Deploy) · RACE (Monitor) · D
 
 ## Database safety
 
-Never run destructive DB ops or migrations against `sr33_prod` without explicit go-ahead.
-Dev DB (`sr33_dev`) is disposable. `.env` is gitignored — keep it that way.
+Never run destructive DB ops or migrations against the prod DB (`sr33_prod` here) without
+explicit go-ahead. The dev DB (`sr33_dev` here) is disposable. `.env` is gitignored — keep it that way.
 
 ## Open items still owed (don't guess)
 

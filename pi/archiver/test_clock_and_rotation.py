@@ -12,7 +12,7 @@ of them first.
 checks forever.
 
 Run: docker run --rm -v $PWD:/repo:ro -w /tmp -e PYTHONPATH=/repo/pi/archiver:/repo \
-       sr33-ci-archiver python3 /repo/pi/archiver/test_clock_and_rotation.py
+       c4-ci-archiver python3 /repo/pi/archiver/test_clock_and_rotation.py
 """
 import asyncio
 import os
