@@ -47,6 +47,20 @@ wait_active() {   # unit -> 0 once active, 1 after WAIT_S
   return 1
 }
 
+# The REROUTE_BOAT to add to /etc/c4/reroute.env, or nothing. Nothing when the file /etc/c4 will
+# have (its own, or the copy of /etc/sr33's) already sets one. Otherwise the old env file's value,
+# else the one the old re-route unit set inline.
+boat_to_move() {
+  local env=$NEW_ENV/reroute.env v
+  [[ -f $env ]] || env=$OLD_ENV/reroute.env
+  if grep -qs '^REROUTE_BOAT=.' "$env"; then return; fi
+  v=$(sed -n 's/^REROUTE_BOAT=\(..*\)$/\1/p' "$OLD_ENV/reroute.env" 2>/dev/null | tail -1)
+  if [[ -z $v && -f $UNITS/sr33-orin-reroute.service ]]; then
+    v=$(sed -n 's/^Environment=REROUTE_BOAT=\(..*\)$/\1/p' "$UNITS/sr33-orin-reroute.service" | tail -1)
+  fi
+  echo "$v"
+}
+
 # ---------------------------------------------------------------------------------------------
 rollback() {
   local bk=$1 apply=$2 old new en act
@@ -86,7 +100,7 @@ rollback() {
 
 # ---------------------------------------------------------------------------------------------
 switch() {
-  local box=$1 src=$2 bk=$3 apply=$4 list old new en act boat
+  local box=$1 src=$2 bk=$3 apply=$4 list old new en act boat line
   case $box in
     orin) list=("${ORIN[@]}") ;;
     pi) list=("${PI[@]}") ;;
@@ -116,15 +130,8 @@ switch() {
       else say "/etc/sr33/$(basename "$f") -> /etc/c4/ (copied; the old one stays)"; fi
     done
   fi
-  boat=""
-  if [[ -f $UNITS/sr33-orin-reroute.service ]]; then
-    boat=$(sed -n 's/^Environment=REROUTE_BOAT=\(.*\)$/\1/p' "$UNITS/sr33-orin-reroute.service" | tail -1)
-    if [[ -n $boat ]] && ! grep -qs '^REROUTE_BOAT=' "$OLD_ENV/reroute.env" "$NEW_ENV/reroute.env"; then
-      say "REROUTE_BOAT=$boat moves from the unit into /etc/c4/reroute.env"
-    else
-      boat=""
-    fi
-  fi
+  boat=$(boat_to_move)
+  if [[ -n $boat ]]; then say "REROUTE_BOAT=$boat goes into /etc/c4/reroute.env"; fi
   if [[ $box == pi && ${#todo[@]} -gt 0 ]]; then
     say "can0 is not stopped or started; c4-can0 takes over at the next boot"
   fi
@@ -153,7 +160,7 @@ switch() {
   if [[ -n $boat ]]; then
     mkdir -p "$NEW_ENV"
     [[ -f $NEW_ENV/reroute.env ]] || install -m 0644 /dev/null "$NEW_ENV/reroute.env"
-    printf '# the boat this Orin re-routes (moved from the old unit, #314 PR D)\nREROUTE_BOAT=%s\n' \
+    printf '# the boat this Orin re-routes (moved from the old setup, #314 PR D)\nREROUTE_BOAT=%s\n' \
       "$boat" >> "$NEW_ENV/reroute.env"
   fi
 
@@ -181,6 +188,10 @@ switch() {
       say "$new enabled (runs from next boot)"
     elif [[ $act == active || $act == activating ]]; then
       systemctl stop "$old"
+      if [[ $old == *.timer ]]; then
+        # the new timer may fire at once: let no pass of the old service run beside it
+        systemctl stop "${old%.timer}.service" || true
+      fi
       if [[ $old == *plume.service ]]; then
         say "$new is run by its timer"      # a oneshot pass; the timer starts the next one
       else

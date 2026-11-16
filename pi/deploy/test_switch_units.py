@@ -125,7 +125,7 @@ check(f"dry run exits cleanly (rc {r.returncode}) {r.stderr.strip()}", r.returnc
 check("says it's a dry run", "Dry run" in r.stdout)
 check("lists each unit and its new name",
       all(f"{u} " in r.stdout and u.replace("sr33-", "c4-") in r.stdout for u in ORIN_UNITS))
-check("says REROUTE_BOAT moves into /etc/c4/reroute.env", "REROUTE_BOAT=bravo moves" in r.stdout)
+check("says REROUTE_BOAT moves into /etc/c4/reroute.env", "REROUTE_BOAT=bravo goes into" in r.stdout)
 check("changes no file", snapshot(box) == before and not os.path.exists(bk))
 check("only asks systemctl questions", all(c.split()[0].startswith("is-") for c in calls(box)))
 
@@ -154,6 +154,8 @@ check("the dashboard unit stays off, as it was",
 check("the plume pass is left to its timer (never started by hand)",
       "start c4-orin-plume.service" not in calls(box))
 log = calls(box)
+check("the old plume pass is stopped before the new timer starts (it may fire at once)",
+      log.index("stop sr33-orin-plume.service") < log.index("start c4-orin-plume.timer"))
 starts = [c.split()[1] for c in log if c.startswith("start ")]
 check(f"the shed guard starts first ({starts})", starts and starts[0] == "c4-orin-shed.service")
 check("the shed writes its new state file", os.path.exists(f"{box}/run/c4-shed/state.json"))
@@ -199,6 +201,22 @@ check("an existing /etc/c4 file is never overwritten",
       read(f"{box}/etc/c4/copilot.env") == "ENGINE_URL=http://newer\n")
 check("REROUTE_BOAT already in reroute.env: not added again",
       read(f"{box}/etc/c4/reroute.env") == "REROUTE_BOAT=charlie\n")
+
+print("orin, /etc/c4/reroute.env has settings but no boat; /etc/sr33/reroute.env has the boat")
+box = make_box(ORIN_UNITS, reroute_env="REROUTE_BOAT=delta\n",
+               c4_env={"reroute.env": "REROUTE_MODELS=gfs\n"})
+r = run(box, "orin", REPO, f"{box}/backup", "--apply")
+env = read(f"{box}/etc/c4/reroute.env")
+check(f"the old env file's boat is added, settings kept (rc {r.returncode})",
+      r.returncode == 0 and env.startswith("REROUTE_MODELS=gfs\n") and "\nREROUTE_BOAT=delta\n" in env
+      and "bravo" not in env)
+
+print("orin, /etc/sr33/reroute.env without a boat: the unit's inline one is added to the copy")
+box = make_box(ORIN_UNITS, reroute_env="REROUTE_MODELS=hrrr\n")
+r = run(box, "orin", REPO, f"{box}/backup", "--apply")
+env = read(f"{box}/etc/c4/reroute.env")
+check(f"copy plus the unit's boat (rc {r.returncode})",
+      r.returncode == 0 and env.startswith("REROUTE_MODELS=hrrr\n") and "\nREROUTE_BOAT=bravo\n" in env)
 
 print("orin, a new unit won't start")
 box = make_box(ORIN_UNITS)
