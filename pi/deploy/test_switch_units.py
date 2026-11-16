@@ -233,7 +233,7 @@ check(f"copy plus the unit's boat (rc {r.returncode})",
 print("orin, the boat set in a re-route override; a c4 override folder already there")
 box = make_box(ORIN_UNITS)
 sysd = f"{box}/etc/systemd/system"
-write(f"{sysd}/sr33-orin-reroute.service.d/boat.conf", "[Service]\nEnvironment=REROUTE_BOAT=echo\n")
+write(f"{sysd}/sr33-orin-reroute.service.d/boat.conf", "[Service]\nEnvironment=X=1 \"REROUTE_BOAT=echo\"\n")
 write(f"{sysd}/c4-orin-copilot.service.d/mine.conf", "[Service]\nNice=1\n")
 r = run(box, "orin", REPO, f"{box}/backup", "--apply")
 check(f"the override's boat wins over the unit's (rc {r.returncode})",

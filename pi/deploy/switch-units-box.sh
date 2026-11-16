@@ -57,7 +57,8 @@ boat_to_move() {
   v=$(sed -n 's/^REROUTE_BOAT=\(..*\)$/\1/p' "$OLD_ENV/reroute.env" 2>/dev/null | tail -1)
   if [[ -z $v && -f $UNITS/sr33-orin-reroute.service ]]; then   # the unit, then its overrides
     v=$(cat "$UNITS/sr33-orin-reroute.service" "$UNITS/sr33-orin-reroute.service.d"/*.conf 2>/dev/null \
-        | sed -n 's/^Environment=REROUTE_BOAT=\(..*\)$/\1/p' | tail -1)
+        | sed -n 's/^[[:space:]]*Environment=//p' | tr ' ' '\n' | tr -d "\"'" \
+        | sed -n 's/^REROUTE_BOAT=\(..*\)$/\1/p' | tail -1)   # Environment=A=1 "REROUTE_BOAT=x" too
   fi
   echo "$v"
 }
