@@ -66,7 +66,7 @@ test("a fill reply is dropped after a later fill or typing", async () => {
   let release;
   const ctx = { Lab: { editDef: d, ownRev: 0, ownFillGen: 0 }, Object,
     apiPost: () => new Promise((res) => { release = res; }) };
-  const f = run(["OWN_FILL_KEYS", "ownFilled", "fillCurrent", "fillOwnFromBoat", "fleetOwnSet"],
+  const f = run(["OWN_FILL_KEYS", "ownFilled", "fillToken", "fillCurrent", "fillOwnFromBoat", "fleetOwnSet"],
                 Object.assign(ctx, { _fleetOwnCols: () => ({ rating: null, tod: null }) }));
   const reply = { ok: true, json: async () => ({ own: { boat: "Hooligan", sail: "USA 52521", division: "orc" }, note: null }) };
   // typing while the fill runs
@@ -100,4 +100,69 @@ test("one picker for both pages: same list, the active boat selected, New boat b
   assert.ok(/value="hooligan" selected/.test(h) && !/value="other" selected/.test(h));
   assert.ok(h.includes("newBoatFromCert()"));
   assert.ok(src.includes('${boatPickerHtml("optBoat")}') && src.includes('${boatPickerHtml("fleetBoat")}'));
+});
+
+// pickBoat end to end with every await held open: whichever order the replies come back in, the
+// last pick (or typing) wins.
+function pickRig() {
+  const d = { race_id: "r", own: { boat: "Old", sail: "USA 1", division: "orc" } };
+  const held = [];                                    // [{what, id, res}]
+  const hold = (what, id, value) => new Promise((res) => held.push({ what, id, res: () => res(value) }));
+  const ctx = { Object, activeSec: "fleet", Lab: { editDef: d, ownRev: 0, ownFillGen: 0 },
+    Opt: { activeBoat: "old", boatModel: null },
+    boatGuard: () => Promise.resolve(true), repaints: 0, syncDirty: () => {},
+    _fleetOwnCols: () => ({ rating: null, tod: null }) };
+  ctx.repaintBoatPage = () => { ctx.repaints++; };
+  ctx.apiPost = (path, body) => path === "/api/boats/active"
+    ? hold("active", body.boat_id, {})
+    : hold("fill", body.boat_id, { ok: true, json: async () => ({ note: null,
+        own: Object.assign({}, body.own, { boat: body.boat_id.toUpperCase(), sail: "" }) }) });
+  let reloadFor = null;
+  ctx.reloadBoats = () => hold("reload", reloadFor, {});
+  const f = run(["OWN_FILL_KEYS", "ownFilled", "fillToken", "fillCurrent", "fillOwnFromBoat", "fleetOwnSet", "pickBoat"], ctx);
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+  async function release(what, id) {
+    const i = held.findIndex((h) => h.what === what && (id == null || h.id === id));
+    assert.ok(i >= 0, `${what} ${id} pending`);
+    if (what === "active") reloadFor = held[i].id;    // that pick's reloadBoats comes next
+    held.splice(i, 1)[0].res(); await tick(); await tick();
+  }
+  return { d, ctx, f, release, held, tick };
+}
+
+test("pick A then B: A's late reload can't start a fill over B", async () => {
+  const { d, f, release, tick } = pickRig();
+  const pa = f.pickBoat("a"); await tick();
+  await release("active", "a");      // A now waits on reloadBoats
+  const pb = f.pickBoat("b"); await tick();
+  await release("active", "b");
+  await release("reload", "b");
+  await release("fill", "b"); await pb;
+  assert.equal(d.own.boat, "B");
+  await release("reload", "a"); await pa;             // A's reload finishes last
+  assert.equal(d.own.boat, "B");
+});
+
+test("pick A then B: A's fill answering last is dropped", async () => {
+  const { d, f, release, tick, held } = pickRig();
+  const pa = f.pickBoat("a"); await tick();
+  await release("active", "a"); await release("reload", "a");   // A's fill in flight
+  const pb = f.pickBoat("b"); await tick();
+  await release("active", "b"); await release("reload", "b");
+  await release("fill", "b"); await pb;
+  assert.equal(d.own.boat, "B");
+  if (held.some((h) => h.what === "fill")) await release("fill", "a");
+  await pa;
+  assert.equal(d.own.boat, "B");
+});
+
+test("typing while the active-boat save is pending wins over the pick's fill", async () => {
+  const { d, ctx, f, release, tick, held } = pickRig();
+  const p = f.pickBoat("a"); await tick();
+  f.fleetOwnSet("boat", "Typed");                    // before the active POST answers
+  await release("active", "a"); await release("reload", "a");
+  assert.ok(!held.some((h) => h.what === "fill"), "no fill sent over typing");
+  await p;
+  assert.equal(d.own.boat, "Typed");
+  assert.equal(ctx.repaints, 1);
 });

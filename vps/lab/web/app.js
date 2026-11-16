@@ -1793,34 +1793,44 @@ function ownFilled(own, filled, sent) {
   if ((filled.mmsi || "") !== ((sent || {}).mmsi || "")) out.mmsi = filled.mmsi;
   return out;
 }
-// A fill reply counts only when nothing newer happened: no later fill (gen) and no typing (rev).
-const fillCurrent = (t, d) => Lab.editDef === d && t.gen === (Lab.ownFillGen || 0) && t.rev === (Lab.ownRev || 0);
+// A pick's token, taken once when it starts: a later pick (gen), typing in "Our boat" (rev) or
+// another race (d) since then means this pick's fill must not land.
+function fillToken() {
+  return { gen: (Lab.ownFillGen = (Lab.ownFillGen || 0) + 1), rev: Lab.ownRev || 0, d: Lab.editDef };
+}
+const fillCurrent = (t) => Lab.editDef === t.d && t.gen === (Lab.ownFillGen || 0) && t.rev === (Lab.ownRev || 0);
 // Fill the open race's "Our boat" from boat `id` (Fleet). An unsaved race edit, never a save.
-async function fillOwnFromBoat(id) {
-  const d = Lab.editDef;
-  if (!d || !d.race_id || Lab.isDraft) return;
-  const t = { gen: (Lab.ownFillGen = (Lab.ownFillGen || 0) + 1), rev: Lab.ownRev || 0 };
+async function fillOwnFromBoat(id, t) {
+  t = t || fillToken();
+  const d = t.d;
+  if (!d || !d.race_id || Lab.isDraft || !fillCurrent(t)) return;
   const sent = Object.assign({}, d.own || {});
   try {
     const r = await apiPost("/api/fleet/own-from-boat", { race_id: d.race_id, boat_id: id,
       scoring: (d.rules_profile || {}).scoring || null, own: sent });
     const j = await r.json();
-    if (!fillCurrent(t, d)) return;   // another race, a later pick or typing since: that wins
+    if (!fillCurrent(t)) return;   // another race, a later pick or typing since: that wins
     if (!r.ok) { Lab.fleetMsg = j.detail || "Couldn't fill our boat."; Lab.fleetMsgErr = true; return; }
     d.own = ownFilled(d.own, j.own, sent);
     Lab.fleetMsg = j.note || ""; Lab.fleetMsgErr = !!j.note;
-  } catch (e) { if (fillCurrent(t, d)) { Lab.fleetMsg = String(e.message || e); Lab.fleetMsgErr = true; } }
+  } catch (e) { if (fillCurrent(t)) { Lab.fleetMsg = String(e.message || e); Lab.fleetMsgErr = true; } }
 }
 async function pickBoat(id) {
-  if (!(await boatGuard())) return repaintBoatPage();   // Stay → repaint puts the picker back
+  const t = fillToken();                         // once, up front: a later pick or typing wins
+  const later = () => t.gen !== Lab.ownFillGen;  // a later pick owns the rest (fill + repaint)
+  if (!(await boatGuard())) return later() ? undefined : repaintBoatPage();   // Stay → repaint puts the picker back
+  if (later()) return;
   Opt.activeBoat = id;
   await apiPost("/api/boats/active", { boat_id: id });
+  if (later()) return;
   await reloadBoats();
+  if (later()) return;
   if (Opt.boatModel) {   // the card shows the new boat's model, not the old one's
     try { bmLoaded(await (await apiGet("/api/crossovers")).json()); } catch (e) { bmLoaded({ error: String(e) }); }
+    if (later()) return;
   }
-  // Fleet: fill the open race now. Gameplan: the Fleet page fills its race when it next opens.
-  if (activeSec === "fleet") { Lab.ownFill = null; await fillOwnFromBoat(id); syncDirty(); }
+  // Fleet: fill the open race now (unless typed over since). Gameplan: Fleet fills when it next opens.
+  if (activeSec === "fleet") { Lab.ownFill = null; await fillOwnFromBoat(id, t); if (later()) return; syncDirty(); }
   else Lab.ownFill = id;
   repaintBoatPage();
 }
