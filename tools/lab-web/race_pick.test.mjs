@@ -57,3 +57,8 @@ test("no storage (private window): still works for the visit", () => {
   ctx.__f.rememberRace("sorc");
   assert.equal(ctx.__f.pickRace(RACES, null), "sorc");
 });
+
+test("a new race reaches Gameplan and Deploy: the library refresh drops their copies", () => {
+  const body = grab("refreshRaceList");
+  assert.match(body, /Opt\.races = null; Dep\.races = null;/);
+});

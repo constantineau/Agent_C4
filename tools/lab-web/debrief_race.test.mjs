@@ -114,3 +114,13 @@ test("the newest debrief opens on load (G65)", async () => {
   assert.equal(h.ctx.Deb.viewing, 11);
   assert.equal(h.ctx.Deb.report && h.ctx.Deb.report.race_name, "A");
 });
+
+test("a race picked on another tab drops the old race's open debrief", () => {
+  const { ctx } = harness();
+  ctx.Deb.raceId = "A"; ctx.Deb.report = { race_name: "A" }; ctx.Deb.viewing = 3;
+  ctx.Lab.sel = "B";                        // picked on Races meanwhile
+  ctx.renderDebrief();                      // runs up to its first fetch
+  assert.equal(ctx.Deb.raceId, "B");
+  assert.equal(ctx.Deb.report, null);
+  assert.equal(ctx.Deb.viewing, null);
+});

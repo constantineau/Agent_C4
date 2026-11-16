@@ -1179,6 +1179,8 @@ async function detailApprove(approved) {
 async function refreshRaceList() {
   try {
     Lab.races = (await (await apiGet("/api/races")).json()).races || [];
+    // Gameplan and Deploy keep their own copy of the library: a new race must reach them too
+    Opt.races = null; Dep.races = null;
     const el = document.getElementById("racelist");
     if (el) el.innerHTML = Lab.races.map(raceItem).join("");
   } catch (e) {}
@@ -4090,7 +4092,13 @@ async function renderDebrief() {
     try { Lab.races = (await (await apiGet("/api/races")).json()).races || []; }
     catch (e) { view.innerHTML = '<div class="placeholder">Failed to load.</div>'; return; }
   }
-  Deb.raceId = pickRace(Lab.races, Deb.raceId);
+  {
+    const rid = pickRace(Lab.races, Deb.raceId);
+    if (Deb.raceId && rid !== Deb.raceId) {   // another tab changed the race: drop the old race's report
+      Deb.report = null; Deb.viewing = null; Deb.playbookId = null; Deb.recordings = null;
+    }
+    Deb.raceId = rid;
+  }
   if (!Deb.raceId) {
     // Fleet retro and the practice sails need no race of ours, so they still show (G66, #322)
     await debLoadPractice();
