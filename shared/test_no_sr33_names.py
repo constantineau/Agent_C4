@@ -41,8 +41,8 @@ SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", "vendor", "
              ".coastline_cache"}
 
 # Group 2: state on live machines. Later #314 PRs shrink this.
-UNIT = r"\bsr33-(?:can0|orin-[\w-]+)|\bsr33-oom\.conf|/etc/sr33/|/run/sr33-shed|=sr33-shed\b"
-ORIN_HOME = r"/home/agent-c4/sr33/"                   # the Orin's playbook directory
+# The old unit names, config dir and shed path, as the switch script finds them on a box.
+OLD_UNITS = r"\bsr33-(?:can0|orin-[\w-]+)|\bsr33-oom\.conf|/etc/sr33\b|/run/sr33-shed|\bsr33-\*|#sr33-\}"
 OLD_STORAGE = r"OLD = \"sr33\.\"|OLD = \"sr33\.dash\.\""  # the old browser-key prefix, read once
 # The names a box set up before #314 PR C pins in its .env, shown as examples (commented out).
 LIVE_PINS = (r"^#C4_(?:DEV|PROD|BOAT|BENCH)_(?:PROJECT|PGDATA)="
@@ -52,8 +52,8 @@ ALLOWED = [
     # ---- group 2 ----
     ([".env.example"], LIVE_PINS,
      "the pins an existing install sets to keep its live names (PR C: neutral defaults, live boxes pinned)"),
-    (["pi/systemd/*", "pi/orin/*"], UNIT, "systemd units and their config paths (PR D)"),
-    (["pi/systemd/sr33-orin-copilot.service"], ORIN_HOME, "Orin playbook directory (PR D)"),
+    (["pi/deploy/switch-units.sh", "pi/deploy/switch-units-box.sh"], OLD_UNITS,
+     "the old unit names a box is switched from (PR D); remove once no box runs them"),
     (["vps/web/public/app.js", "pi/console/dashboard/dashboard.js"], OLD_STORAGE,
      "old browser-key prefix: carried over to c4.* so a deploy keeps the iPad's login (PR B)"),
     (["vps/web/public/app.js", "vps/web/public/sail.js", "vps/web/public/plot.js"],
@@ -80,7 +80,6 @@ ALLOWED = [
      "test support: routes on / records as sr33 on purpose"),
     (["shared/n2k_sources.py"], r"\bSR33_DEVICES\b|\{\"sr33\": ", "sr33's device table"),
     (["tools/analysis/perf_by_config.py"], r"'sr33'", "reads sr33's polar rows"),
-    (["pi/systemd/sr33-orin-reroute.service"], r"REROUTE_BOAT=sr33\b", "the boat this Orin re-routes"),
     (["compose.pi.sample.yml"], r"\bsr33-bench\b|boat_id=sr33\b", "the bench boat id and why"),
     (["vps/agent/knowledge/build_speed_guide.py"], r"\bsr33 --wardrobe", "usage example for sr33"),
     (["shared/tool_contracts.py"], r"\"boat_id\": \"sr33\"", "example payload"),
@@ -99,9 +98,8 @@ ALLOWED = [
     (["vps/lab/races/*.json"], r"\"cls\": \"[^\"]*SR33\"", "a fleet entry's class"),
 ]
 
-# File NAMES that may say sr33: group 2 units (PR D) and group 3 data files.
-ALLOWED_NAMES = ["pi/systemd/sr33-*", "pi/systemd/ollama.service.d/sr33-oom.conf",
-                 "vps/lab/boats/sr33.json", "vps/db/seed/polars_sr33.sql", "vps/db/seed/sr33_*",
+# File NAMES that may say sr33: group 3 data files.
+ALLOWED_NAMES = ["vps/lab/boats/sr33.json", "vps/db/seed/polars_sr33.sql", "vps/db/seed/sr33_*",
                  "vps/agent/knowledge/sr33_*"]
 
 

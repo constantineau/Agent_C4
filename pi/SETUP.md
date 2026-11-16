@@ -43,7 +43,7 @@ sudo tailscale up        # approve the node in your tailnet; gives the Pi a stab
 ## 4. PICAN-M → `can0`
 
 The PICAN-M is an MCP2515 SPI CAN controller. Enable SPI + the CAN overlay once in firmware,
-then let the `sr33-can0` unit raise the interface at the NMEA-2000 bitrate on every boot.
+then let the `c4-can0` unit raise the interface at the NMEA-2000 bitrate on every boot.
 
 **a. Edit `/boot/firmware/config.txt`** (Trixie path) and add at the end:
 ```
@@ -63,8 +63,8 @@ dmesg | grep -i mcp251          # should show the mcp251x driver bound
 
 **c. Install the boot bring-up unit** (raises can0 at 250 kbit/s, before Docker):
 ```bash
-sudo cp ~/Agent_C4/pi/systemd/sr33-can0.service /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now sr33-can0
+sudo cp ~/Agent_C4/pi/systemd/c4-can0.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now c4-can0
 ip -details link show can0      # now: state UP, bitrate 250000
 ```
 

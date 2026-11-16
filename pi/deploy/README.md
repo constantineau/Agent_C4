@@ -146,3 +146,28 @@ checks for it.
 Retention is 7 days on the boat (`compose.pi.yml`, Cole's call 2026-10-27; it was 14). At the
 dock the archive grows ~7 GB/day: 14 days (~98 GB) can't fit in the 69 GB free, while 7 days
 (~49 GB) can. The disk guard is still there for when it doesn't.
+
+## Switching a box's units to the c4-* names (#314 PR D)
+
+The systemd units in `pi/systemd` are named `c4-*` and read their config from `/etc/c4`. A box
+set up before that runs `sr33-*` units reading `/etc/sr33`. `switch-units.sh` moves it over once:
+
+```
+pi/deploy/switch-units.sh <user@orin> orin            # dry run: the units, their state, the plan
+pi/deploy/switch-units.sh <user@orin> orin --apply    # back up, switch, check
+pi/deploy/switch-units.sh <user@pi> pi --apply
+pi/deploy/switch-units.sh <user@host> --rollback units-STAMP --apply
+```
+
+- Run it from a clean checkout of what the box runs. On the Orin, pull first: the shed guard and
+  the services that read it move from `/run/sr33-shed` to `/run/c4-shed` in the same commit, and
+  the switch restarts them together.
+- Each unit keeps its state: enabled stays enabled, running stays running, the plume pass is left
+  to its timer. The shed guard switches first.
+- `/etc/sr33/*` is copied to `/etc/c4/` (an existing file there is never overwritten) and
+  `/etc/sr33` stays. `REROUTE_BOAT`, which the old re-route unit set inline, moves into
+  `/etc/c4/reroute.env`.
+- On the Pi only `can0` changes, and it is never stopped or started: stopping it takes the NMEA
+  2000 bus down. `c4-can0` is enabled and takes over at the next boot.
+- Backups land in `~/deploy-backups/units-STAMP` on the box. A rollback on the Orin also needs the
+  checkout put back (`~/pre-pull-backup`), or the shed state goes unread.

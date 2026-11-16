@@ -7,8 +7,8 @@
 # That overlay creates the can0 device at boot; this unit configures + raises it.
 #
 # Install on the Pi:
-#   sudo cp pi/systemd/sr33-can0.service /etc/systemd/system/
-#   sudo systemctl daemon-reload && sudo systemctl enable --now sr33-can0
+#   sudo cp pi/systemd/c4-can0.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now c4-can0
 [Unit]
 Description=PICAN-M CAN bus (can0) — up at 250 kbit/s (NMEA 2000)
 # Wait for the mcp2515 overlay to create the interface, and come up before Docker.

@@ -69,8 +69,8 @@ canboatjs on `vcan0`.
 ## Dockside checklist
 
 Before the first test, re-install the CAN unit on the Pi (it now sets `restart-ms 100`):
-`sudo cp pi/systemd/sr33-can0.service /etc/systemd/system/ && sudo systemctl daemon-reload &&
-sudo systemctl restart sr33-can0`, then `ip -details link show can0` shows `restart-ms 100`.
+`sudo cp pi/systemd/c4-can0.service /etc/systemd/system/ && sudo systemctl daemon-reload &&
+sudo systemctl restart c4-can0`, then `ip -details link show can0` shows `restart-ms 100`.
 
 1. **Bus link.** `curl -s localhost:8210/health | jq .bus`. Want `link: "sending"`, `can.state:
    "ERROR-ACTIVE"`, `send_errors` not climbing, `peers` not empty. `ERROR-PASSIVE` with no

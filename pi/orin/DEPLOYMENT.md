@@ -100,7 +100,7 @@ Runs as **`agent-c4`** (not the stock `ollama` user — that user can't see the 
 > `LLM_NUM_CTX` (default 6144, `copilot/config.py`): the copilot refuses — and falls back to the
 > deterministic engine text — any request whose estimated size would not fit that number. If the
 > box is still at 2048, either apply this unit or set `LLM_NUM_CTX=2048` in
-> `/etc/sr33/copilot.env` (then most LLM passes fall back, honestly). KV cost of 6144 on the 7B
+> `/etc/c4/copilot.env` (then most LLM passes fall back, honestly). KV cost of 6144 on the 7B
 > q4 is ~350 MB (2048: ~120 MB).
 >
 > **Prompt cache cap (#280).** Ollama runs llama.cpp's `llama-server`, which keeps a host-RAM cache
@@ -133,7 +133,7 @@ Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 [Install]
 WantedBy=multi-user.target
 ```
-Plus the drop-in `/etc/systemd/system/ollama.service.d/sr33-oom.conf` (`OOMScoreAdjust=500`, from
+Plus the drop-in `/etc/systemd/system/ollama.service.d/c4-oom.conf` (`OOMScoreAdjust=500`, from
 `pi/systemd/ollama.service.d/`): if memory runs out anyway, the kernel kills Ollama first. See §10.
 
 ### `/etc/systemd/system/jetson-clocks.service`
@@ -262,7 +262,7 @@ The onboard copilot (`pi/orin/copilot/`, decision support + proactive auto-coach
 **FastAPI** app behind systemd, serving `/health /coach /adherence /narrate[/reset] /brief /strategy /snapshot /tools
 /dashboard /detail` on **:8300** (the boat console proxies `/copilot/*` here). Deployed as such
 2026-06-29 — before that the Orin ran only the stdlib fallback `serve_dashboard.py`
-(`sr33-orin-copilot-dashboard.service`, just `/dashboard`+`/health`+`/detail`), which never served
+(`c4-orin-copilot-dashboard.service`, just `/dashboard`+`/health`+`/detail`), which never served
 `/coach`.
 
 **The Orin's system Python (3.12) is PEP-668 externally-managed** — `pip install --user` and
@@ -275,27 +275,27 @@ python3 -m venv ~/copilot-venv
 ~/copilot-venv/bin/python -c 'import fastapi,uvicorn;print("ok",fastapi.__version__,uvicorn.__version__)'
 ```
 
-Config goes in `/etc/sr33/copilot.env` (ENGINE_URL → the Pi engine, LLM_* → local Ollama,
+Config goes in `/etc/c4/copilot.env` (ENGINE_URL → the Pi engine, LLM_* → local Ollama,
 COPILOT_COACH=true, COPILOT_ROUTE, PLAYBOOK_PATH = where the Pi's playbook load writes it,
 PLAYBOOK_LOAD_FROM = the Pi's cable IP). Load a playbook only through the Pi engine's
 `/playbook/load`; a file copied in by hand is never approved, so the copilot won't use it.
 Install + enable the unit:
 
 ```bash
-sudo cp pi/systemd/sr33-orin-copilot.service /etc/systemd/system/
+sudo cp pi/systemd/c4-orin-copilot.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl disable --now sr33-orin-copilot-dashboard   # frees :8300 (kept on disk = rollback)
-sudo systemctl enable  --now sr33-orin-copilot
+sudo systemctl disable --now c4-orin-copilot-dashboard   # frees :8300 (kept on disk = rollback)
+sudo systemctl enable  --now c4-orin-copilot
 curl -s localhost:8300/health      # expect mode=llm, coach.running=true
 ```
 
 The unit runs `python -m copilot.serve`: it binds the boat cable interface (10.10.10.2) and
 loopback, and answers only the Pi's end of the cable (10.10.10.1) and loopback; anyone else gets
-403 (`COPILOT_BIND` / `COPILOT_ALLOW_FROM` in `/etc/sr33/copilot.env` to change). The Pi console's
+403 (`COPILOT_BIND` / `COPILOT_ALLOW_FROM` in `/etc/c4/copilot.env` to change). The Pi console's
 `COPILOT_UPSTREAM` must therefore be `http://10.10.10.2:8300/` (the compose default).
 
 **Bench** (`compose.pi.sample.yml`, where the console proxies to the Orin's Tailscale address): add,
-don't replace. In `/etc/sr33/copilot.env` on the bench Orin set
+don't replace. In `/etc/c4/copilot.env` on the bench Orin set
 `COPILOT_BENCH_BIND=<orin-tailscale-ip>` (`tailscale ip -4` on the Orin) and
 `COPILOT_BENCH_ALLOW_FROM=<bench-host-tailscale-ip>` (`tailscale ip -4` on the bench host), then
 restart the unit. The boat defaults stay in force; leave both unset on the boat.
@@ -305,8 +305,8 @@ restart the unit. The boat defaults stay in force; leave both unset on the boat.
 `~/DEPLOYED`. The steps are in `docs/REMOTE_OPS.md` (rule 2). Don't copy files into the clone:
 a rollback to the tag would not undo them.
 
-**Rollback to the stdlib dashboard runner:** `sudo systemctl disable --now sr33-orin-copilot &&
-sudo systemctl enable --now sr33-orin-copilot-dashboard` (both bind :8300, so only one at a time).
+**Rollback to the stdlib dashboard runner:** `sudo systemctl disable --now c4-orin-copilot &&
+sudo systemctl enable --now c4-orin-copilot-dashboard` (both bind :8300, so only one at a time).
 
 ---
 
@@ -316,10 +316,10 @@ sudo systemctl enable --now sr33-orin-copilot-dashboard` (both bind :8300, so on
 first, then the plume, then re-route**. The engine, recording and the iPad display live on the Pi
 and are never shed. No Pi memory limits for now.
 
-`sr33-orin-shed.service` runs `pi/orin/shed/guard.py` (stdlib, system `python3`). Every 5 s it reads
+`c4-orin-shed.service` runs `pi/orin/shed/guard.py` (stdlib, system `python3`). Every 5 s it reads
 `MemAvailable` (`/proc/meminfo`), the junction temperature (thermal zone `tj-thermal`) and the
 over-current throttle counters (hwmon `soctherm_oc`, `oc*_event_cnt`), and writes the level to
-`/run/sr33-shed/state.json`:
+`/run/c4-shed/state.json`:
 
 | Level | What stops | Who checks |
 |---|---|---|
@@ -328,7 +328,7 @@ over-current throttle counters (hwmon `soctherm_oc`, `oc*_event_cnt`), and write
 | 2 | also the plume: each timer pass exits at once ("pass skipped: Plume paused: ...") | `plume/onboard_plume.py` |
 | 3 | also re-route: a new run gets 503 "Re-route paused: Orin low on memory." (the iPad shows it); a run already going finishes | `reroute/service.py` |
 
-Thresholds (defaults; override in `/etc/sr33/shed.env`, then restart the guard):
+Thresholds (defaults; override in `/etc/c4/shed.env`, then restart the guard):
 
 | Signal | Level 1 | Level 2 | Level 3 | Leaves the level above |
 |---|---|---|---|---|
@@ -350,7 +350,7 @@ Ollama would hold the ~5 GB for its 5 min keep-alive. The hold stops the unload/
 flapping; a reload after recovery takes ~2.5 min. Heat and power don't unload.
 
 **Fail open:** if the state file is missing or older than 30 s (guard stopped or dead), everything
-runs as before. The guard can only take load away. Transitions are in `journalctl -u sr33-orin-shed`.
+runs as before. The guard can only take load away. Transitions are in `journalctl -u c4-orin-shed`.
 
 **OOM order:** `ollama.service` gets `OOMScoreAdjust=500` (drop-in above) and the guard `-500`. The
 kernel already tends to pick Ollama as the biggest process, but most of the model sits in GPU
@@ -360,14 +360,14 @@ engine's text meanwhile, which is the same as shedding narration. There's no swa
 
 Install (owner, with his go):
 ```bash
-sudo cp ~/Agent_C4/pi/systemd/sr33-orin-shed.service /etc/systemd/system/
+sudo cp ~/Agent_C4/pi/systemd/c4-orin-shed.service /etc/systemd/system/
 sudo mkdir -p /etc/systemd/system/ollama.service.d
-sudo cp ~/Agent_C4/pi/systemd/ollama.service.d/sr33-oom.conf /etc/systemd/system/ollama.service.d/
+sudo cp ~/Agent_C4/pi/systemd/ollama.service.d/c4-oom.conf /etc/systemd/system/ollama.service.d/
 sudo systemctl daemon-reload
-sudo systemctl enable --now sr33-orin-shed
-sudo systemctl restart ollama sr33-orin-copilot sr33-orin-reroute   # pick up the drop-in and the new code
-cat /run/sr33-shed/state.json        # expect "level":0 and today's readings
+sudo systemctl enable --now c4-orin-shed
+sudo systemctl restart ollama c4-orin-copilot c4-orin-reroute   # pick up the drop-in and the new code
+cat /run/c4-shed/state.json        # expect "level":0 and today's readings
 curl -s localhost:8300/health | python3 -c 'import json,sys;print(json.load(sys.stdin)["shed"])'
 ```
 The plume needs no restart (each pass is a new process). Remove: `sudo systemctl disable --now
-sr33-orin-shed` (everything then runs unshed) and delete the unit and the drop-in.
+c4-orin-shed` (everything then runs unshed) and delete the unit and the drop-in.

@@ -1,8 +1,8 @@
 # Onboard copilot — dashboard brief (Tier 2, Orin). No-dependency stdlib runner that serves the
 # crew dashboard's commentary (POST /dashboard) from the local LLM. Use this when fastapi/uvicorn
-# aren't installed; otherwise sr33-orin-copilot.service runs the full FastAPI copilot.
-#   sudo cp pi/systemd/sr33-orin-copilot-dashboard.service /etc/systemd/system/
-#   sudo systemctl enable --now sr33-orin-copilot-dashboard
+# aren't installed; otherwise c4-orin-copilot.service runs the full FastAPI copilot.
+#   sudo cp pi/systemd/c4-orin-copilot-dashboard.service /etc/systemd/system/
+#   sudo systemctl enable --now c4-orin-copilot-dashboard
 [Unit]
 Description=Onboard copilot — dashboard brief (stdlib, no deps)
 After=network-online.target ollama.service

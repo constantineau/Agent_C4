@@ -24,11 +24,12 @@ Environment=REROUTE_DIR=/home/agent-c4/c4-reroute
 # Boat data from the checkout; an edited boat profile in c4-reroute/ingested/boats/ wins.
 Environment=INGESTED_DIR=/home/agent-c4/c4-reroute/ingested
 Environment=BOATS_DIR=/home/agent-c4/Agent_C4/vps/lab/boats
-Environment=REROUTE_BOAT=sr33
+# The boat this Orin re-routes (its boat id) goes in /etc/c4/reroute.env as REROUTE_BOAT=<id>.
+# No default: without it the service stops at start and says so (#307).
 # The polar is the deployed boat's, carried by the Deploy push (#304). Only when the push carried
 # none does the run use the files the boat profile names, found in this checkout (shared/boat_polar.py).
-# Optional overrides (REROUTE_MODELS, budgets, ...) in /etc/sr33/reroute.env
-EnvironmentFile=-/etc/sr33/reroute.env
+# REROUTE_BOAT (required) and optional overrides (REROUTE_MODELS, budgets, ...) in /etc/c4/reroute.env
+EnvironmentFile=-/etc/c4/reroute.env
 ExecStart=/home/agent-c4/plume-venv/bin/python service.py
 Restart=on-failure
 RestartSec=5

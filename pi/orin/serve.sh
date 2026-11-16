@@ -4,13 +4,13 @@
 # Run ON THE ORIN (not the Pi, not the dev VM). See pi/orin/SETUP.md §7.
 set -euo pipefail
 
-# ── config (override via env or /etc/sr33/orin.env) ───────────────────────────
+# ── config (override via env or /etc/c4/orin.env) ───────────────────────────
 # MODEL: the MLC-quantized model id. CONFIRM the verbatim string on-unit (SETUP.md §5 / models.md).
 # The dusty-nv pre-quantized builds are q4f16_ft MLC repos on HuggingFace.
 MODEL="${MODEL:-dusty-nv/Qwen2.5-7B-Instruct-q4f16_ft-MLC}"   # ⚠️ confirm on-unit before trusting
 QUANT="${QUANT:-q4f16_ft}"
 PORT="${PORT:-9000}"
-NAME="${NAME:-sr33-orin-llm}"
+NAME="${NAME:-c4-orin-llm}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"   # e.g. --max-batch-size 1, context flags — see `sudonim serve --help`
 
 command -v jetson-containers >/dev/null || {
