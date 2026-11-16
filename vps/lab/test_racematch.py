@@ -35,10 +35,11 @@ m = find(race_id="sorc-ocean-race-2026", name="SORC Ocean Race", year=2026)
 check("same id: updates it as it is", m == {"race_id": "sorc-ocean-race-2026", "name": "SORC Ocean Race",
                                             "same_id": True})
 m = find(race_id="2026-sorc-ocean-race", name="2026 SORC Ocean Race", year=2026, start_date="2026-11-20")
-check("id worded differently, same race: offered", m and m["race_id"] == "sorc-ocean-race-2026"
-      and m["same_id"] is False)
+check("id worded differently, same race: offered, sure (both start dates agree)",
+      m and m["race_id"] == "sorc-ocean-race-2026" and m["same_id"] is False and m["sure"] is True)
 m = find(race_id="sorc-ocean-race-offshore-2026", name="SORC Ocean Race – Offshore Course", year=2026)
-check("a longer name for it: offered", m and m["race_id"] == "sorc-ocean-race-2026")
+check("a longer name for it, no start date: offered, not sure",
+      m and m["race_id"] == "sorc-ocean-race-2026" and m["sure"] is False)
 m = find(race_id="the-sorc-ocean-race-2026", name="The SORC Ocean Race", year=None, start_date="2026-11-20")
 check("no year, but the start date gives it", m and m["race_id"] == "sorc-ocean-race-2026")
 check("another year's edition is not the same race",
@@ -67,6 +68,10 @@ check("only last week's edition saved: this week's is a new race",
 check("a start moved a day: still the same race",
       (find(race_id="x", name="SORC Ocean Race", year=2026, start_date="2026-11-21") or {}).get("race_id")
       == "sorc-ocean-race-2026")
+check("a saved edition without a date: offered, not sure (could be last week's)",
+      (racematch.find({"race_id": "wnr-new", "name": "Wednesday Night Race", "year": 2026,
+                       "start_date": "2026-07-08"},
+                      [{**WEEKLY[0], "start_date": ""}]) or {}).get("sure") is False)
 check("two that fit equally (no date to tell): nothing offered",
       racematch.find({"race_id": "wnr", "name": "Wednesday Night Race", "year": 2026}, WEEKLY) is None)
 check("no saved races: nothing", racematch.find({"race_id": "a", "name": "A Race"}, []) is None)

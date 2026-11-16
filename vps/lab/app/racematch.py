@@ -56,7 +56,7 @@ def _score(draft, saved):
 
 
 def find(draft, saved_races, threshold=0.6):
-    """The saved race this draft most likely updates: {race_id, name, same_id}, or None.
+    """The saved race this draft most likely updates: {race_id, name, same_id[, sure]}, or None.
     same_id: the draft already carries that race's id (saving updates it as it is)."""
     if not isinstance(draft, dict):
         return None
@@ -71,4 +71,8 @@ def find(draft, saved_races, threshold=0.6):
     if len(scored) > 1 and abs(scored[0][0] - scored[1][0]) < 1e-9:
         return None                                 # two saved races fit equally: don't guess
     best = saved[scored[0][1]]
-    return {"race_id": best["race_id"], "name": best.get("name") or best["race_id"], "same_id": False}
+    # sure: both start dates known and close. Without them a weekly race's editions look alike,
+    # so the review offers the match unticked instead of saving over it by default.
+    dd, ds = _date(draft.get("start_date")), _date(best.get("start_date"))
+    return {"race_id": best["race_id"], "name": best.get("name") or best["race_id"], "same_id": False,
+            "sure": bool(dd and ds)}

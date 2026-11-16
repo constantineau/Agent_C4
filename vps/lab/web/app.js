@@ -693,12 +693,13 @@ function paintDetail() {
 }
 // A re-read that looks like a race already saved (the SIs landing in race week) saves over it, so
 // its fleet, boat, rating pick and notes stay. The AI names the id from name + year and can name it
-// differently the second time; unticking saves it as a new race under the id it came with.
+// differently the second time; unticking saves it as a new race under the id it came with. Ticked by
+// default only when the server is sure (both start dates known and close); otherwise offered unticked.
 function draftMatchSetup(resp) {
   const m = resp && resp.match;
   if (!m || !resp.definition) return;
   resp.ownId = resp.definition.race_id;
-  if (!m.same_id) resp.definition.race_id = m.race_id;
+  if (!m.same_id && m.sure) resp.definition.race_id = m.race_id;
 }
 function draftUseMatch(on) {
   const m = Lab.draft && Lab.draft.match;
@@ -714,7 +715,7 @@ function detailMatch() {
   const on = Lab.editDef.race_id === m.race_id;
   return `<div class="banner review"><label><input type="checkbox" id="draftMatch" ${on ? "checked" : ""}
     onchange="draftUseMatch(this.checked)"> Update “${esc(m.name)}”, already saved. ${keeps}</label>
-    ${on ? "" : `<div class="muted">Unticked: Save makes a new race.</div>`}</div>`;
+    ${on ? "" : `<div class="muted">Unticked: Save makes a new race.${m.sure ? "" : " Tick it if this is the same race."}</div>`}</div>`;
 }
 function detailBanner(v) {
   const errs = (v.errors || []), warns = (v.warnings || []);

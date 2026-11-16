@@ -30,7 +30,7 @@ function lab() {
 }
 
 const draft = (match) => ({ definition: { race_id: "2026-sorc-ocean-race", name: "SORC Ocean Race" }, match });
-const SORC = { race_id: "sorc-ocean-race-2026", name: "SORC Ocean Race", same_id: false };
+const SORC = { race_id: "sorc-ocean-race-2026", name: "SORC Ocean Race", same_id: false, sure: true };
 
 function ready(ctx, resp) {          // what extractDraft does with the result
   ctx.__f.draftMatchSetup(resp);
@@ -55,6 +55,14 @@ test("unticking saves it as a new race under its own id, and ticking again goes 
   ctx.__f.draftUseMatch(true);
   assert.equal(ctx.Lab.editDef.race_id, "sorc-ocean-race-2026");
   assert.equal(ctx.painted, 2);
+});
+
+test("not sure (a start date missing): offered unticked, saves as new unless ticked", () => {
+  const ctx = lab(); ready(ctx, draft({ ...SORC, sure: false }));
+  assert.equal(ctx.Lab.editDef.race_id, "2026-sorc-ocean-race");
+  assert.match(ctx.__f.detailMatch(), /Unticked: Save makes a new race\. Tick it if this is the same race\./);
+  ctx.__f.draftUseMatch(true);
+  assert.equal(ctx.Lab.editDef.race_id, "sorc-ocean-race-2026");
 });
 
 test("same id already: just says it updates the race", () => {
