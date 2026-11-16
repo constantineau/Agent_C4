@@ -95,7 +95,7 @@ def roster_from_yb(definition):
 
 
 # ---- ORC handicap enrichment ----------------------------------------------------------------------
-_orc_cache = {}     # cc -> (epoch, {by_sail, by_name, rows})
+_orc_cache = {}     # cc -> (epoch, {by_sail, by_name, by_ref, n})
 
 
 def _orc_dump(country):
@@ -107,10 +107,13 @@ def _orc_dump(country):
     if hit and now - hit[0] < _ORC_TTL:
         return hit[1]
     rows = json.loads(_get(_ORC_URL.format(cc=cc)).decode("utf-8-sig")).get("rms") or []
-    idx = {"by_sail": {}, "by_name": {}, "n": len(rows)}
+    idx = {"by_sail": {}, "by_name": {}, "by_ref": {}, "n": len(rows)}
     for r in rows:
         s = _norm_sail(r.get("SailNo"))
         n = _norm(r.get("YachtName"))
+        ref = str(r.get("RefNo") or "").strip().upper()
+        if ref:                        # every cert, incl. a second one under the same sail number
+            idx["by_ref"].setdefault(ref, r)
         if s:
             idx["by_sail"].setdefault(s, r)
         if n:
