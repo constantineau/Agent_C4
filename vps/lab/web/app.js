@@ -2817,7 +2817,7 @@ async function renderDeploy() {
     try { Dep.races = (await (await apiGet("/api/races")).json()).races || []; }
     catch (e) { view.innerHTML = '<div class="placeholder">Failed to load.</div>'; return; }
   }
-  Dep.raceId = pickRace(Dep.races, Dep.raceId);
+  { const rid = pickRace(Dep.races, Dep.raceId); if (Dep.raceId && rid !== Dep.raceId) Dep.sel = null; Dep.raceId = rid; }
   if (!Dep.raceId) { view.innerHTML = noRaceYet(); return; }
   try { Dep.ready = await (await apiGet("/api/deploy?race_id=" + encodeURIComponent(Dep.raceId))).json(); }
   catch (e) { view.innerHTML = '<div class="placeholder">Couldn\'t load the deploy page.</div>'; return; }
