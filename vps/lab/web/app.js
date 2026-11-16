@@ -612,6 +612,7 @@ async function extractDraft() {
     }
     if (!resp) return fail("Still not done after 25 min. Run it again.");
     if (resp.detail) return fail(resp.detail);   // already one plain sentence (what failed, what to do)
+    draftMatchSetup(resp);
     Lab.draft = resp; Lab.editDef = resp.definition;
     Lab.editVal = { errors: resp.errors || [], warnings: resp.warnings || [] }; Lab.isDraft = true;
     const nm = (resp.definition && resp.definition.name) || "the race";
@@ -680,7 +681,7 @@ function paintDetail() {
   if (!box) return;
   const d = Lab.editDef, v = Lab.editVal || {};
   if (!d) { box.innerHTML = raceDetailEmpty(); return; }
-  box.innerHTML = detailActions(d, v) + detailBanner(v) + detailHead(d) +
+  box.innerHTML = detailActions(d, v) + detailMatch() + detailBanner(v) + detailHead(d) +
     (d.courses || []).map((c, i) => detailCourseCard(c, i)).join("") +
     detailStationsCard(d) +
     detailDelegated(d) +
@@ -689,6 +690,31 @@ function paintDetail() {
   growAllTa();
   stDrawMap();
   syncDirty();
+}
+// A re-read that looks like a race already saved (the SIs landing in race week) saves over it, so
+// its fleet, boat, rating pick and notes stay. The AI names the id from name + year and can name it
+// differently the second time; unticking saves it as a new race under the id it came with.
+function draftMatchSetup(resp) {
+  const m = resp && resp.match;
+  if (!m || !resp.definition) return;
+  resp.ownId = resp.definition.race_id;
+  if (!m.same_id) resp.definition.race_id = m.race_id;
+}
+function draftUseMatch(on) {
+  const m = Lab.draft && Lab.draft.match;
+  if (!m || !Lab.editDef || !Lab.isDraft) return;
+  Lab.editDef.race_id = on ? m.race_id : Lab.draft.ownId;
+  paintDetail();
+}
+function detailMatch() {
+  const m = Lab.isDraft && Lab.draft && Lab.draft.match;
+  if (!m || !Lab.editDef) return "";
+  const keeps = "Its fleet, boat, rating pick and notes stay.";
+  if (m.same_id) return `<div class="banner ok">Saving updates “${esc(m.name)}”. ${keeps}</div>`;
+  const on = Lab.editDef.race_id === m.race_id;
+  return `<div class="banner review"><label><input type="checkbox" id="draftMatch" ${on ? "checked" : ""}
+    onchange="draftUseMatch(this.checked)"> Update “${esc(m.name)}”, already saved. ${keeps}</label>
+    ${on ? "" : `<div class="muted">Unticked: Save makes a new race.</div>`}</div>`;
 }
 function detailBanner(v) {
   const errs = (v.errors || []), warns = (v.warnings || []);

@@ -25,7 +25,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from shared import race_def, boat_profile
-from . import atomicio, auth, store, extract, boats, labstate, feedback, pbstore, deploy, monitor, judge, track, learning, fleetimport, report, retro, retrostore, trackers, share, racestart, sessionboat
+from . import atomicio, auth, store, extract, boats, labstate, feedback, pbstore, deploy, monitor, judge, track, learning, fleetimport, report, retro, retrostore, trackers, share, racestart, sessionboat, racematch
 
 INGESTED_DIR = os.environ.get("INGESTED_DIR", "/srv/ingested")
 
@@ -160,7 +160,9 @@ def _today():
 def _drafted(definition):
     """Validate a draft RaceDefinition and return it with its validation for the review step."""
     errors, warnings = race_def.validate(definition)
-    return {"definition": definition, "errors": errors, "warnings": warnings}
+    # the saved race this re-read most likely updates (its id may differ): the review offers it
+    return {"definition": definition, "errors": errors, "warnings": warnings,
+            "match": racematch.find(definition, store.race_idents())}
 
 
 def _ingest_fail(exc):
