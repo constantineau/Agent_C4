@@ -393,7 +393,7 @@ def test_route_warns_tidal_without_current(route):
 
 
 def test_wind_models_outside_their_area_are_not_asked():
-    """#309: the default blend's HRRR is US only. On the Channel course it is never downloaded
+    """#309: the default blend's HRRR and RRFS are US only. On the Channel course neither is downloaded
     (no fetch at all here), and the wind field and the route's data notes say so plainly."""
     import time
     from app import optimizer
@@ -412,8 +412,10 @@ def test_wind_models_outside_their_area_are_not_asked():
         wf = windfield.build_windfield(bbox, now, now + 12 * 3600, fallback_tries=0)
     finally:
         M.ModelSource.fetch = real
-    assert "hrrr" in M.DEFAULT_MODELS and "hrrr" not in asked and "gfs" in asked, asked
-    assert optimizer.wind_notes(wf) == ["HRRR: not here (US only)."], wf.meta
+    # the default blend's US-only models (HRRR, and RRFS since #360) are never asked off the US
+    assert "hrrr" in M.DEFAULT_MODELS and "rrfs" in M.DEFAULT_MODELS, M.DEFAULT_MODELS
+    assert "hrrr" not in asked and "rrfs" not in asked and "gfs" in asked, asked
+    assert optimizer.wind_notes(wf) == ["HRRR: not here (US only).", "RRFS: not here (US only)."], wf.meta
 
 
 class _SynthModel:

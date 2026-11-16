@@ -110,8 +110,9 @@ Dual input → Opus extraction → a **draft** RaceDefinition → human review �
 `app/wind/` builds a real `WindField` from public weather models — `grib.py` downloads 10 m
 UGRD/VGRD GRIB2 bbox subsets and parses them with cfgrib/eccodes (the eccodes pip wheel bundles
 the binary; `python -m eccodes selfcheck` runs at build); `models.py` defines key-free sources
-(**GFS / NAM / HRRR** via NOMADS GRIB-filter, **GEFS** + **ECMWF-ENS** ensembles and **ECMWF /
-ICON / GEM** opt-in), each with its cadence / forecast-hour grid / lag-aware freshest-cycle
+(**GFS / HRRR** via NOMADS GRIB-filter, **RRFS** via the Open-Meteo regrid (NAM's replacement,
+#360), **GEFS** + **ECMWF-ENS** ensembles and **ECMWF / ICON / GEM** opt-in; default blend
+gfs + hrrr + rrfs), each with its cadence / forecast-hour grid / lag-aware freshest-cycle
 picker + cycle fallback; `windfield.py`'s `wind_at(lat,lon,epoch)` blends the models (weighted by
 venue model skill, below) and reports the **model/ensemble SPREAD as a confidence** (models
 disagree → sail conservatively). `optimizer.py` routes the course leg-by-leg (isochrone on

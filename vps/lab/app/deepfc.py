@@ -5,6 +5,8 @@ message(s) we need (~1 MB) instead of whole global/CONUS files:
 
   - HRRR archive     `noaa-hrrr-bdp-pds`        2014-08 → now  (CONUS, operational, our best model here)
   - GEFS Reforecast  `noaa-gefs-retrospective`  ~2005 → 2019   (ensemble ctrl, fixed 2020 model)
+No RRFS: it went operational 2026-11 and has no operational archive yet; venue scores read its
+short Open-Meteo history instead (#360).
 
 Each `.idx` line is `num:byteoffset:date:VAR:LEVEL:FCST:...`; the message spans [offset, next_offset).
 We range-GET the U and V messages, concat (GRIB2 messages are self-contained), and parse with the

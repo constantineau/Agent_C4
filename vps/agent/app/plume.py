@@ -30,7 +30,7 @@ import time
 SCHEMA = "c4.plume/v1"
 MAX_BYTES = 512 * 1024          # a plume is ~10-60 KB; refuse anything absurd
 # the model ids the Lab may send (mirrors vps/lab/app/plume.SUPPORTED)
-SUPPORTED = ("gfs", "nam", "hrrr", "ecmwf", "icon", "gem")
+SUPPORTED = ("gfs", "hrrr", "rrfs", "ecmwf", "icon", "gem")   # NAM retired 2026-11-03 (#360)
 _TEXT_FIELDS = ("key", "race_id", "label", "basis")
 _NUM_FIELDS = ("generated_at", "built_at", "race_start", "race_end")
 

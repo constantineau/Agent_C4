@@ -44,7 +44,7 @@ SCHEMA = "c4.reroute/v1"
 LABEL = "Off the playbook"
 STATE_DIR = os.environ["REROUTE_DIR"]
 CHART_DIR = os.environ.get("REROUTE_CHART_DIR", os.path.join(STATE_DIR, "chart"))
-MODELS = tuple(m.strip() for m in os.environ.get("REROUTE_MODELS", "gfs,hrrr").split(",")
+MODELS = tuple(m.strip() for m in os.environ.get("REROUTE_MODELS", "gfs,hrrr,rrfs").split(",")
                if m.strip())
 BOAT_ID = boat_id_setting.require("REROUTE_BOAT")   # no default: never re-route as another boat (#307)
 ROUTE_BUDGET_S = float(os.environ.get("REROUTE_ROUTE_BUDGET_S", "300"))   # optimizer time cap

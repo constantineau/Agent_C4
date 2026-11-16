@@ -14,7 +14,7 @@ race dates (or a month), and the observation stations the user ticked (found by 
      study uses the study's key and stations. A race can also point at a study by setting its
      `venue_tag` to the study's key.
 
-Models that don't cover the place (HRRR outside the US) are skipped with a plain note.
+Models that don't cover the place (HRRR, RRFS outside the US) are skipped with a plain note.
 """
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ import threading
 from . import modelskill
 
 MATCH_NM = float(os.environ.get("VENUE_STUDY_MATCH_NM", "30"))   # a race this close uses the study
-STUDY_MODELS = ("gfs", "hrrr", "ecmwf", "icon", "gem")
+STUDY_MODELS = ("gfs", "hrrr", "rrfs", "ecmwf", "icon", "gem")
 DIRS8 = ("N", "NE", "E", "SE", "S", "SW", "W", "NW")
 SPEED_BINS = ((0, 6, "0–6"), (6, 12, "6–12"), (12, 18, "12–18"), (18, 25, "18–25"), (25, 999, "25+"))
 CALM_KN = 1.0

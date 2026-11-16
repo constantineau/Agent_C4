@@ -585,9 +585,9 @@ button.qh-btn[aria-expanded="true"] > span { color: var(--ink); border-color: va
 .qh-txt[hidden] { display: none; }
 
 /* forecast plume (Deploy tab) — classes drawn by the console's plume.js */
-.lab-plume { --m-gfs:#4d9bff; --m-nam:#ff8a3d; --m-hrrr:#ff5fb4; --m-ecmwf:#3ecf8e;
+.lab-plume { --m-gfs:#4d9bff; --m-rrfs:#ff8a3d; --m-hrrr:#ff5fb4; --m-ecmwf:#3ecf8e;
   --m-icon:#b48cff; --m-gem:#e3c04a; --m-other:#9a9aa6; --m-obs:#f3f4f6; margin-top:8px; }
-.lab-plume .pl-gfs { --mc:var(--m-gfs); } .lab-plume .pl-nam { --mc:var(--m-nam); }
+.lab-plume .pl-gfs { --mc:var(--m-gfs); } .lab-plume .pl-rrfs { --mc:var(--m-rrfs); }
 .lab-plume .pl-hrrr { --mc:var(--m-hrrr); } .lab-plume .pl-ecmwf { --mc:var(--m-ecmwf); }
 .lab-plume .pl-icon { --mc:var(--m-icon); } .lab-plume .pl-gem { --mc:var(--m-gem); }
 .lab-plume .pl-other { --mc:var(--m-other); }

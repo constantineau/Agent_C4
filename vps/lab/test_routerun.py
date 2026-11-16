@@ -70,10 +70,10 @@ def frames(model, u0, v0):
 
 def fake_build_windfield(bbox, t_start, t_end, models=(), ensemble_members=0, on_progress=None,
                          model_weights=None, model_bias=None, fallback_tries=None):
-    series = {("gfs", "det"): frames("gfs", -3.0, -5.0), ("nam", "det"): frames("nam", -2.0, -6.0)}
+    series = {("gfs", "det"): frames("gfs", -3.0, -5.0), ("rrfs", "det"): frames("rrfs", -2.0, -6.0)}
     meta = [{"model": m, "cycle": "2026-11-01 12Z", "members": 1, "frames": 14,
              "expected_frames": 14, "cycle_fallbacks": 0, "priority": 1.0, "kind": "deterministic"}
-            for m in ("gfs", "nam")]
+            for m in ("gfs", "rrfs")]
     if on_progress:
         on_progress("gfs: 14/14 frames @ 2026-11-01 12Z")
     return windfield.WindField(series, meta, bbox, t_start, t_end, model_weights=model_weights,
@@ -88,8 +88,8 @@ boats.active_boat = lambda: BOAT
 SKILL = {"on": False}            # no network: the venue's model skill is stubbed (on or off)
 venue.resolve = lambda *a, **k: {"key": "huron"} if SKILL["on"] else None
 modelskill.venue_weights = lambda v, models=None, race_date=None: {
-    "enabled": True, "station": "45003", "model_weights": {"gfs": 1.3, "nam": 0.7},
-    "model_bias": {"nam": (0.8, 4.0)}}
+    "enabled": True, "station": "45003", "model_weights": {"gfs": 1.3, "rrfs": 0.7},
+    "model_bias": {"rrfs": (0.8, 4.0)}}
 
 
 # ---- the Lab's _run_optimize before #124, verbatim (the reference) ------------------------------
@@ -184,8 +184,8 @@ for label, kw in (("no current/sea state", dict(use_waves=False, use_current=Fal
                   ("venue model skill on", dict(use_waves=False, use_current=False, skill=True))):
     SKILL["on"] = kw.pop("skill", False)
     seen_a, seen_b = [], []
-    a = legacy_run(COURSE, "x", T0, ["gfs", "nam"], 0, avoid=False, on_progress=seen_a.append, **kw)
-    b = main._run_optimize(COURSE, "x", T0, ["gfs", "nam"], 0, avoid=False,
+    a = legacy_run(COURSE, "x", T0, ["gfs", "rrfs"], 0, avoid=False, on_progress=seen_a.append, **kw)
+    b = main._run_optimize(COURSE, "x", T0, ["gfs", "rrfs"], 0, avoid=False,
                            on_progress=seen_b.append, **kw)
     # #303: the run now also names the polar it routed on (the boat's own); the rest is unchanged
     check(f"{label}: identical result", a.get("available")

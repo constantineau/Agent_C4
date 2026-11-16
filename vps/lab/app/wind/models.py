@@ -6,7 +6,7 @@ asks a source to FETCH the 10 m-wind GRIB subset for a (cycle, forecast-hour, me
 race bbox; the source returns a local file path (downloading + caching as needed) or None if that
 field is not posted yet.
 
-All sources are key-free. Deterministic models (GFS / NAM / HRRR / ECMWF-HRES) give MODEL spread as
+All sources are key-free. Deterministic models (GFS / HRRR / RRFS / ECMWF-HRES) give MODEL spread as
 a confidence signal even without ensembles; GEFS / ECMWF-ENS add ENSEMBLE spread and are opt-in
 (many members → many downloads). bbox is (north, south, west, east) in decimal degrees.
 """
@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import math
 import os
 import threading
 import time
@@ -180,24 +181,6 @@ class GFS(ModelSource):
         file = f"gfs.t{cycle.hour:02d}z.pgrb2.0p25.f{fhr:03d}"
         dir_ = f"/gfs.{cycle:%Y%m%d}/{cycle.hour:02d}/atmos"
         return _nomads_qs("filter_gfs_0p25.pl", file, dir_, bbox)
-
-
-class NAM(ModelSource):
-    # RETIRED by NOAA 2026-11-03 (SCN 26-89): RRFS replaces it. Kept so cached/archived NAM
-    # cycles still load; no default asks for it and /api/models hides it.
-    name = "nam"
-    retired = True
-    cycles = (0, 6, 12, 18)
-    lag_h = 1.8
-    horizon_h = 84         # awphys files run 3-hourly past f36 out to f84
-    fhr_step = 3
-    dense_to = 36          # NAM is hourly to f36
-    priority = 1.1         # higher-res regional → trust a touch more near shore
-
-    def _url(self, cycle, fhr, member, bbox):
-        file = f"nam.t{cycle.hour:02d}z.awphys{fhr:02d}.tm00.grib2"
-        dir_ = f"/nam.{cycle:%Y%m%d}"
-        return _nomads_qs("filter_nam.pl", file, dir_, bbox)
 
 
 class HRRR(ModelSource):
@@ -377,14 +360,26 @@ class ICON(ModelSource):
     API = os.environ.get("ICON_OM_URL", "https://api.open-meteo.com/v1/forecast")
     TIMEOUT = float(os.environ.get("ICON_OM_TIMEOUT", "45"))
 
+    def _step(self, bbox):
+        """Grid spacing (degrees) for this box. ICON/GEM: fixed; RRFS coarsens it on a big box."""
+        return self.GRID_STEP
+
     def _grid(self, bbox):
         n, s, w, e = bbox
-        lats = [round(s + i * self.GRID_STEP, 4) for i in range(int((n - s) / self.GRID_STEP) + 2)]
-        lons = [round(w + i * self.GRID_STEP, 4) for i in range(int((e - w) / self.GRID_STEP) + 2)]
+        step = self._step(bbox)
+        lats = [round(s + i * step, 4) for i in range(int((n - s) / step) + 2)]
+        lons = [round(w + i * step, 4) for i in range(int((e - w) / step) + 2)]
         return lats, lons
+
+    def on_grid(self, lat, lon) -> bool:
+        """Does Open-Meteo serve this model at (lat, lon)? Global models: everywhere. A regional
+        model (RRFS) says no off its grid, and those points are never asked for: Open-Meteo answers
+        a whole batch with HTTP 400 when any one point in it is off the grid."""
+        return True
 
     def _fetch_points(self, points, t_start, t_end):
         """One batched Open-Meteo call for `points` [(lat,lon)…] → list of per-point hourly dicts."""
+        import gzip
         import json as _json
         import urllib.request
         iso = lambda t: dt.datetime.fromtimestamp(t, dt.timezone.utc).strftime("%Y-%m-%dT%H:00")
@@ -404,12 +399,17 @@ class ICON(ModelSource):
             with open(cpath) as f:
                 return _json.load(f)
         import urllib.error
+        # gzip: the JSON shrinks several-fold, which matters aboard on a phone link
         req = urllib.request.Request(self.API + "?" + qs,
-                                     headers={"User-Agent": "Agent_C4-C4PerformanceLab/1.0"})
+                                     headers={"User-Agent": "Agent_C4-C4PerformanceLab/1.0",
+                                              "Accept-Encoding": "gzip"})
         for attempt in (1, 2, 3):
             try:
                 with urllib.request.urlopen(req, timeout=self.TIMEOUT) as r:
-                    data = _json.loads(r.read().decode())
+                    raw = r.read()
+                    if (r.headers.get("Content-Encoding") or "").lower() == "gzip":
+                        raw = gzip.decompress(raw)
+                    data = _json.loads(raw.decode())
                 break
             except urllib.error.HTTPError as he:
                 # per-minute rate limit — a short backoff usually clears it (two API-grid models
@@ -424,8 +424,36 @@ class ICON(ModelSource):
         atomicio.write_json(cpath, data)
         return data
 
+    def _fetch_chunk(self, points, t_start, t_end, splits):
+        """`_fetch_points`, but a batch Open-Meteo refuses as "no data for this location" (a point
+        just off a regional grid that `on_grid` let through) is split in two and retried, so one
+        edge point costs that point, not the batch. `splits` = [retries left], shared per load."""
+        import urllib.error
+        try:
+            got = self._fetch_points(points, t_start, t_end)
+        except urllib.error.HTTPError as he:
+            if he.code != 400 or splits[0] <= 0:
+                raise
+            try:
+                why = he.read().decode(errors="replace")
+            except Exception:  # noqa: BLE001
+                why = ""
+            if "no data" not in why.lower():
+                raise                                  # a bad request, not an off-grid point
+            if len(points) == 1:
+                return [None]
+            splits[0] -= 1
+            mid = len(points) // 2
+            return (self._fetch_chunk(points[:mid], t_start, t_end, splits)
+                    + self._fetch_chunk(points[mid:], t_start, t_end, splits))
+        if len(got) != len(points):
+            raise OSError(f"expected {len(points)} points, got {len(got)}")
+        return got
+
     def load_series(self, bbox, t_start, t_end, on_progress=None):
-        """Whole-series ingest: bbox grid × [t_start, t_end] → {(icon, det): [GribFrame]}, meta."""
+        """Whole-series ingest: bbox grid × [t_start, t_end] → {(icon, det): [GribFrame]}, meta.
+        Grid points off the model's grid (`on_grid`) stay NaN, so a sample there is None (the
+        blend skips the model at that spot) instead of borrowed wind."""
         import math as _math
 
         import numpy as np
@@ -433,14 +461,26 @@ class ICON(ModelSource):
         from . import grib as g
         lats, lons = self._grid(bbox)
         points = [(la, lo) for la in lats for lo in lons]
+        want = [i for i, p in enumerate(points) if self.on_grid(*p)]
         pad = 3 * 3600
         try:
-            per_point = []
-            for i in range(0, len(points), self.CHUNK):
-                per_point.extend(self._fetch_points(points[i:i + self.CHUNK], t_start - pad, t_end + pad))
-            if len(per_point) != len(points):
-                raise OSError(f"expected {len(points)} points, got {len(per_point)}")
-            times = (per_point[0].get("hourly") or {}).get("time") or []
+            if not want:
+                raise OSError("no grid point inside the model's area")
+            per_point = [None] * len(points)
+            splits = [16]
+            for i in range(0, len(want), self.CHUNK):
+                idx = want[i:i + self.CHUNK]
+                got = self._fetch_chunk([points[k] for k in idx], t_start - pad, t_end + pad, splits)
+                for k, pp in zip(idx, got):
+                    per_point[k] = pp
+            first = next((pp for pp in per_point if pp), None)
+            if first is None:
+                raise OSError("no grid point answered")
+            times = (first.get("hourly") or {}).get("time") or []
+            asked = np.zeros((len(lats), len(lons)), dtype=bool)
+            for k, pp in enumerate(per_point):
+                if pp:
+                    asked[k // len(lons), k % len(lons)] = True
             # 3-hourly sampling (matches the GRIB sources' fhr grid), capped like the loader
             keep = [k for k, t in enumerate(times) if t % (self.fhr_step * 3600) == 0][:self.MAX_FRAMES]
             frames = []
@@ -450,6 +490,8 @@ class ICON(ModelSource):
                 u = np.full((len(lats), len(lons)), np.nan)
                 v = np.full((len(lats), len(lons)), np.nan)
                 for idx, pp in enumerate(per_point):
+                    if not pp:
+                        continue
                     hh = pp.get("hourly") or {}
                     spd = (hh.get("wind_speed_10m") or [])
                     drn = (hh.get("wind_direction_10m") or [])
@@ -461,18 +503,22 @@ class ICON(ModelSource):
                 if np.isnan(u).all():
                     continue
                 # the odd null point (API gap) must not poison the bilinear sample — fill with the
-                # frame mean rather than let NaN propagate into the blend
-                u = np.where(np.isnan(u), np.nanmean(u), u)
-                v = np.where(np.isnan(v), np.nanmean(v), v)
+                # frame mean rather than let NaN propagate into the blend. Points never asked for
+                # (off a regional grid) stay NaN: no wind there from this model.
+                gap = asked & np.isnan(u)
+                u = np.where(gap, np.nanmean(u), u)
+                v = np.where(gap, np.nanmean(v), v)
                 frames.append(g.GribFrame(self.name, "det", float(times[k]), la_arr, lo_arr, u, v, True))
             frames.sort(key=lambda fr: fr.valid_time)
             series = {(self.name, "det"): frames} if frames else {}
             meta = {"model": self.name, "cycle": f"open-meteo {self.OM_MODEL} (latest run)",
                     "members": 1, "frames": len(frames), "expected_frames": len(keep),
                     "cycle_fallbacks": 0, "priority": self.priority, "kind": self.kind}
+            if frames:
+                meta["last_valid"] = int(frames[-1].valid_time)   # how far this series reaches
             if on_progress:
                 on_progress(f"{self.name}: {len(frames)}/{len(keep)} frames via Open-Meteo "
-                            f"({len(points)} grid points @ {self.GRID_STEP}°)")
+                            f"({len(want)} grid points @ {self._step(bbox)}°)")
             return series, meta
         except Exception as exc:  # noqa: BLE001 — best-effort like every other source
             if on_progress:
@@ -498,10 +544,111 @@ class GEM(ICON):
     OM_MODEL = "gem_global"
 
 
-MODELS = {m.name: m for m in (GFS(), NAM(), HRRR(), GEFS(), ECMWF(), ECMWF_ENS(), ICON(), GEM())}
+
+# The NCEP CONUS 3 km Lambert grid HRRR and RRFS's `conus` output share (checked against a live
+# RRFS 2dfld GRIB, 2026-11-16: 1799 x 1059 points, 3 km, first point 21.138N 122.7195W, LoV
+# 262.5E, both standard parallels 38.5N, sphere radius 6371229 m). `conus3km_ij` turns a lat/lon
+# into fractional grid indexes, so "is this point on the grid" is exact, not a lat/lon box
+# (the box's corners are far off the grid: south of Cuba, the open Atlantic east of Bermuda).
+_LCC_R = 6371229.0
+_LCC_N = math.sin(math.radians(38.5))
+_LCC_F = math.cos(math.radians(38.5)) * math.tan(math.pi / 4 + math.radians(38.5) / 2) ** _LCC_N / _LCC_N
+_CONUS_NX, _CONUS_NY, _CONUS_DX = 1799, 1059, 3000.0
+
+
+def _lcc_xy(lat, lon):
+    rho = _LCC_R * _LCC_F / math.tan(math.pi / 4 + math.radians(lat) / 2) ** _LCC_N
+    th = _LCC_N * math.radians(((lon + 97.5 + 180.0) % 360.0) - 180.0)
+    return rho * math.sin(th), -rho * math.cos(th)
+
+
+_CONUS_X0, _CONUS_Y0 = _lcc_xy(21.138123, -122.719528)
+
+
+def conus3km_ij(lat, lon):
+    """(i, j) fractional indexes of (lat, lon) on the CONUS 3 km grid (i east, j north)."""
+    if not -89.0 < lat < 89.0:
+        return (-1.0, -1.0)
+    x, y = _lcc_xy(lat, lon)
+    return (x - _CONUS_X0) / _CONUS_DX, (y - _CONUS_Y0) / _CONUS_DX
+
+
+def on_conus3km(lat, lon, margin=2) -> bool:
+    """Is (lat, lon) on the CONUS 3 km grid, at least `margin` cells in from its edge?"""
+    i, j = conus3km_ij(lat, lon)
+    return margin <= i <= _CONUS_NX - 1 - margin and margin <= j <= _CONUS_NY - 1 - margin
+
+
+class RRFS(ICON):
+    """NOAA RRFS (Rapid Refresh Forecast System), operational 2026-11, which replaced NAM (#360).
+
+    Hourly cycles; 00/06/12/18 run to 84 h, the others to 18 h (`horizon_for` / `pick_cycle`
+    mirror HRRR's rule). Fetched as Open-Meteo's `ncep_rrfs_conus` (the 3 km CONUS grid, the
+    same Lambert grid as HRRR) through the ICON API-grid path, not from NOMADS: NOMADS has no
+    grib filter for RRFS, so a NOMADS frame is the whole-domain U+V messages by .idx byte
+    range (about 1.8 MB an hour on the 13 km North America grid, 3.8 MB on the 3 km one), or
+    150-320 MB for an 84 h forecast. Open-Meteo sends just the race box (a few hundred KB,
+    gzipped), the same data the venue study scores RRFS on, and it is light enough aboard.
+
+    Normal weight (priority 1.0): venue-study weights take over once it has enough scored
+    history. Off its grid it is "not here", and grid points off it are never asked for.
+    """
+    name = "rrfs"
+    cycles = tuple(range(24))         # hourly cycles
+    lag_h = 2.0
+    horizon_h = 84                    # synoptic cycles; the others stop at 18
+    fhr_step = 1                      # hourly frames, like HRRR
+    dense_to = 84
+    priority = 1.0                    # normal weight (#360): no boost
+    coverage = (21.1, 52.7, -134.1, -60.9)   # the CONUS 3 km grid's lat/lon extent (box test)
+    coverage_label = "US only"
+
+    OM_MODEL = "ncep_rrfs_conus"
+    GRID_STEP = 0.1                   # finest step (~10 km on a 3 km model)...
+    MAX_POINTS = 450                  # ...coarsened on a big box: 5 calls, Open-Meteo's courtesy
+    MAX_FRAMES = 96                   # hourly to f84 plus the window's pad
+
+    def horizon_for(self, cycle):
+        return 84 if cycle.hour in (0, 6, 12, 18) else 18
+
+    def pick_cycle(self, now=None, min_horizon_h: int = 0):
+        """Like HRRR: a race reaching past 18 h prefers the freshest synoptic (84 h) cycle."""
+        cycles = (0, 6, 12, 18) if min_horizon_h > 18 else self.cycles
+        return _freshest_cycle(now or _utcnow(), cycles, self.lag_h)
+
+    def _step(self, bbox):
+        n, s, w, e = bbox
+        step = self.GRID_STEP
+        while ((n - s) / step + 2) * ((e - w) / step + 2) > self.MAX_POINTS:
+            step *= 1.25
+        return round(step, 3)
+
+    def on_grid(self, lat, lon):
+        return on_conus3km(lat, lon)
+
+    def covers_point(self, lat, lon):
+        return on_conus3km(lat, lon, margin=0)
+
+    def covers_bbox(self, bbox):
+        """Any of the race box on the grid? The box test first, then the actual grid points the
+        load would ask for (a box south of Cuba overlaps the lat/lon extent but not the grid)."""
+        if not bbox:
+            return True
+        if not super().covers_bbox(bbox):
+            return False
+        n, s, w, e = bbox
+        if any(on_conus3km(la, lo, 0) for la, lo in ((n, w), (n, e), (s, w), (s, e),
+                                                     ((n + s) / 2, (w + e) / 2))):
+            return True
+        lats, lons = self._grid(bbox)
+        return any(self.on_grid(la, lo) for la in lats for lo in lons)
+
+MODELS = {m.name: m for m in (GFS(), HRRR(), RRFS(), GEFS(), ECMWF(), ECMWF_ENS(), ICON(), GEM())}
 # Default blend: the fast, reliable deterministic models (model spread = confidence). Ensembles
 # (gefs, ecmwf-ens) are opt-in via the request because they multiply the download count.
-DEFAULT_MODELS = ("gfs", "hrrr")   # NAM retired 2026-11-03; RRFS to follow
+# NAM was retired by NOAA on 2026-11-03 and is gone from here; RRFS replaced it (#360). A saved
+# selection that still names "nam" is dropped quietly wherever names are resolved (MODELS.get).
+DEFAULT_MODELS = ("gfs", "hrrr", "rrfs")
 
 
 NOT_HERE = "not here"      # the `skipped` reason a model outside its area carries in the windfield meta
@@ -534,4 +681,4 @@ def coverage_note(model) -> str:
 def available_models():
     return {name: {"kind": m.kind, "horizon_h": m.horizon_h, "members": len(m.members),
                    "priority": m.priority, "coverage": m.coverage_label or "global"}
-            for name, m in MODELS.items() if not getattr(m, "retired", False)}
+            for name, m in MODELS.items()}

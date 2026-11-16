@@ -22,9 +22,9 @@ Every 15 min (systemd timer, short-lived process):
    Each target gets its own run store, keyed by what the samples depend on: route geometry +
    ETAs + shift, or the snapped point. A moved boat or a replaced playbook never reuses old samples.
 2. If the internet is up (a 5 s TCP probe to NOMADS), download any NEW cycle of
-   gfs, nam, hrrr, ecmwf, icon, gem for the route's box. Offline: record from the cache into
+   gfs, hrrr, rrfs, ecmwf, icon, gem for the route's box. Offline: record from the cache into
    the current target's store — any cycle already cached for this box that's newer than what the
-   store holds gets sampled, with no network (ICON/GEM need the network and drop out until back
+   store holds gets sampled, with no network (RRFS/ICON/GEM need the network and drop out until back
    online). If nothing usable covers the target (e.g. no playbook and the boat crossed a 0.25° grid
    line), it posts a small "waiting" marker instead, so the engine stops serving the old spot's
    onboard plume. The iPad then says "Onboard forecast: waiting for internet." (a shore plume, if
@@ -97,7 +97,7 @@ Remove: `sudo systemctl disable --now sr33-orin-plume.timer`, delete the two uni
 | var | default | |
 |---|---|---|
 | `ENGINE_URL` | `http://10.10.10.1:8200` | Pi engine over the cable. Not Tailscale (refused). |
-| `PLUME_MODELS` | `gfs,hrrr,ecmwf,icon,gem` (NAM retired 2026-11-03) | drop `ecmwf` to cut ~88% of the download |
+| `PLUME_MODELS` | `gfs,hrrr,rrfs,ecmwf,icon,gem` (NAM retired 2026-11-03; RRFS replaced it) | drop `ecmwf` to cut ~88% of the download |
 | `GRIB_CACHE` | `~/c4-plume/gribcache` | downloaded model files |
 | `PLUME_DIR` | `~/c4-plume/store` | run history (48 h per model) |
 | `GRIB_KEEP_H` | `30` | prune age for model files |

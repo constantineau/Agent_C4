@@ -358,8 +358,9 @@ Checklists, Fleet, Learnings, Gameplan, Lock-in & Deploy) · RACE (Monitor) · D
   **RaceDefinition** (`shared/race_def.py`: courses/marks/gates, comprehensive requirements
   checklists, rules_profile, fleet, tracker) → human review (editable form, geocoding,
   approve/sign-off) → save. Coordinates only when stated, never guessed.
-- **Optimizer:** multi-model wind field (GFS/NAM/HRRR/GEFS/ECMWF(+ENS) GRIB + ICON/GEM via
-  the Open-Meteo regrid — opt-in A/B checkboxes, DWD's own ICON feed is icosahedral-only;
+- **Optimizer:** multi-model wind field (GFS/HRRR/GEFS/ECMWF(+ENS) GRIB + RRFS/ICON/GEM via
+  the Open-Meteo regrid — RRFS in the default blend with GFS/HRRR, ICON/GEM opt-in A/B
+  checkboxes, DWD's own ICON feed is icosahedral-only;
   key-free sources, lag-aware freshest-cycle pick, cycle fallback, coverage gate,
   crash-isolated cfgrib parse) blended with **venue model-skill weights** (measured
   forecast-vs-observed accuracy, METAR+NDBC, deep GRIB to 2005 — `docs/MODEL_SKILL_
