@@ -14,8 +14,9 @@ _STOP = {"the", "a", "an", "of", "and", "race", "races", "regatta", "annual", "e
 
 
 def _words(name):
+    """The name's telling words. Ordinals and numbers stay: "1st Winter Series Race" and "2nd Winter
+    Series Race" are different races ("78th Bayview Mackinac" still contains "Bayview Mackinac")."""
     s = re.sub(r"\b(?:19|20)\d\d\b", " ", str(name or "").lower())
-    s = re.sub(r"\b\d+(?:st|nd|rd|th)\b", " ", s)          # "78th"
     return {w for w in re.findall(r"[a-z0-9]+", s.replace("'", "")) if w not in _STOP}
 
 

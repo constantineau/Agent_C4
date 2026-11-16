@@ -72,6 +72,13 @@ check("a saved edition without a date: offered, not sure (could be last week's)"
       (racematch.find({"race_id": "wnr-new", "name": "Wednesday Night Race", "year": 2026,
                        "start_date": "2026-07-08"},
                       [{**WEEKLY[0], "start_date": ""}]) or {}).get("sure") is False)
+for one, two in (("1st Winter Series Race", "2nd Winter Series Race"), ("Winter Race 1", "Winter Race 2")):
+    check(f"'{two}' a day after '{one}': a different race",
+          racematch.find({"race_id": "b", "name": two, "year": 2026, "start_date": "2026-11-22"},
+                         [{"race_id": "a", "name": one, "year": 2026, "start_date": "2026-11-21"}]) is None)
+check("'78th Bayview Mackinac Race' is the saved 'Bayview Mackinac Race'",
+      (find(race_id="78th-bayview-mackinac-2026", name="78th Bayview Mackinac Race", year=2026,
+            start_date="2026-07-18") or {}).get("race_id") == "bayview-mackinac-2026")
 check("two that fit equally (no date to tell): nothing offered",
       racematch.find({"race_id": "wnr", "name": "Wednesday Night Race", "year": 2026}, WEEKLY) is None)
 check("no saved races: nothing", racematch.find({"race_id": "a", "name": "A Race"}, []) is None)
