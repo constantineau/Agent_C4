@@ -191,6 +191,14 @@ r = client.get("/api/crossovers", headers=TEAM)
 check("crossovers answer for a cert-only boat", r.status_code == 200
       and r.json()["boat_id"] == "hooligan")
 
+print("6) a long name that's taken still gets a valid id")
+_long = {"YachtName": "A" * 70, "SailNo": "USA 1234567890"}
+_real_get = certboat.boats.get_boat
+certboat.boats.get_boat = lambda bid: {"boat_id": bid} if bid == "a" * 50 else _real_get(bid)
+_id = certboat._new_id(_long)
+certboat.boats.get_boat = _real_get
+check(f"id within 60 characters ({len(_id)})", len(_id) <= 60 and _id != "a" * 50)
+
 shutil.rmtree(_tmp, ignore_errors=True)
 print("ALL OK" if ok else "FAILURES")
 raise SystemExit(0 if ok else 1)

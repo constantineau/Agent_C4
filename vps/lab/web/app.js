@@ -1780,16 +1780,20 @@ function newBoatFromCert() {
     </div></div>`;
   const $ = (s) => el.querySelector(s);
   const out = $("#nbOut");
-  let found = null;
+  let found = null, gen = 0;
   const body = (save) => ({ cert: $("#nbCert").value.trim(), country: $("#nbCountry").value.trim() || null,
                             race_id: Opt.raceId || null, save });
+  // a typed change outdates the preview: Create saves only the certificate shown
+  const stale = () => { gen++; found = null; $("[data-c=create]").hidden = true; out.innerHTML = ""; };
   async function look() {
+    const g = ++gen;
     found = null; $("[data-c=create]").hidden = true;
     if (!$("#nbCert").value.trim()) { out.innerHTML = '<p class="err">Enter a link, number or sail number.</p>'; return; }
     out.innerHTML = '<p class="muted">Looking up…</p>';
     try {
       const r = await apiPost("/api/boats/from-orc", body(false));
       const j = await r.json();
+      if (g !== gen) return;                       // a newer lookup or an edit since
       if (!r.ok) {
         const where = (j.searched || []).length ? " Searched: " + j.searched.join(", ") + "." : "";
         out.innerHTML = `<p class="err">${esc((j.detail || "Not found.") + where)}</p>`; return;
@@ -1797,13 +1801,14 @@ function newBoatFromCert() {
       found = j;
       out.innerHTML = nbPreviewHtml(j.preview) + `<p class="muted">Found in the ${esc(j.country)} list.</p>`;
       $("[data-c=create]").hidden = false; $("[data-c=create]").focus();
-    } catch (e) { out.innerHTML = `<p class="err">${esc(String(e.message || e))}</p>`; }
+    } catch (e) { if (g === gen) out.innerHTML = `<p class="err">${esc(String(e.message || e))}</p>`; }
   }
   async function create() {
     if (!found) return;
     $("[data-c=create]").disabled = true;
     try {
-      const r = await apiPost("/api/boats/from-orc", body(true));
+      const r = await apiPost("/api/boats/from-orc", { cert: found.preview.ref_no, country: found.country,
+                                                       race_id: Opt.raceId || null, save: true });
       const j = await r.json();
       if (!r.ok) { out.innerHTML = `<p class="err">${esc(j.detail || "Not saved.")}</p>`; $("[data-c=create]").disabled = false; return; }
       el.remove();
@@ -1824,6 +1829,7 @@ function newBoatFromCert() {
     else if (c === "look") look();
     else if (c === "create") create();
   });
+  el.addEventListener("input", (e) => { if (e.target.tagName === "INPUT") stale(); });
   el.addEventListener("keydown", (e) => {
     if (e.key === "Escape") el.remove();
     else if (e.key === "Enter" && e.target.tagName === "INPUT") { e.preventDefault(); look(); }

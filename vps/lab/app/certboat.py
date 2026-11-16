@@ -157,7 +157,10 @@ def _find_by_ref(ref):
 
 def _new_id(rec):
     base = _slug(_name(rec)) or _slug(rec.get("SailNo")) or "boat"
-    tries = [base, f"{base}-{_slug(rec.get('SailNo'))}".strip("-")]
+    sail = _slug(rec.get("SailNo"))[:20]
+    # ids stay within the profile's 60-character limit, suffix included
+    tries = [base, f"{base[:59 - len(sail)]}-{sail}".strip("-")]
+    base = base[:52]
     for bid in tries:
         if not boats.get_boat(bid):
             return bid
