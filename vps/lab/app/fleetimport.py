@@ -95,7 +95,7 @@ def roster_from_yb(definition):
 
 
 # ---- ORC handicap enrichment ----------------------------------------------------------------------
-_orc_cache = {}     # cc -> (epoch, {by_sail, by_name, rows})
+_orc_cache = {}     # cc -> (epoch, {by_sail, by_name, by_ref, n})
 
 
 def _orc_dump(country):
@@ -107,10 +107,13 @@ def _orc_dump(country):
     if hit and now - hit[0] < _ORC_TTL:
         return hit[1]
     rows = json.loads(_get(_ORC_URL.format(cc=cc)).decode("utf-8-sig")).get("rms") or []
-    idx = {"by_sail": {}, "by_name": {}, "n": len(rows)}
+    idx = {"by_sail": {}, "by_name": {}, "by_ref": {}, "n": len(rows)}
     for r in rows:
         s = _norm_sail(r.get("SailNo"))
         n = _norm(r.get("YachtName"))
+        ref = str(r.get("RefNo") or "").strip().upper()
+        if ref:                        # every cert, incl. a second one under the same sail number
+            idx["by_ref"].setdefault(ref, r)
         if s:
             idx["by_sail"].setdefault(s, r)
         if n:
@@ -378,7 +381,10 @@ def roster_from_text(text):
 
 # YachtScoring is a JS SPA, but its public API serves the entry list as JSON — fetch that directly
 # (like YB), instead of the HTML shell a server-side fetch gets ("You need to enable JavaScript").
-_YS_EVENT_RE = re.compile(r"(?:emenu/|e?id=|event/)(\d+)", re.I)
+# Any YachtScoring page of an event carries its number: emenu/<id>, event/<id>, eID=<id>, and the
+# newer per-page links (event_scratch_sheet/<id>, event_entry_list/<id>, ...). Else: a bare
+# all-digit path segment.
+_YS_EVENT_RE = re.compile(r"(?:emenu/|e?id=|event[a-z_]*/)(\d+)|/(\d{3,})(?=[/?#]|$)", re.I)
 _YS_API = "https://api.yachtscoring.com/v1/public/event/{eid}/boats?page={page}&size={size}"
 
 
@@ -484,7 +490,7 @@ def roster_from_url(url):
         if not m:
             return {"ok": False, "note": "That YachtScoring link has no event number "
                     "(it should look like .../emenu/<id>)."}
-        return roster_from_yachtscoring(m.group(1))
+        return roster_from_yachtscoring(m.group(1) or m.group(2))
     if "regattanetwork.com" in url.lower():
         m = _RN_EVENT_RE.search(url)
         if not m:

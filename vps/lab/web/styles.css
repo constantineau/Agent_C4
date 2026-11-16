@@ -559,6 +559,8 @@ body:not(.is-dirty) .if-dirty, body.is-dirty .if-clean { display: none; }
 .modal p { margin: 0 0 18px; color: var(--muted); }
 .modal p b { color: var(--ink); }
 .modal-btns { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+.nb-prev { margin: 0 0 14px; border-collapse: collapse; }
+.nb-prev td { padding: 2px 12px 2px 0; }
 .modal button.danger { color: var(--bad); border-color: var(--bad); }
 /* "Removed X · Undo" after a ✕ (app.js undoToast): above the Save bar, which shows once a row is removed */
 .undo-toast { position: fixed; z-index: 45; left: 50%; transform: translateX(-50%);
