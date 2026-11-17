@@ -84,6 +84,8 @@ LAYLINE_COMMIT = _flag("ROUTE_LAYLINE_COMMIT")
 # WIND-OVER-WATER (2d lever b): index the polar by the wind the boat feels over the WATER (ground wind
 # − current), not the ground wind. Default ON; a no-op wherever there's no current, so it's safe.
 WIND_OVER_WATER = _flag("ROUTE_WIND_OVER_WATER")
+# below this boat speed (kn) a heading counts as unsailable: the layline commit never keeps only those
+MIN_SAIL_KN = 0.3
 LAYLINE_COMMIT_EPS = float(os.environ.get("ROUTE_LAYLINE_COMMIT_EPS", "2.0"))  # deg slack before committing
 # LAYLINE TACK (#66): also offer the step that tacks exactly on the layline (see route_leg).
 LAYLINE_TACK = _flag("ROUTE_LAYLINE_TACK")
@@ -455,10 +457,15 @@ def _layline_pair(P, tws, twd, pos, mlat, mlon, length_nm):
 def _layline_fan(P, tws, twd, pos, bmark, fan):
     """The layline commit (#1) for one node: when the mark (bearing `bmark`) is on or past the
     layline (more than the VMG angle off the wind axis: dead upwind on a beat, dead downwind on a
-    run), keep only the headings of the board that lays it. Otherwise `fan` unchanged."""
+    run), keep only the headings of the board that lays it. Otherwise `fan` unchanged. Never
+    returns only headings the boat can't sail (#257)."""
     half = _vmg_twa(P, tws, pos)
     if half is None:
         return fan
+
+    def sails(h):                  # a heading the boat makes way on (not in the no-go zone)
+        return _polar_speed(P, tws, abs(_wrap180(h - twd))) >= MIN_SAIL_KN
+
     axis = twd if pos == "beat" else (twd + 180.0)
     if pos == "run":
         # the run VMG angle is a TWA (off the wind, ~150°); `off` below is measured from dead
@@ -476,9 +483,18 @@ def _layline_fan(P, tws, twd, pos, bmark, fan):
         # lookup "fetching" the mark at 30°). Only headings the boat can sail (#257): a mark just
         # inside the beat angle left only no-go headings, all at speed 0, and the leg stranded.
         above = [h for h in committed if abs(_wrap180(h - axis)) <= abs(off) + 1.0
-                 and _polar_speed(P, tws, abs(_wrap180(h - twd))) >= 0.3]
+                 and sails(h)]
         committed = above + [bmark] if above else committed
-    return committed or [bmark]   # never strand the node — keep the fetch heading
+    if any(sails(h) for h in committed):
+        return committed
+    # never strand the node (#257): if nothing kept can be sailed, fall back to the heading of the
+    # whole fan that closes on the mark fastest (best speed toward it); the fetch heading only when
+    # the boat can sail none of them
+    live = [h for h in fan if sails(h)]
+    if not live:
+        return committed or [bmark]
+    return [max(live, key=lambda h: _polar_speed(P, tws, abs(_wrap180(h - twd)))
+                * math.cos(math.radians(_wrap180(h - bmark))))]
 
 
 def _beat_dist_nm(P, tws, twd, dmark, bmark):
