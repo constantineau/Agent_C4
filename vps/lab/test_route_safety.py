@@ -184,6 +184,11 @@ check("...and its ETA carries two tack costs",
       _free is not None and _cost is not None
       and abs((_cost["eta"] - _free["eta"]) - 2 * O.TACK_COST_S) < 1e-6 and O.TACK_COST_S > 0,
       f"{_cost and _free and _cost['eta'] - _free['eta']:.1f} s vs 2 × {O.TACK_COST_S}")
+with O.boat_tack_cost(45.0):            # a boat whose profile sets its own tack cost (#305)
+    _boat = O._corner_leg(Steady(8.5, 0.0), P, _leg0, [a_, b_, _c3], _c3[0], _c3[1], None, 1.0)
+check("...using the boat's own tack cost, not the default",
+      _free is not None and _boat is not None and abs((_boat["eta"] - _free["eta"]) - 2 * 45.0) < 1e-6,
+      f"{_boat and _free and _boat['eta'] - _free['eta']:.1f} s vs 2 × 45")
 _reach = O._corner_leg(Steady(8.5, 90.0), P, _leg0, [a_, b_, _c3], _c3[0], _c3[1], None, 1.0)
 check("...a rounding sailed straight adds no tack time",
       _reach is not None and _reach["tacks"] == 3 and len(_reach["path"]) == 3)
