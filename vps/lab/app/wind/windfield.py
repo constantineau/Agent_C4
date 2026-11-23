@@ -17,6 +17,7 @@ import datetime as dt
 import math
 import os
 
+from . import corrections as corr_mod
 from . import grib
 from .models import MODELS, DEFAULT_MODELS, NOT_HERE, ModelSource
 
@@ -118,13 +119,14 @@ def coverage_notes(meta):
 
 def build_windfield(bbox, t_start: float, t_end: float, models=DEFAULT_MODELS,
                     ensemble_members: int = 0, on_progress=None,
-                    model_weights=None, model_bias=None, fallback_tries=None):
+                    model_weights=None, model_bias=None, fallback_tries=None, corrections=None):
     """Ingest the selected models over `bbox` for valid times spanning [t_start, t_end].
 
     bbox = (north, south, west, east). Returns a WindField. `on_progress(msg)` is called with
     short status strings as each model loads (for UI/log feedback). Per model: picks the freshest
     cycle that reaches the race window, requests only the forecast-hours that cycle actually has, and
-    falls back to the previous cycle if the freshest is still too sparse to route on."""
+    falls back to the previous cycle if the freshest is still too sparse to route on.
+    `corrections` = the navigator's manual per-model corrections (#384, `corrections.normalize`)."""
     series = {}                   # (model, member) -> [GribFrame sorted by valid_time]
     meta = []
     parser = grib.IsolatedGribParser() if grib.ISOLATE else None   # crash-isolated cfgrib parse (1/build)
@@ -156,11 +158,12 @@ def build_windfield(bbox, t_start: float, t_end: float, models=DEFAULT_MODELS,
         if parser is not None:
             parser.close()
     return WindField(series, meta, bbox, t_start, t_end,
-                     model_weights=model_weights, model_bias=model_bias)
+                     model_weights=model_weights, model_bias=model_bias, corrections=corrections)
 
 
 class WindField:
-    def __init__(self, series, meta, bbox, t_start, t_end, model_weights=None, model_bias=None):
+    def __init__(self, series, meta, bbox, t_start, t_end, model_weights=None, model_bias=None,
+                 corrections=None):
         self.series = series          # (model, member) -> [GribFrame]
         self.meta = meta
         self.bbox = bbox
@@ -170,6 +173,8 @@ class WindField:
         # bias to REMOVE from each model before the vector mean. Empty => today's static-priority blend.
         self.model_weights = model_weights or {}
         self.model_bias = model_bias or {}
+        # #384: manual per-model rotate/scale/time-shift (+ fade), applied before the blend
+        self.corrections = corr_mod.normalize(corrections)
 
     @property
     def loaded(self) -> bool:
@@ -230,32 +235,40 @@ class WindField:
             out["held_side"] = side
         return out
 
+    def _model_epoch(self, model, epoch):
+        """The time to sample `model` at for real time `epoch` (its manual time shift, #384)."""
+        c = self.corrections.get(model)
+        return corr_mod.sample_epoch(c, epoch, self.t_start) if c else epoch
+
     def _samples(self, lat, lon, epoch, hold):
         """→ (samples, held side or None)."""
         side = None
-        items = list(self.series.items())
+        items = [(k, fr, self._model_epoch(k[0], epoch)) for k, fr in self.series.items()]
         if hold:
             # stand-in only from the series whose forecast ends (or begins) NEAREST this time: an
             # 18 h model's last frame must not blend into hour 120 beside a 72 h model's
-            def gap(fr):
-                return max(fr[0].valid_time - epoch, epoch - fr[-1].valid_time, 0.0)
+            def gap(fr, e):
+                return max(fr[0].valid_time - e, e - fr[-1].valid_time, 0.0)
             # ...among the series that actually cover this POSITION (Codex on #200: a nearer-ending
             # model whose grid misses the boat must not hide a usable one → no wind at all)
-            items = [(k, fr) for k, fr in items
-                     if fr and self._series_uv(fr, lat, lon, epoch, hold=True) is not None]
+            items = [(k, fr, e) for k, fr, e in items
+                     if fr and self._series_uv(fr, lat, lon, e, hold=True) is not None]
             if items:
-                best = min(gap(fr) for _k, fr in items)
-                items = [(k, fr) for k, fr in items if gap(fr) <= best + 1.0]
-                side = "end" if epoch > items[0][1][-1].valid_time else "start"
+                best = min(gap(fr, e) for _k, fr, e in items)
+                items = [(k, fr, e) for k, fr, e in items if gap(fr, e) <= best + 1.0]
+                side = "end" if items[0][2] > items[0][1][-1].valid_time else "start"
         samples = []                  # (u, v, weight, model)
-        for (model, _member), frames in items:
-            uv = self._series_uv(frames, lat, lon, epoch, hold=hold)
+        for (model, _member), frames, e in items:
+            uv = self._series_uv(frames, lat, lon, e, hold=hold)
             if uv is None:
                 continue
             u, v = uv
             bias = self.model_bias.get(model)
             if bias:                                  # de-bias this model before it enters the mean
                 u, v = _debias_uv(u, v, bias[0], bias[1])
+            corr = self.corrections.get(model)
+            if corr:                                  # the navigator's manual correction (#384)
+                u, v = corr_mod.apply_uv(corr, u, v, epoch, self.t_start)
             src = MODELS.get(model)            # a source not in the registry blends at x1, never raises
             weight = (src.priority if src else 1.0) * self.model_weights.get(model, 1.0)
             samples.append((u, v, weight, model))
@@ -316,4 +329,6 @@ class WindField:
                 "window": [round(self.t_start), round(self.t_end)], "bbox": self.bbox,
                 "series": len(self.series),
                 "total_frames": sum(len(f) for f in self.series.values()),
-                "skill_weighted": bool(self.model_weights or self.model_bias)}
+                "skill_weighted": bool(self.model_weights or self.model_bias),
+                "corrections": corr_mod.summary(self.corrections,
+                                                {k[0] for k, fr in self.series.items() if fr})}

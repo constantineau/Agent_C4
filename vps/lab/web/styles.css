@@ -626,3 +626,9 @@ button.qh-btn[aria-expanded="true"] > span { color: var(--ink); border-color: va
 .vs-rose-t td, .vs-rose-t th { text-align: right; }
 .vs-rose-t td:first-child, .vs-rose-t th:first-child { text-align: left; }
 .vs-scroll { overflow-x: auto; max-width: 100%; }
+
+/* Model corrections (modelcorr.js, #384) */
+.mc { margin-top: 6px; max-width: 100%; overflow-x: auto; }
+.mc-table { border-collapse: collapse; margin: 6px 0; font-size: 12px; }
+.mc-table th, .mc-table td { padding: 2px 4px; text-align: left; }
+.mc-table input[type="datetime-local"] { max-width: 180px; }
