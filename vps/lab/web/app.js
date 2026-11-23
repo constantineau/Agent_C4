@@ -4672,6 +4672,7 @@ function paintDebrief() {
       <div class="card"><div class="placeholder">No race yet. <a href="#races">Add one in Races</a>.</div></div>
       ${debPracticeCard()}
       ${body}
+      ${typeof manCard === "function" ? manCard(r, Deb) : ""}
       ${retroCard()}</div>`;
     if (running && !Deb.poll) Deb.poll = setInterval(debPoll, 4000);
     return;
@@ -4692,6 +4693,7 @@ function paintDebrief() {
     ${debRecordingsCard()}
     ${debPracticeCard()}
     ${body}
+    ${typeof manCard === "function" ? manCard(r, Deb) : ""}
     ${debTrackCard()}
     ${retroCard()}
   </div>`;
