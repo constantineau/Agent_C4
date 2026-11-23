@@ -99,7 +99,9 @@ check("a big box coarsens the grid to stay under the point cap",
 
 # ---- 3) the fetch (Open-Meteo stubbed) ------------------------------------------------------------
 print("fetch:")
-T0 = int(dt.datetime(2026, 11, 20, 12, tzinfo=UTC).timestamp())
+# A day ahead of the clock, on a whole hour: a fixed date turned the GRIB path off once it
+# passed (build_windfield only fetches the forecast hours still ahead of now).
+T0 = (int(dt.datetime.now(UTC).timestamp()) // 3600 + 24) * 3600
 calls = []
 BAD = set()                 # points the fake server refuses as off-grid
 REFUSE = {"why": None}      # a reason to refuse every call with
