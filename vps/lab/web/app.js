@@ -1652,6 +1652,7 @@ async function renderGameplan() {
         <label class="optchk"><input type="checkbox" id="optWaves" checked> Waves</label>${qhelp("Slows the boat in waves. Uncheck for flat water.")}
         <label class="optchk"><input type="checkbox" id="optCurrent" checked> Current</label>${qhelp("Includes water current. Run once without it to see what it's worth.")}
         <label class="optchk"><input type="checkbox" id="optPerModel"> Route per model <span class="muted">(slower)</span></label>${qhelp("Also routes each weather model on its own and draws them all.")}
+        <label class="optchk"><input type="checkbox" id="optCrit"> Time-loss band <span class="muted">(slower)</span></label>${qhelp("Shades where you can sail and lose under 5, 10 or 20 min on the best route. Narrow band: the route matters. Wide: the side hardly matters.")}
         <label class="optchk">Detail
           <select id="optRes" oninput="updateResHint()">
             <option value="fast"${Opt.resolution === "fast" ? " selected" : ""}>Fast</option>
@@ -2319,6 +2320,8 @@ async function runOptimize() {
   const body = { race_id: Opt.raceId, course_id: Opt.courseId, models: Opt.chosen, ensemble_members: ens,
     avoid_land: avoidEl ? avoidEl.checked : true, per_model: pmEl ? pmEl.checked : false,
     resolution: Opt.resolution, use_waves: Opt.useWaves, use_current: Opt.useCurrent };
+  const critEl = document.getElementById("optCrit");
+  if (critEl && critEl.checked) body.criticality = true;                 // #379, opt-in
   const startEpoch = optStartEpoch();
   if (startEpoch != null) body.start_epoch = startEpoch;
   Opt.running = true; jobWebVersion(true);
