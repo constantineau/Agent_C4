@@ -66,7 +66,9 @@ const ReplayCore = (function () {
   // app/replay.window_stats: angles are circular (TWA/AWA signed, directions 0..360).
   function windowStats(samples, a, b, danger, chans, step) {
     const lo = Math.min(a, b), hi = Math.max(a, b);
-    const inside = (samples || []).filter((s) => s.t >= lo && s.t <= hi);
+    // a sample averages [t, t + step): only whole steps inside the window count (same rule as
+    // the fault overlap, and as app/replay.window_stats)
+    const inside = (samples || []).filter((s) => s.t >= lo && s.t + (step || 0) <= hi);
     const used = inside.filter((s) => !inDanger(s.t, danger, step));
     const stats = {};
     for (const ch of chans || Object.keys(LABELS)) {
@@ -87,7 +89,8 @@ const ReplayCore = (function () {
       }
       stats[ch] = { mean: Math.round(mean * 100) / 100, sd: Math.round(sd * 100) / 100, n: v.length };
     }
-    return { start: lo, end: hi, seconds: hi - lo, n: inside.length, left_out: inside.length - used.length, stats };
+    return { start: lo, end: hi, seconds: hi - lo, n: inside.length, left_out: inside.length - used.length, stats,
+             coarse: !!step && (hi - lo) < 10 * step };
   }
 
   // B − A for a channel; angles take the short way round
@@ -158,7 +161,7 @@ const Replay = (function () {
   async function open(raceId, recording, boatId, name) {
     stop();
     Object.assign(S, { open: true, raceId, recording, boatId, name, data: null, ch: null,
-      markers: [], view: null, msg: "Loading…", saveMsg: "", windMsg: "" });
+      markers: [], view: null, msg: "Loading…", saveMsg: "", windMsg: "", windBusy: false });
     ensureNode(); attach(); paint();
     try {
       const d = await api("/api/debrief/replay?" + q(key()));
@@ -293,7 +296,9 @@ const Replay = (function () {
     }).join("");
     const head = (lbl, st) => `${lbl} <span class="muted" style="font-weight:400">${C.fmtClock(st.start)} · ${C.fmtDur(st.seconds)}${st.left_out ? ` · ${st.left_out} left out` : ""}</span>`;
     const okLen = a.seconds >= TEST_MIN && a.seconds <= TEST_MAX;
-    el.innerHTML = `<table class="fleet-tbl rp-stbl"><thead><tr><th></th><th>${head("A", a)}</th>${b ? `<th>${head("B", b)}</th><th>B − A</th>` : ""}</tr></thead><tbody>${rows}</tbody></table>
+    const coarse = a.coarse || (b && b.coarse)
+      ? `<div class="muted" style="font-size:12px">Few samples at ${S.ch.step_s} s each. Zoom to markers for finer data.</div>` : "";
+    el.innerHTML = `<table class="fleet-tbl rp-stbl"><thead><tr><th></th><th>${head("A", a)}</th>${b ? `<th>${head("B", b)}</th><th>B − A</th>` : ""}</tr></thead><tbody>${rows}</tbody></table>${coarse}
       <div class="opt-controls" style="margin-top:6px">
         <input id="rpTestName" placeholder="Test name, e.g. port, new jib" style="width:240px" maxlength="80">
         <button class="mini" ${okLen ? "" : "disabled"} onclick="Replay.saveTest()">Save A as test</button>

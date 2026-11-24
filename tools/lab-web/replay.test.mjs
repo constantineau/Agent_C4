@@ -88,7 +88,7 @@ test("stats: a constant angle has SD 0, not NaN", () => {
 test("a step that only partly overlaps a fault is left out (Codex on #397)", () => {
   // 7 s steps at 100 and 107; fault from 105: the step at 100 mixes healthy and faulty seconds
   const s = [{ t: 93, bsp: 6 }, { t: 100, bsp: 50 }, { t: 107, bsp: 50 }];
-  const st = C.windowStats(s, 93, 107, [[105, 110]], ["bsp"], 7);
+  const st = C.windowStats(s, 93, 114, [[105, 110]], ["bsp"], 7);
   assert.equal(st.left_out, 2); assert.equal(st.stats.bsp.mean, 6);
   assert.equal(C.inDanger(100, [[105, 110]]), false);     // a point sample at 100 is fine
   assert.equal(C.inDanger(100, [[105, 110]], 7), true);
@@ -117,4 +117,25 @@ test("only the newest channel request lands, and only for the race still open", 
   S.raceId = "B";
   ans(pending[2], "race A"); await old;
   assert.equal(S.ch.tag, "whole");
+});
+
+test("only whole steps inside the window count; a short window says so (Codex on #397)", () => {
+  const s = [{ t: 0, bsp: 6 }, { t: 7, bsp: 6 }, { t: 14, bsp: 99 }];   // step at 14 runs to 21
+  const st = C.windowStats(s, 0, 20, [], ["bsp"], 7);
+  assert.equal(st.n, 2); assert.equal(st.stats.bsp.mean, 6);
+  assert.equal(st.coarse, true);                                       // 20 s at 7 s steps
+  assert.equal(C.windowStats(s, 0, 200, [], ["bsp"], 7).coarse, false);
+  assert.equal(C.windowStats(s, 0, 14, [], ["bsp"]).n, 3);             // points: ends inclusive
+});
+
+test("opening another recording clears a wind load in flight", async () => {
+  const c3 = { requestAnimationFrame: () => 1, cancelAnimationFrame: () => {}, performance: { now: () => 0 },
+    document: { getElementById: () => null }, apiGet: () => new Promise(() => {}) };
+  vm.createContext(c3);
+  vm.runInContext(src + "\nthis.R = Replay;", c3);
+  const S = c3.R._state;
+  S.windBusy = true; S.windMsg = "fetching";
+  // the state resets before any DOM work; with no DOM here the rest of open() rejects, ignored
+  await c3.R.open("A", 200, null, "other").catch(() => {});
+  assert.equal(S.windBusy, false); assert.equal(S.windMsg, "");
 });

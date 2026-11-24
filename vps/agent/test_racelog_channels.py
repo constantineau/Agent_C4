@@ -95,3 +95,10 @@ def test_cancelled_direction_is_none_and_unknown_paths_ignored():
             row(0, "navigation.speedOverGround", "a", 1.0)]
     out = RC.assemble(rows, no_rank, 0, 5)[0]
     assert out["hdg"] is None and out["sog"] == round(KN, 2)
+
+
+def test_fractional_start_keeps_readings_in_the_window():
+    # window starts at 100.5; a reading at 100.7 floors to second 100 and must not land in a step
+    # that starts before the window (Codex on #397)
+    out = RC.assemble([row(100, "navigation.speedThroughWater", "a", 1.0)], no_rank, 100.5, 5)
+    assert out[0]["t"] == 100.0

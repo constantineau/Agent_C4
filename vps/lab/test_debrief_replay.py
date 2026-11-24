@@ -170,7 +170,7 @@ def test_window_stats_step_overlapping_a_fault_is_left_out():
     # 7 s steps at 100 and 107, fault from 105: the step at 100 mixed healthy and faulty
     # readings and used to count because its start is outside the fault (Codex on #397)
     samples = [{"t": 93, "bsp": 6.0}, {"t": 100, "bsp": 50.0}, {"t": 107, "bsp": 50.0}]
-    st = RP.window_stats(samples, 93, 107, danger=[[105, 110]], step=7)
+    st = RP.window_stats(samples, 93, 114, danger=[[105, 110]], step=7)
     assert st["left_out"] == 2 and st["stats"]["bsp"]["mean"] == 6.0
     assert RP.window_stats(samples, 93, 107, danger=[[105, 110]])["left_out"] == 1  # points
     assert not RP._in(98, [[105, 110]], 7)            # [98, 105) ends as the fault starts
@@ -187,6 +187,13 @@ def test_saved_test_uses_the_agent_step_for_faults():
     r = RP.save_test("r1", T0, "x", T0, T0 + 200, agent_get=agent)
     assert r["ok"] and r["test"]["left_out"] == 2
     assert r["test"]["stats"]["bsp"]["mean"] == 6.0
+
+
+def test_window_stats_only_whole_steps_inside():
+    samples = [{"t": 0, "bsp": 6.0}, {"t": 7, "bsp": 6.0}, {"t": 14, "bsp": 99.0}]
+    st = RP.window_stats(samples, 0, 20, step=7)      # the step at 14 runs to 21: out
+    assert st["n"] == 2 and st["stats"]["bsp"]["mean"] == 6.0
+    assert RP.window_stats(samples, 0, 14)["n"] == 3  # point samples: ends inclusive
 
 
 # ---- saved tests -----------------------------------------------------------------------------

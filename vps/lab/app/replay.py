@@ -311,7 +311,9 @@ def window_stats(samples, start, end, danger=(), channels_=CHANNELS, step=None):
     interval (`step`: seconds each sample averages, None for point samples).
     Angles: circular mean (TWA/AWA signed, directions 0..360) and circular SD in degrees."""
     a, b = min(start, end), max(start, end)
-    inside = [s for s in samples if a <= s["t"] <= b]
+    # a sample averages [t, t + step): only whole steps inside the window count, the same rule
+    # as the fault overlap (Codex on #397)
+    inside = [s for s in samples if a <= s["t"] and s["t"] + float(step or 0) <= b]
     used = [s for s in inside if not _in(s["t"], danger, step)]
     out = {}
     for ch in channels_:
@@ -330,7 +332,7 @@ def window_stats(samples, start, end, danger=(), channels_=CHANNELS, step=None):
             mean = sum(vals) / len(vals)
             sd = math.sqrt(sum((v - mean) ** 2 for v in vals) / len(vals)) if len(vals) > 1 else 0.0
         out[ch] = {"mean": round(mean, 2), "sd": round(sd, 2), "n": len(vals)}
-    return {"start": a, "end": b, "seconds": round(b - a, 1), "n": len(inside),
+    return {"start": a, "end": b, "seconds": round(b - a, 1), "n": len(inside), "step_s": step,
             "left_out": len(inside) - len(used), "stats": out}
 
 

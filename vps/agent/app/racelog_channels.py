@@ -63,7 +63,9 @@ def assemble(rows, rank, start, step):
         if key in best and best[key][0] <= rk:
             continue
         best[key] = (rk, r)
-    start, step = float(start), max(1, int(step))
+    # steps start on the whole second the window starts in: readings are floored to seconds,
+    # so a fractional start (100.5) would put the reading at 100.7 in a step before the window
+    start, step = float(math.floor(float(start))), max(1, int(step))
     acc = {}            # (b, path) -> [sum m, n m, sum s, sum c, n sc]
     for (sec, path), (_rk, r) in best.items():
         b = start + math.floor((sec - start) / step) * step
