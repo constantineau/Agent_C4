@@ -38,7 +38,7 @@ test("names the weather and its age by hour", () => {
 
 test("same wind: route choice and forecast are separate rows", () => {
   const r = { oracle_weather: WEATHER, playbook: { predicted_hours: 10 },
-    regret: { kind: "same_wind", minutes: 12, forecast_error_minutes: 30, plan_on_actual_hours: 10.5 } };
+    regret: { kind: "same_wind", minutes: 12, forecast_error_minutes: 30, plan_on_actual_hours: 10.5, forecast_check: "real" } };
   const out = load().debBasisRows(r, "OLD");
   assert.match(out, /Route choice<\/b> 12 min slower than the best route, same wind/);
   assert.match(out, /The plan's route took 30 min longer than forecast/);
@@ -51,6 +51,15 @@ test("faster than forecast reads as less", () => {
   const out = load().debBasisRows(r, "OLD");
   assert.match(out, /same time as the best route/);
   assert.match(out, /took 15 min less than forecast/);
+});
+
+test("on a forecast, the gap is between two forecasts, not forecast error", () => {
+  const r = { playbook: {}, regret: { kind: "same_wind", minutes: -4, forecast_error_minutes: 20, forecast_check: "two_forecasts" } };
+  const out = load().debBasisRows(r, "OLD");
+  assert.match(out, /Two forecasts<\/b>/);
+  assert.match(out, /took 20 min longer on a later forecast than on its own/);
+  assert.doesNotMatch(out, /than forecast/);
+  assert.match(out, /4 min faster than the best route/);
 });
 
 test("an older report keeps the old row; a failed split says why", () => {

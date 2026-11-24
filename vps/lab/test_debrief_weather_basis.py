@@ -238,6 +238,35 @@ def test_a_recording_far_past_the_gun_doesnt_size_the_window(monkeypatch):
     assert asked == [4.0]
 
 
+def test_on_a_forecast_it_is_two_forecasts_not_forecast_error(monkeypatch, tactics):
+    reg = tactics(_pb(PATH))["regret"]
+    assert reg["forecast_check"] == "real"                    # the fixture's wind is analyses
+    monkeypatch.setattr(JD, "_oracle_windfield", lambda *a, **k: (WF(), "archive"))
+    tac = tactics(_pb(None))
+    assert tac["regret"]["forecast_check"] == "two_forecasts"
+    assert "two forecasts" in tac["regret"]["split_note"]
+    assert "forecast error" not in tac["regret"]["split_note"]
+    assert "two forecasts" in tac["caveat"]
+    dogleg = [PATH[0], {"lat": 44.066, "lon": -81.85}, PATH[1]]
+    reg = tactics(_pb(dogleg))["regret"]
+    rep = {"tactics_available": True, "race_name": "Test", "actual_track": {},
+           "regret": {**reg, "side_matched": False, "recommended_side": "left",
+                      "side_paid": "right"}}
+    c = JD._deterministic_critique(rep)
+    assert "real wind" in c["assessment"] and "not the real wind" in c["assessment"]
+    assert "forecast was off" not in c["assessment"]
+    assert "between two forecasts" in c["proposed_learnings"]
+    assert "forecast off" not in c["proposed_learnings"]
+
+
+def test_a_plan_faster_than_the_best_route_reads_faster():
+    rep = {"tactics_available": True, "race_name": "Test", "actual_track": {},
+           "regret": {"kind": "same_wind", "minutes": -6, "forecast_error_minutes": None,
+                      "side_matched": False, "recommended_side": "left", "side_paid": "right"}}
+    a = JD._deterministic_critique(rep)["assessment"]
+    assert "6 min faster than the best" in a and "slower" not in a
+
+
 def test_report_carries_the_weather(tactics):
     tac = tactics(_pb(PATH))
     assert tac["weather"]["kind"] == "analyses"

@@ -561,12 +561,21 @@ def _tactics(d, race_id, pb, models, log, boat=None, finish_hint=None):
                                               else None),
                    "vs_forecast_minutes": (round(vs_forecast_h * 60) if vs_forecast_h is not None
                                            else None),
+                   # only hourly analyses are the wind that blew; on a forecast this "error"
+                   # is the difference between two forecasts (Codex on #412)
+                   "forecast_check": "real" if wind_basis == "analyses" else "two_forecasts",
                    "split_note": None if plan_on_h is not None else (
-                       f"Time lost includes forecast error: {split_why}.")},
+                       f"Time lost includes {_fc_words(wind_basis)}: {split_why}.")},
         "windfield": {**wf.status(), "basis": wind_basis},
         "weather": weather,
         "caveat": _caveat(wind_basis, basis, plan_on_h is None and split_why),
     }
+
+
+def _fc_words(wind_basis):
+    """What the ETA gap measures: forecast error only against the hourly analyses."""
+    return ("forecast error" if wind_basis == "analyses"
+            else "the difference between two forecasts")
 
 
 def _caveat(wind_basis, basis, split_why=None):
@@ -580,7 +589,7 @@ def _caveat(wind_basis, basis, split_why=None):
     else:
         text = "The best route uses the best forecast available, not the wind that really blew."
     if split_why:
-        text += f" Time lost includes forecast error: {split_why}."
+        text += f" Time lost includes {_fc_words(wind_basis)}: {split_why}."
     return text + (" " + basis["note"] if basis["note"] else "")
 
 
@@ -671,6 +680,7 @@ def _deterministic_critique(r):
     mins = reg["minutes"]
     same_wind = reg.get("kind") == "same_wind"
     fc = reg.get("forecast_error_minutes") if same_wind else None
+    fc_real = reg.get("forecast_check", "real") == "real"
     if matched:
         assess = (f"The plan's recommended side ({rec}) is the side the wind ended up favoring. "
                   "The pre-race read held up.")
@@ -679,16 +689,23 @@ def _deterministic_critique(r):
         assess = (f"The plan recommended {rec} but the wind favored {side_paid}. The pre-race forecast "
                   "pointed the other way" + (
                       "." if mins is None else
-                      f" — on the same wind its route was about {abs(mins)} min slower than the "
-                      "best." if same_wind else
+                      f" — on the same wind its route was about the same as the best." if
+                      same_wind and abs(mins) < 1 else
+                      f" — on the same wind its route was about {abs(mins)} min "
+                      + ("slower" if mins > 0 else "faster") + " than the best."
+                      if same_wind else
                       f" — about {abs(mins)} min of regret vs perfect foresight."))
         if mins is not None and (reg.get("basis") or {}).get("note"):
             assess += " " + reg["basis"]["note"]
         lesson = (f"{side_paid} paid, not the recommended {rec}. Watch the first-beat trigger more "
                   "aggressively next time; the branch to {side_paid} should have fired.")
     if fc is not None and abs(fc) >= 1:
-        assess += (f" The forecast was off too: the plan's route took {abs(fc)} min "
-                   + ("longer" if fc > 0 else "less") + " on the real wind than forecast.")
+        if fc_real:
+            assess += (f" The forecast was off too: the plan's route took {abs(fc)} min "
+                       + ("longer" if fc > 0 else "less") + " on the real wind than forecast.")
+        else:
+            assess += (f" On a later forecast (not the real wind) the plan's route took {abs(fc)} "
+                       "min " + ("longer" if fc > 0 else "less") + " than on its own forecast.")
     _b = reg.get("basis")              # older reports carry no basis: say nothing about it
     _lacks = [n for n in ("current", "waves") if _b and not _b.get(n)]
     at = r.get("actual_track") or {}
@@ -717,7 +734,8 @@ def _deterministic_critique(r):
                                   + ((f"; route cost ~{mins} min on the same wind" if same_wind
                                       else f"; regret ~{mins} min vs optimal")
                                      if mins is not None else "")
-                                  + (f"; forecast off by {fc} min" if fc else "")
+                                  + ((f"; forecast off by {fc} min" if fc_real
+                                      else f"; {fc} min between two forecasts") if fc else "")
                                   + (f" (without {' and '.join(_lacks)})"
                                      if mins is not None and _lacks else "")
                                   + (" (today's boat settings)"
@@ -783,6 +801,9 @@ def _critique(r):
         "on the oracle wind minus the oracle route: the route call alone, forecast error removed; "
         "regret.forecast_error_minutes is how much longer (+) or shorter (-) the plan's route took on "
         "that wind than its forecast said: forecast error, not the crew's call. Keep the two apart. "
+        "That is real forecast error ONLY when regret.forecast_check is 'real' (hourly analyses); "
+        "when it is 'two_forecasts' the oracle wind is itself a forecast, so call it the difference "
+        "between two forecasts and never call that wind the real wind. "
         "When regret.kind is 'vs_forecast' the split was not possible and regret.minutes compares the "
         "plan's FORECAST time with the oracle's time, so it includes forecast error. ORACLE_WEATHER "
         "says which wind the oracle used: 'analyses' (each hour's analysis, closest to what blew), "

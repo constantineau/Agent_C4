@@ -20,11 +20,17 @@ function debRouteCall(min) {
                  : debMinWord(min) + " faster than the best route";
 }
 
-// "took 15 min longer than forecast" / "took 10 min less than forecast"
-function debForecastErr(min) {
+// real = the best route used hourly analyses (the wind that blew). Otherwise its wind is itself a
+// forecast, so the gap is between two forecasts, not forecast error.
+// "took 15 min longer than forecast" / "took 15 min longer on a later forecast than on its own"
+function debForecastErr(min, real) {
   if (min == null) return null;
-  if (Math.abs(min) < 1) return "took what the forecast said";
-  return "took " + debMinWord(min) + (min > 0 ? " longer" : " less") + " than forecast";
+  if (real) {
+    if (Math.abs(min) < 1) return "took what the forecast said";
+    return "took " + debMinWord(min) + (min > 0 ? " longer" : " less") + " than forecast";
+  }
+  if (Math.abs(min) < 1) return "took the same on a later forecast as on its own";
+  return "took " + debMinWord(min) + (min > 0 ? " longer" : " less") + " on a later forecast than on its own";
 }
 
 function debAgeTable(w) {
@@ -54,11 +60,12 @@ function debBasisRows(r, oldRow) {
   const basisNote = reg.basis && reg.basis.note ? ` <span class="muted">· ${esc(reg.basis.note)}</span>` : "";
   let lost;
   if (reg.kind === "same_wind") {
-    const fe = debForecastErr(reg.forecast_error_minutes);
+    const real = (reg.forecast_check || "real") === "real";
+    const fe = debForecastErr(reg.forecast_error_minutes, real);
     const said = pb.predicted_hours != null ? pb.predicted_hours.toFixed(1) + " h" : null;
     const took = reg.plan_on_actual_hours != null ? reg.plan_on_actual_hours.toFixed(1) + " h" : null;
     lost = `<div class="dep-row">${DEB_ROW}Route choice</b> ${esc(debRouteCall(reg.minutes))}, same wind${basisNote}</div>`
-      + (fe ? `<div class="dep-row">${DEB_ROW}Forecast</b> The plan's route ${esc(fe)}`
+      + (fe ? `<div class="dep-row">${DEB_ROW}${real ? "Forecast" : "Two forecasts"}</b> The plan's route ${esc(fe)}`
         + (said && took ? ` <span class="muted">(said ${esc(said)}, took ${esc(took)})</span>` : "") + "</div>" : "");
   } else {
     lost = (oldRow || "") + (reg.split_note ? `<div class="dep-row muted" style="font-size:12px">${esc(reg.split_note)}</div>` : "");
