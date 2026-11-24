@@ -122,6 +122,14 @@ background job — returns at once, poll `GET /api/optimize/status`; a slow weat
 used to 504 the old synchronous request at the gateway) + `GET /api/models` drive the
 **Gameplan → Optimizer** tab; the `lab_gribcache` volume makes re-runs / ensemble members
 cheap.
+- **Study batch (#378):** the Gameplan's Study card (`web/study.js`, `app/study.py`,
+  `POST /api/study`, polled on `/api/optimize/status` — same job slot as Optimize) routes the
+  course many times, one thing changed per run: each model or ensemble run alone (with its cycle
+  and blend weight), start offsets, boat speed %, wind speed %, wind shift °. 1 + the values on
+  each axis, capped (default 24, hard 40). Weather, current, sea state and chart load once; each
+  run is `routerun.run_course` on a view of that field. Table: finish, time vs baseline, side;
+  rows within `study.TIE_MIN` (5 min, rough until #407 measures it) are a tie. The runs draw as
+  a fan on the Gameplan map.
 - **Degraded-field honesty:** a coverage gate + route-sanity guard flag `degraded` + warnings when
   the field is thin. There is no made-up wind (#203, #220): where no forecast reaches, the router
   borrows the nearest covered point's wind within `C4_FORECAST_FILL_NM` (10 nm) and says so ("Forecast
