@@ -47,16 +47,21 @@ REACH_STEP = ("fast reach: on the multihull the ETA jumps by up to 9% between re
               "(the reach is quantized to the heading fan; a finer fan is not always closer) (#411)")
 
 
-def _known_bug(why, ok, detail):
-    """The one assertion a known bug breaks. No bug listed: a plain assert. Bug listed and the
-    assertion fails: xfail (only reached after every other check passed). Bug listed and it
-    passes: fail, so the stale entry gets removed with the fix (a strict xfail)."""
-    if not why:
+def _known_bug(bug, value, tol, detail):
+    """The one assertion a known bug breaks: `value <= tol`. `bug` is None (a plain assert) or
+    (reason, cap): the bug lets `value` exceed `tol` up to `cap`, a little above what it measures
+    today, and that is an expected failure (reached only after every other check passed). Past the
+    cap it got worse: a hard fail. Within `tol`: the bug no longer shows, so the test fails until
+    its entry is removed (a strict xfail)."""
+    ok = value <= tol
+    if bug is None:
         assert ok, detail
-    elif ok:
+        return
+    why, cap = bug
+    if ok:
         pytest.fail(f"known bug no longer shows, remove its entry: {why} ({detail})")
-    else:
-        pytest.xfail(f"{why} ({detail})")
+    assert value <= cap, f"worse than the known bug allows ({value:.3f} > {cap}): {why} ({detail})"
+    pytest.xfail(f"{why} ({detail})")
 
 
 def _xy_path(leg):
@@ -77,11 +82,13 @@ def _leg(wf, P, brg, dist=LEG_NM, res=FINE, **kw):
 # --- known answers: steady wind -----------------------------------------------------------------
 # the wind is from 000; the mark sits at `brg` from the start
 LEGS = {"beat": 0.0, "tight": 60.0, "reach": 90.0, "broad": 135.0, "run": 180.0}
+# (reason, cap): today's error at Fine is 4.7-6.6% on these runs and 9.3% on that reach
+RUN_BUG, REACH_BUG = (HOT_RUN, 0.09), (REACH_STEP, 0.12)
 STEADY_XFAIL = {
-    ("multihull", 6, "run"): HOT_RUN, ("multihull", 10, "run"): HOT_RUN,
-    ("multihull", 14, "run"): HOT_RUN, ("multihull", 20, "run"): HOT_RUN,
-    ("planing_sportboat", 14, "run"): HOT_RUN, ("planing_sportboat", 20, "run"): HOT_RUN,
-    ("multihull", 20, "reach"): REACH_STEP,
+    ("multihull", 6, "run"): RUN_BUG, ("multihull", 10, "run"): RUN_BUG,
+    ("multihull", 14, "run"): RUN_BUG, ("multihull", 20, "run"): RUN_BUG,
+    ("planing_sportboat", 14, "run"): RUN_BUG, ("planing_sportboat", 20, "run"): RUN_BUG,
+    ("multihull", 20, "reach"): REACH_BUG,
 }
 
 
@@ -107,7 +114,7 @@ def test_steady_wind_time_and_tacks_match_the_polar(boat, tws, kind):
         assert 1 <= leg["tacks"] <= 2, leg["tacks"]
     else:
         assert leg["tacks"] <= 1, leg["tacks"]
-    _known_bug(STEADY_XFAIL.get((boat, tws, kind)), _err(eta, ref_h) <= ETA_TOL,
+    _known_bug(STEADY_XFAIL.get((boat, tws, kind)), _err(eta, ref_h), ETA_TOL,
                f"{eta:.3f} h vs {ref_h:.3f} h")
 
 
@@ -202,7 +209,8 @@ def test_oscillating_shift_as_fast_as_tacking_on_headers(amp, period):
           f" tack-on-headers {ref_h:.3f} h ({ref_tacks} tacks)")
     assert ref_h is not None and eta >= ref_h * 0.9      # sanity: nowhere near beating it
     assert leg["tacks"] >= 2, leg["tacks"]               # it does play some shifts
-    _known_bug(OSC_PLAY, eta <= ref_h * 1.01, f"{eta:.3f} h vs {ref_h:.3f} h")
+    # today 3.5-3.6% behind; up to 6% is the known bug
+    _known_bug((OSC_PLAY, 0.06), _err(eta, ref_h), 0.01, f"{eta:.3f} h vs {ref_h:.3f} h")
 
 
 # --- known answers: tidal gate ------------------------------------------------------------------
@@ -290,6 +298,7 @@ def test_windward_leeward_course_finishes_on_every_boat(boat):
 # --- convergence --------------------------------------------------------------------------------
 def _conv_cases():
     kb, mh, sb = "keelboat", "multihull", "planing_sportboat"
+    # known bugs as (reason, cap on the spread); today: 3.1%, 7.2%, 8.8%, 4.6%, 7.4%
     cases = [
         ("keelboat beat 10", kb, lambda: F.steady(10, 0.0), 0.0, 6.0, None),
         ("keelboat run 10", kb, lambda: F.steady(10, 0.0), 180.0, 6.0, None),
@@ -297,11 +306,11 @@ def _conv_cases():
         ("cruiser beat 14", "displacement_cruiser", lambda: F.steady(14, 0.0), 0.0, 6.0, None),
         ("keelboat persistent shift", kb, lambda: F.persistent(10, 0.0, 12.0), 0.0, 6.0, None),
         ("keelboat oscillating shift", kb, lambda: F.oscillating(10, 0.0, 10.0, 30.0), 0.0, 12.0,
-         OSC_PLAY),
-        ("multihull reach 10", mh, lambda: F.steady(10, 0.0), 90.0, 6.0, REACH_STEP),
-        ("multihull reach 20", mh, lambda: F.steady(20, 0.0), 90.0, 6.0, REACH_STEP),
-        ("multihull run 10", mh, lambda: F.steady(10, 0.0), 180.0, 6.0, HOT_RUN),
-        ("sportboat run 14", sb, lambda: F.steady(14, 0.0), 180.0, 6.0, HOT_RUN),
+         (OSC_PLAY, 0.06)),
+        ("multihull reach 10", mh, lambda: F.steady(10, 0.0), 90.0, 6.0, (REACH_STEP, 0.12)),
+        ("multihull reach 20", mh, lambda: F.steady(20, 0.0), 90.0, 6.0, (REACH_STEP, 0.12)),
+        ("multihull run 10", mh, lambda: F.steady(10, 0.0), 180.0, 6.0, (HOT_RUN, 0.08)),
+        ("sportboat run 14", sb, lambda: F.steady(14, 0.0), 180.0, 6.0, (HOT_RUN, 0.10)),
     ]
     for name, boat, wf, brg, dist, why in cases:
         yield pytest.param(boat, wf, brg, dist, why, id=name)
@@ -315,4 +324,4 @@ def test_finer_steps_barely_move_the_eta(boat, wf, brg, dist, why):
     spread = max(etas.values()) / min(etas.values()) - 1.0
     print(f"{boat} brg {brg:.0f}: " + ", ".join(f"{k} {v:.3f} h" for k, v in etas.items())
           + f"; spread {100 * spread:.1f}%")
-    _known_bug(why, spread <= CONVERGE_TOL, f"spread {100 * spread:.1f}%")
+    _known_bug(why, spread, CONVERGE_TOL, f"spread {100 * spread:.1f}%")

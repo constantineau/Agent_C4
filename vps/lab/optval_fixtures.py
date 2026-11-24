@@ -257,20 +257,25 @@ def one_tack_shift_time_h(P, tws, wind_fn, mark_xy, tack_s, first, dt_s=10.0, ma
         return (off >= beat - 1e-6) if tack == "port" else (off <= -beat + 1e-6)
 
     def sail(t, x, y, tack, until_s=None):
+        # close-hauled on `tack`; once it lays the mark, steer straight at it, step by step (the
+        # wind keeps turning, so the angle and speed on the final board keep changing too), and
+        # sail close-hauled again whenever a shift takes the lay away
         while t < max_h * 3600:
-            if until_s is None and lay_angle_ok(t, x, y, tack):
-                # reach in on the straight line (at the speed for that angle)
-                twd = wind_fn(t)
-                b = math.degrees(math.atan2(mark_xy[0] - x, mark_xy[1] - y)) % 360
-                s = speed(P, tws, wrap180(b - twd))
-                d = math.hypot(mark_xy[0] - x, mark_xy[1] - y)
-                if s < 0.3:
-                    return None
-                return t + d / s * 3600
             if until_s is not None and t >= until_s:
                 return (t, x, y)
-            h = math.radians(heading(t, tack))
-            step = v_beat * dt_s / 3600.0
+            d = math.hypot(mark_xy[0] - x, mark_xy[1] - y)
+            if until_s is None and lay_angle_ok(t, x, y, tack):
+                b = math.degrees(math.atan2(mark_xy[0] - x, mark_xy[1] - y)) % 360
+                s = speed(P, tws, wrap180(b - wind_fn(t)))
+                if s < 0.3:
+                    return None
+                step = s * dt_s / 3600.0
+                if step >= d:
+                    return t + d / s * 3600
+                h = math.radians(b)
+            else:
+                h = math.radians(heading(t, tack))
+                step = v_beat * dt_s / 3600.0
             x, y, t = x + step * math.sin(h), y + step * math.cos(h), t + dt_s
         return None
 
