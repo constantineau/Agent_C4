@@ -135,6 +135,10 @@ Result (`c4.reroute/v1`):
              "newest_age_h": 5.0, "oldest_age_h": 5.0, "online": false, "downloads": 0,
              "download_budget_spent": false, "box": "cache"},
  "chart": {"land": true, "source": "enc"},
+ "checks": [{"id": "land", "label": "Land", "state": "checked", "texts": []},
+            {"id": "depth", "label": "Depth", "state": "not_checked",
+             "texts": ["Depths not checked aboard. Check the paper chart."]},
+            {"id": "zones", "...": "..."}, {"id": "marks", "...": "..."}, {"id": "chart", "...": "..."}],
  "boat": {"boat_id": "sr33", "version": "3f2a9c1b7d4e", "source": "deploy", "received_at": 0,
           "helm_factor": 0.931, "polar_cells": 24, "draft_m": 2.1336},
  "polar": {"boat_id": "sr33", "source": "files", "label": "polars_sr33.sql",
@@ -147,6 +151,13 @@ Result (`c4.reroute/v1`):
 If the optimizer stalls short of the finish, `complete` is false, `finish_eta` and `total_hours`
 are null, `vs_plan` is `{"available": false, "note": "Route incomplete."}` and the first warning is
 "Route incomplete." A partial route never claims a finish time or a gain.
+
+`checks` (#405) lists land, depth, race zones, marks and sides, and whether the chart covers the
+route, each `checked`, `not_checked` or `failed` (`app/routesafety.py`). They only report: a
+re-route is never refused for them. Land is checked when the carried chart was used (`chart.land`).
+Depth is never checked aboard (the carried mask doesn't say which water a chart gave depths for).
+No course aboard leaves zones and sides not checked. The iPad shows every check that didn't pass
+and keeps a red "Land not checked" line up while land wasn't checked.
 
 `vs_plan.gain_min` > 0 means the new route is faster. It is the plan's own time left from the
 boat's nearest point on the plan, minus the new route's time left. The plan's times come from the

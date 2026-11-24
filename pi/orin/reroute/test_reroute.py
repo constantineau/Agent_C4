@@ -306,6 +306,29 @@ check("gain vs the plan, in minutes", v["available"] and isinstance(v["gain_min"
 check("no chart aboard → it says so, short", out["warnings"][0] == "No chart aboard. Route doesn't check the shore."
       and out["chart"]["land"] is False)
 check("phases in order", phases[:3] == ["chart", "weather", "routing"] and phases[-1] == "saving")
+ck = {c["id"]: c["state"] for c in out.get("checks") or []}
+check("#405 no chart: land + chart coverage not checked, the rest listed too",
+      [c["id"] for c in out.get("checks") or []] == ["land", "depth", "zones", "marks", "chart"]
+      and ck["land"] == "not_checked" and ck["chart"] == "not_checked" and ck["zones"] == "checked"
+      and job.NO_CHART in out["checks"][0]["texts"])
+nc = {c["id"]: c for c in job.safety_checks({"checks": job.routesafety.route_checks([], [], True)},
+                                           None, False)}
+check("#405 no course aboard: zones and sides not checked, said why",
+      nc["zones"]["state"] == "not_checked" and nc["marks"]["state"] == "not_checked"
+      and nc["zones"]["texts"] == [job.NO_ZONES] and nc["land"]["state"] == "checked"
+      and nc["depth"]["state"] == "not_checked" and nc["depth"]["texts"] == [job.NO_DEPTH])
+pc = {c["id"]: c["state"] for c in job.safety_checks(
+    {"checks": job.routesafety.route_checks([], [], True)[:3]}, None, True)}
+check("#405 a check the optimizer left out: not checked, not passed by the boat's list",
+      pc["marks"] == "not_checked" and pc["chart"] == "not_checked" and pc["land"] == "checked")
+off = job.routesafety.route_checks([{"code": "land", "text": "Land not checked."},
+                                    {"code": "box", "text": "Route leaves the chart area."}], [], True)
+oc = {c["id"]: c["state"] for c in job.safety_checks({"checks": off}, None, True)}
+check("#405 chart aboard, but the route leaves its box: land not checked, coverage failed",
+      oc["land"] == "not_checked" and oc["chart"] == "failed")
+check("#405 an optimizer with no checks: nothing reads as checked",
+      {c["state"] for c in job.safety_checks({"ok": True, "problems": []}, None, True)}
+      == {"not_checked"})
 
 os.makedirs(job.CHART_DIR, exist_ok=True)
 DEPTH = job.boats.safety_depth_m(job._get_boat())
@@ -335,6 +358,9 @@ write_chart(DEF)
 out2 = job.run(REQ, now=NOW, is_online=lambda: False)
 check("with a matching chart aboard: used, no warning", out2["chart"]["land"] is True
       and job.NO_CHART not in out2["warnings"] and job.OLD_CHART not in out2["warnings"])
+ck2 = {c["id"]: c["state"] for c in out2.get("checks") or []}
+check("#405 ...land checked; depth never checked aboard",
+      ck2["land"] == "checked" and ck2["depth"] == "not_checked")
 
 print("3b) a chart built for an older version of the course is refused")
 
@@ -616,6 +642,9 @@ for f in windfield._fhrs_for_cycle(GFS, CYCLE, NOW, NOW + 30 * 3600):
 W.remember_box(job.STATE_DIR, need3)
 out5 = job.run(dict(far, definition=DEF3), now=NOW, is_online=lambda: False)
 check("the run doesn't claim land", out5["chart"]["land"] is False and out5["warnings"][0] == job.NO_COVER)
+ck5 = {c["id"]: c["state"] for c in out5.get("checks") or []}
+check("#405 ...land not checked, chart coverage failed", ck5["land"] == "not_checked"
+      and ck5["chart"] == "failed")
 write_chart(DEF)
 
 print("3e) online, but the downloads fail: the forecasts aboard are used")

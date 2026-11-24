@@ -11,6 +11,10 @@ plays with a route) and the chart overrides it was routed with. This module read
 records the overrides: a per-mark exception for a chart artefact (a mark the chart puts
 on land or in shallow water). An override only opens the chart at that mark (`geo.obstacles`); it
 never waives a problem.
+
+Every verdict also carries `checks` (#405): one line per safety check, each with its own state, so
+no route reads as "clear" when a check didn't run. The checks only report; what is refused is still
+decided by `ok`/`problems` above, unchanged.
 """
 from __future__ import annotations
 
@@ -22,6 +26,97 @@ REFUSED = "Route not proven safe: {why} {fix}"
 FIX_OVERRIDE = "Chart wrong at {marks}? Click Override there in Gameplan, then build the playbook again."
 FIX_MOVE = "Move {marks} in Course & Marks, then build the playbook again."
 FIX_REBUILD = "Build the playbook again in Gameplan."
+
+
+# ---- per-check states (#405) -------------------------------------------------------------------
+CHECKED, NOT_CHECKED, FAILED = "checked", "not_checked", "failed"
+# (id, label) in the order the Lab and the iPad list them
+CHECKS = (("land", "Land"), ("depth", "Depth"), ("zones", "Race zones"),
+          ("marks", "Marks and sides"), ("chart", "Chart covers route"))
+_RANK = {CHECKED: 0, NOT_CHECKED: 1, FAILED: 2}
+NOT_RUN = "Not checked."
+LAND_SOME_LEGS = "Land not checked on every leg."
+LAND_OFF_CHART = "Land not checked off the chart."
+DEPTH_OFF_CHART = "Depths not checked off the chart."
+ZONES_OFF_CHART = "Race zones not checked off the chart."
+# which optimizer problem code (optimizer.route_safety) belongs to which check, and how it reads
+_PROBLEM_CHECK = {"land": ("land", NOT_CHECKED), "depth": ("depth", NOT_CHECKED),
+                  "box": ("chart", FAILED), "blocked": ("marks", FAILED),
+                  "unreached": ("marks", FAILED), "side": ("marks", FAILED)}
+
+
+def _check(cid, state, texts=()):
+    label = dict(CHECKS)[cid]
+    return {"id": cid, "label": label, "state": state, "texts": [t for t in texts if t]}
+
+
+def route_checks(problems, notes, has_fields, land_everywhere=True):
+    """[{id, label, state, texts}] for one routed course, from the optimizer's own problems and
+    notes. `has_fields`: was any obstacle map built at all (no map: nothing but marks was checked).
+    A leg through water no chart gives a depth for makes depth "not checked" (it is a note, never a
+    refusal); a depth grid that is not a chart still counts as checked, with its note.
+    `land_everywhere`: did every leg's map have land on it? One leg without is land not checked
+    (the refusal only fires when none has it, unchanged)."""
+    got = {cid: [CHECKED, []] for cid, _l in CHECKS}
+    if not has_fields:
+        for cid in ("land", "depth", "zones", "chart"):
+            got[cid][0] = NOT_CHECKED
+    elif not land_everywhere:
+        got["land"] = [NOT_CHECKED, [LAND_SOME_LEGS]]
+    for p in problems or []:
+        cid, state = _PROBLEM_CHECK.get(p.get("code"), (None, None))
+        if cid is None:
+            continue
+        if _RANK[state] > _RANK[got[cid][0]]:
+            got[cid][0] = state
+        got[cid][1].append(p.get("text"))
+    for n in notes or []:
+        code = str(n.get("code") or "")
+        if code == "no_depth":
+            if got["depth"][0] == CHECKED:
+                got["depth"][0] = NOT_CHECKED
+            legs = ", ".join(n.get("legs") or [])
+            got["depth"][1].append((n.get("text") or "") + (" " + legs if legs else ""))
+        elif code.startswith("grid_depth:"):
+            got["depth"][1].append(n.get("text"))
+    if got["chart"][0] == FAILED:
+        # off the map's box nothing was checked: land, depths and race zones alike
+        for cid, text in (("land", LAND_OFF_CHART), ("depth", DEPTH_OFF_CHART),
+                          ("zones", ZONES_OFF_CHART)):
+            if got[cid][0] == CHECKED:
+                got[cid] = [NOT_CHECKED, [text]]
+    return [_check(cid, st, texts) for cid, (st, texts) in got.items()]
+
+
+def merge_checks(*lists):
+    """One list over several routes (or a route plus what the boat knows): each check takes its
+    worst state and every text once. A route with no `checks` (built before #405) counts as every
+    check not run, and so does any check a list leaves out."""
+    got = {cid: [CHECKED, []] for cid, _l in CHECKS}
+    for lst in lists:
+        if not isinstance(lst, list):
+            lst = [_check(cid, NOT_CHECKED, [NOT_RUN]) for cid, _l in CHECKS]
+        seen = set()
+        for c in lst:
+            if not isinstance(c, dict) or c.get("id") not in got:
+                continue
+            seen.add(c["id"])
+            g = got[c["id"]]
+            st = c.get("state") if c.get("state") in _RANK else NOT_CHECKED
+            if _RANK[st] > _RANK[g[0]]:
+                g[0] = st
+            g[1] += [t for t in c.get("texts") or [] if t and t not in g[1]]
+        for cid in got.keys() - seen:          # a check this list doesn't name didn't run
+            got[cid][0] = FAILED if got[cid][0] == FAILED else NOT_CHECKED
+            if NOT_RUN not in got[cid][1]:
+                got[cid][1].append(NOT_RUN)
+    return [_check(cid, st, texts) for cid, (st, texts) in got.items()]
+
+
+def all_checked(checks):
+    """True only when every check ran and passed."""
+    ids = {c.get("id"): c.get("state") for c in checks or [] if isinstance(c, dict)}
+    return all(ids.get(cid) == CHECKED for cid, _l in CHECKS)
 
 
 def _route_entries(bundle):
@@ -41,8 +136,9 @@ def bundle_verdict(bundle, overrides=None):
     every route in `bundle`. A route with no verdict at all counts as not proven. `notes` never
     fail it: the legs through water no ENC chart gives a depth for (#242), once each over all
     the routes."""
-    problems, notes = [], {}
+    problems, notes, checks = [], {}, []
     for label, s in _route_entries(bundle):
+        checks.append(s.get("checks") if isinstance(s, dict) else None)
         if not isinstance(s, dict) or (s.get("ok") is not True and not s.get("problems")):
             problems.append({"route": label, "code": "unchecked", "mark": None,
                              "text": "Not checked."})
@@ -55,7 +151,7 @@ def bundle_verdict(bundle, overrides=None):
                                                    "legs": []})
                 got["legs"] += [lg for lg in n.get("legs") or [] if lg not in got["legs"]]
     return {"ok": not problems, "problems": problems, "notes": list(notes.values()),
-            "overrides": list(overrides or [])}
+            "checks": merge_checks(*checks), "overrides": list(overrides or [])}
 
 
 def refusal(bundle):
