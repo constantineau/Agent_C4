@@ -96,6 +96,7 @@ Run request (Pi → Orin):
  "plan": {"variant": "left", "variant_label": "Left side", "points": [{"lat": 0, "lon": 0, "t": 0}]},
  "overrides": [{"mark": "Finish", "by": "Cole", "at": 1793500000, "why": "chart artefact"}],
  "models": ["gfs", "hrrr"],
+ "corrections": {"gfs": {"rotate_deg": 10, "scale_pct": 80, "shift_h": 1, "fade_min": 120, "fade_from": 0}},
  "assets": {"chart": {"kind": "land-v2", "fingerprint": "...", "...": "the land mask"},
             "boat": {"boat_id": "sr33", "helm_factor": 0.931, "...": "the reviewed profile"},
             "boat_version": "3f2a9c1b7d4e", "race_id": "...", "course_id": "...", "received_at": 0}}
@@ -107,6 +108,13 @@ no `assets`; the Orin then reads its own files, as before.
 
 `definition` is null when the course aboard was loaded before this build; the run then uses the
 navigator's marks (no islands, no rounding sides) and says so. `models` is optional.
+
+`corrections` is optional (#384): per-model manual corrections, the same ones the Lab's Gameplan
+sends (`vps/lab/app/wind/corrections.py`). `rotate_deg` + = wind shifted right, `scale_pct` = speed
+as % of the forecast, `shift_h` + = the weather comes that many hours later, optional `fade_min`
+back to the raw forecast from `fade_from` (epoch s; null = now). They are applied in the shared wind
+field before the blend. The result's `corrections` names them in words, and the route warns
+"Corrected forecast: …". The Pi doesn't send any yet (iPad controls are a follow-up).
 
 Result (`c4.reroute/v1`):
 

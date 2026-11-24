@@ -1641,6 +1641,7 @@ async function renderGameplan() {
         <div class="opt-group">
           <div class="opt-group-h">Weather models</div>
           <div class="opt-models">${optModelChecks()}</div>
+          ${typeof mcControls === "function" ? mcControls() : ""}
           <label>Ensemble runs <input type="number" id="optEns" value="0" min="0" style="width:64px" oninput="updateEnsembleControl()"></label>
           <span id="optEnsHint" class="muted" style="font-size:12px"></span>
           <div id="optEnsCost" class="muted" style="font-size:12px;margin-top:2px"></div>
@@ -1713,6 +1714,7 @@ function optToggle(k, on) {
   Opt.chosen = Opt.chosen.filter((x) => x !== k);
   if (on) Opt.chosen.push(k);
   updateEnsembleControl();
+  if (typeof mcRepaint === "function") mcRepaint();     // corrections rows follow the picks (#384)
 }
 
 /* The chosen ensemble sources + their real member counts (from /api/models). The ensemble-members
@@ -2324,6 +2326,8 @@ async function runOptimize() {
   if (critEl && critEl.checked) body.criticality = true;                 // #379, opt-in
   const startEpoch = optStartEpoch();
   if (startEpoch != null) body.start_epoch = startEpoch;
+  const corr = typeof mcRequest === "function" ? mcRequest(Opt.raceId, Opt.chosen, optTz()) : null;
+  if (corr) body.corrections = corr;                   // manual model corrections (#384)
   Opt.running = true; jobWebVersion(true);
   document.getElementById("optRun").disabled = true;
   document.getElementById("optRun").textContent = "Routing… (getting weather)";
@@ -2389,6 +2393,7 @@ function renderOptResult(r) {
         <button id="shareBtn" onclick="shareGameplan(this)" title="A view-only link to the route player. No login needed.">🔗 Share player</button></div>
       ${r.start && r.start.note ? `<div class="opt-start-note">${esc(r.start.note)}</div>` : ""}
       ${optDegradedBanner(r)}
+      ${typeof mcResultNote === "function" ? mcResultNote(r) : ""}
       ${seaDataNote(r.data, false)}
       ${safetyPanel(r.safety, "route", { race: r.race_id, course: r.course_id })}
       ${r.timed_out ? '<div class="pill warn">Routing ran out of time. The route may be incomplete.</div>' : ""}
@@ -3021,7 +3026,8 @@ function plumePanelInner() {
     `<div class="opt-controls">${b("field", "tws", "Speed", Plume.field === "tws")}${b("field", "twd", "Direction", Plume.field === "twd")} ${picks}</div>
      <div class="muted" style="font-size:12px">${esc(pl.label || "")} · newest run recorded ${esc(depAgo(pl.built_at))}</div>
      <div class="lab-plume" style="max-width:900px">${P.chartSvg(pl, { w: 860, h: 300, now: now, field: Plume.field, only: Plume.only, allRuns: true, back_h: 6, ahead_h: 24 })}
-     ${P.legendHtml(pl, { only: Plume.only, cycles: true, now: now })}${P.runTimesHtml(pl, now)}</div>` + push;
+     ${P.legendHtml(pl, { only: Plume.only, cycles: true, now: now })}${P.runTimesHtml(pl, now)}</div>` +
+    (typeof mcPlumeNote === "function" ? mcPlumeNote((tgt && tgt.race_id) || Dep.raceId) : "") + push;
 }
 
 // Live read of what the boat has loaded (read-only GETs over the Lab's Tailscale line). Slow when
@@ -4548,7 +4554,8 @@ function debRecRows(rs, src) {
       : (canRun ? `<button class="mini" onclick="debRunRecording(${arg(i)})">${d ? "Re-run" : "Debrief"}</button>`
                 : '<span class="muted">not on the boat log</span>')
         + (d ? (onScreen ? ' <span class="pill ok" style="margin-left:8px">showing</span>'
-                         : ` <button class="mini" style="margin-left:8px" onclick="debOpenDebrief(${d.id})">Open</button>`) : "");
+                         : ` <button class="mini" style="margin-left:8px" onclick="debOpenDebrief(${d.id})">Open</button>`) : "")
+        + (x.track && typeof Replay !== "undefined" ? ` <button class="mini" style="margin-left:8px" onclick="Replay.openRow(${arg(i)})">Replay</button>` : "");
     return `<tr${isThis || onScreen ? ' class="winrow"' : ""}>
       <td><b>${esc(x.name || "recording")}</b><div class="muted" style="font-size:11px">${when}${x.kind ? " · " + esc(x.kind) : ""}</div>${x.kit !== undefined && x.start_ts != null
         ? `<div style="font-size:11px">Boat: <b>${esc(x.boat_name || "?")}</b>${x.boat_has_profile ? "" : ' <span class="pill warn">no profile</span>'} <a href="javascript:void 0" onclick="debEditBoat(${arg(i)})">Change</a></div>` : ""}</td>
@@ -4677,9 +4684,11 @@ function paintDebrief() {
     document.getElementById("view").innerHTML = `<div class="opt">
       <div class="card"><div class="placeholder">No race yet. <a href="#races">Add one in Races</a>.</div></div>
       ${debPracticeCard()}
+      <div id="replayHost"></div>
       ${body}
       ${typeof manCard === "function" ? manCard(r, Deb) : ""}
       ${retroCard()}</div>`;
+    if (typeof Replay !== "undefined") Replay.attach();
     if (running && !Deb.poll) Deb.poll = setInterval(debPoll, 4000);
     return;
   }
@@ -4698,11 +4707,13 @@ function paintDebrief() {
     </div>
     ${debRecordingsCard()}
     ${debPracticeCard()}
+    <div id="replayHost"></div>
     ${body}
     ${typeof manCard === "function" ? manCard(r, Deb) : ""}
     ${debTrackCard()}
     ${retroCard()}
   </div>`;
+  if (typeof Replay !== "undefined") Replay.attach();   // #373: the replay card survives repaints
   if (running && !Deb.poll) Deb.poll = setInterval(debPoll, 4000);
 }
 

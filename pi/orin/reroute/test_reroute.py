@@ -987,6 +987,32 @@ check("…said plainly, first", out5["warnings"][:2] == ["Route incomplete.",
                                                        "Route leaves Gate on the wrong side."])
 check("(depth not checked is not a reason on its own)",
       "No depth chart. Depths not checked." not in out5["warnings"])
+# #384: manual model corrections ride in the job request into the shared wind field, and the route says so
+seen = {}
+
+
+def corrected(*a, **k):
+    seen["corrections"] = k.get("corrections")
+    r = _orig(*a, **k)
+    from app.wind import corrections as CORR
+    r.setdefault("windfield", {})["corrections"] = CORR.summary(
+        CORR.normalize(k.get("corrections")), used_models=["gfs"])
+    return r
+
+
+job.routerun.run_course = corrected
+out6 = job.run(dict(REQ, corrections={"gfs": {"rotate_deg": 10, "scale_pct": 90}}), now=NOW,
+               is_online=lambda: False)
+job.routerun.run_course = _orig
+check("corrections in the job request reach the route run",
+      seen.get("corrections") == {"gfs": {"rotate_deg": 10, "scale_pct": 90}})
+check("…the result names them", (out6.get("corrections") or {}).get("text")
+      == ["GFS: 10° right, speed 90%"])
+check("…and the route warns it ran on a corrected forecast",
+      "Corrected forecast: GFS: 10° right, speed 90%." in (out6.get("warnings") or []))
+out7 = job.run(REQ, now=NOW, is_online=lambda: False)
+check("no corrections asked → raw forecasts, nothing said", out7.get("corrections") is None
+      and not any(w.startswith("Corrected forecast") for w in out7.get("warnings") or []))
 try:
     job.run(dict(REQ, position={}), now=NOW, is_online=lambda: False)
     check("no position → refused", False)
