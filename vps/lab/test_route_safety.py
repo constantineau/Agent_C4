@@ -643,6 +643,9 @@ sb = O.route_safety(course("port"), "c", [(0, "Start", LAT0, LON0), (1, "Finish"
                     Field(), None, False)
 check("off the chart's box: chart coverage failed", states(sb)["chart"] == "failed"
       and O.SAFE_BOX in sb["checks"][4]["texts"], sb["checks"])
+check("...and land not checked out there, never shown as checked",
+      states(sb)["land"] == "not_checked" and RS.LAND_OFF_CHART in sb["checks"][0]["texts"],
+      sb["checks"][0])
 class NoLand(Field):
     land = "off"
 
