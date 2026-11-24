@@ -223,8 +223,10 @@ def compute(min_seconds=MIN_SECONDS, boat_id=_ACTIVE):
                 continue
             raw.setdefault(key, []).append(stw)
             raw_secs[key] = raw_secs.get(key, 0) + got
+            # the cell's own bins ride along, so the page files a dot under exactly the cell
+            # this code put it in (Python rounds half to even; JS doesn't)
             log_points.append({"t": f["t"], "tws": tws, "twa": twa, "stw": stw, "config": cfg,
-                               "recording": rec})
+                               "recording": rec, "band": key[0], "twa_bin": key[1]})
             got = _cover(seen_pool, f["t"], stride)
             if not got:
                 already += 1

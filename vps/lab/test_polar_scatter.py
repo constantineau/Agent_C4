@@ -56,5 +56,26 @@ def test_thinning_caps_and_counts():
     assert out["kept"] <= 50 and any(r[1] == 16.0 for r in out["rows"])
 
 
+def test_rows_carry_the_cells_own_bins(monkeypatch):
+    # 9.0 kn and 8.96 kn are the 8 kn cell in this build (round half to even); the row says so,
+    # so the page can't re-derive it differently. A cell short of the gate keeps its points here
+    # (the page hides them per view), but they carry the bins to look the cell up.
+    fixes = [{"t": A + i, "tws": 9.0 if i % 2 else 8.96, "twa": 85.0, "stw": 6.0} for i in range(60)]
+    monkeypatch.setattr(monitor, "agent_json", _agent(fixes))
+    art = OP.compute(min_seconds=30, boat_id="b1")
+    rows = [dict(zip(art["scatter"]["fields"], r)) for r in art["scatter"]["rows"]]
+    assert rows and all(r["band"] == 8.0 and r["twa_bin"] == 80.0 for r in rows)
+    assert {(c["tws"], c["twa"]) for c in art["cells"]} == {(8.0, 80.0)}
+
+
+def test_total_cap_holds_with_more_groups_than_points():
+    pts = [{"t": 0.0, "tws": 10.0, "twa": 90.0, "stw": 6.0, "recording": i} for i in range(6001)]
+    out = PS.pack(pts, 2.0)
+    assert out["kept"] == PS.TOTAL and out["total"] == 6001
+    pts = [{"t": float(j), "tws": 10.0, "twa": 90.0, "stw": 6.0, "recording": i}
+           for i in range(7) for j in range(3)]
+    assert PS.pack(pts, 2.0, total=10)["kept"] == 10
+
+
 def test_old_cache_is_a_miss():
     assert OP.BUILD_VERSION >= 4

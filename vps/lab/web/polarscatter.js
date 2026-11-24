@@ -27,7 +27,35 @@ function polScRows(d) {
   return PolSc._rows;
 }
 
-function polScBand(tws, step) { return Math.round(tws / step) * step; }
+// The polar cell's TWS band. Log points carry the band the build filed them under (`band`), so
+// the page never re-derives it; for anything else, round half to EVEN like the build's Python
+// (9 kn is the 8 kn cell there — Math.round would say 10).
+function polScRoundEven(x) {
+  const f = Math.floor(x), d = x - f;
+  if (Math.abs(d - 0.5) < 1e-9) return f % 2 === 0 ? f : f + 1;
+  return Math.round(x);
+}
+function polScBand(r, step) {
+  return r.band != null ? r.band : polScRoundEven(r.tws / step) * step;
+}
+
+// The cells the polar on screen actually shows (they passed the seconds gate), keyed like the
+// view: pooled cells for all races, that race's cells for one race, the race curves when lines
+// are by race. A dot whose cell was refused is not drawn — it would be evidence for a point the
+// chart says it doesn't have.
+function polScRecKey(rec) { return rec == null ? "" : String(Math.round(Number(rec))); }
+function polScCellKey(r, ctx) {
+  const b = r.band != null ? r.band : r.tws, a = r.twa_bin != null ? r.twa_bin : r.twa;
+  if (ctx.split === "race") return `${b}|${a}|${polScRecKey(r.recording)}`;
+  if (ctx.race === "all" || ctx.race == null) return `${b}|${a}|${r.config || ""}`;
+  return `${b}|${a}|${r.config || ""}|${polScRecKey(r.recording)}`;
+}
+function polScAccepted(data, ctx) {
+  const d = data || {};
+  const src = ctx.split === "race" ? d.race_curves
+    : (ctx.race === "all" || ctx.race == null) ? d.cells : d.race_cells;
+  return new Set((src || []).map((c) => polScCellKey(c, ctx)));
+}
 
 function polScSame(a, b) {
   return a != null && b != null && Math.abs(Number(a) - Number(b)) < 1;
@@ -39,7 +67,7 @@ function polScFilter(rows, ctx) {
   if (!ctx || ctx.mode === "off") return [];
   const step = ctx.step || 2;
   return rows.filter((r) => r.tws != null && r.twa != null && r.stw != null
-    && (ctx.mode !== "tws" || polScBand(r.tws, step) === ctx.tws)
+    && (ctx.mode !== "tws" || polScBand(r, step) === ctx.tws)
     && (ctx.race === "all" || ctx.race == null || polScSame(r.recording, ctx.race))
     && (ctx.split === "race" || ctx.config === "all" || ctx.config == null
         || (r.config || "—") === ctx.config));
@@ -48,7 +76,7 @@ function polScFilter(rows, ctx) {
 // every band that has points, ascending — the ramp is spread over these, so a colour means the
 // same wind whatever the filter
 function polScBands(rows, step) {
-  return [...new Set(rows.filter((r) => r.tws != null).map((r) => polScBand(r.tws, step)))]
+  return [...new Set(rows.filter((r) => r.tws != null).map((r) => polScBand(r, step)))]
     .sort((a, b) => a - b);
 }
 
@@ -73,13 +101,14 @@ function polScSvg(XY, maxV, ctx, data) {
   data = data || (typeof Pol !== "undefined" ? Pol.data : null);
   const all = polScRows(data);
   const bands = polScBands(all, ctx.step);
-  const pts = polScFilter(all, ctx);
+  const ok = polScAccepted(data, ctx);
+  const pts = polScFilter(all, ctx).filter((p) => ok.has(polScCellKey(p, ctx)));
   let off = 0;
   const out = [];
   for (const p of pts) {
     if (p.stw > maxV) { off++; continue; }
     const [x, y] = XY(p.twa, p.stw);
-    out.push(`<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="1.8" fill="${polScColor(polScBand(p.tws, ctx.step), bands)}"/>`);
+    out.push(`<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="1.8" fill="${polScColor(polScBand(p, ctx.step), bands)}"/>`);
   }
   const extra = [];
   for (const s of PolSc.sources) {
