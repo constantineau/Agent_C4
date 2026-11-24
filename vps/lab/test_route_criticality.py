@@ -168,10 +168,11 @@ def test_reverse_departures_are_checked_on_a_step_change():
         e = env(v, tv)
         ok_ = False
         for u, nm, brg in edges[v]:
-            sp = speed(e, brg) if e else None
-            if sp is None:
+            got = speed(e, brg) if e else None
+            if got is None:
                 continue
-            sd = CRIT._side(e, brg)
+            sp, hdg = got
+            sd = CRIT._side(e, hdg)
             if (sd or side) != side:
                 continue
             arr = tv + nm / sp * 3600.0
@@ -183,6 +184,45 @@ def test_reverse_departures_are_checked_on_a_step_change():
             if ok_:
                 break
         assert ok_, (v, side, tv)
+
+
+def test_back_search_tries_the_window_end():
+    """The only departure that makes it is right at the start of the search window (`floor`),
+    past where the doubling steps land: it must still be found, not dropped."""
+    F, t = T0, T0 + 2000.0
+
+    def env(v, x):            # wind only for the first 100 s of the window
+        return (6.0, 0.0, 0.0, 0.0, 0.0) if F <= x <= F + 100 else None
+
+    got = CRIT._latest_departure(env, lambda e, trk: (6.0, trk), (0, 0), 90.0, 1.0, t, 0, 30.0, F)
+    assert got is not None, "the window's end was never tried"
+    assert F <= got[0] <= F + 100
+
+
+class Cross:
+    """A 2 kn current setting west, everywhere."""
+    loaded = True
+
+    def current_at(self, lat, lon, t):
+        return 270.0, 2.0
+
+
+def test_cross_current_reads_the_polar_at_the_crab_heading():
+    """As the router's closing board: the heading through the water that holds the track
+    (`optimizer._crab_onto`), the polar read at that heading, the ground speed along the track."""
+    import math
+    _at, speed = CRIT._physics(WF(12.0, 90.0), P, Cross(), None, 1.0, None, None)
+    e = _at(*S, T0)
+    gs, hdg = speed(e, 0.0)                   # due north, wind from the east, current to the west
+    crab = OPT._wrap180(hdg - 0.0)
+    assert 5.0 < crab < 30.0, "crabs up-current (to the east)"
+    tws, twd = e[0], e[1]                     # the wind over the water
+    sp = OPT._polar_speed(P, tws, abs(OPT._wrap180(hdg - twd)))
+    assert abs(math.sin(math.radians(crab)) * sp - 2.0) < 0.05, "the crab cancels the set"
+    assert abs(gs - sp * math.cos(math.radians(crab))) < 1e-6
+    # the old shortcut (polar at the track) would have given a different speed here
+    sp_track = OPT._polar_speed(P, tws, abs(OPT._wrap180(0.0 - twd)))
+    assert abs(math.sqrt(sp_track ** 2 - 4.0) - gs) > 0.01
 
 
 def test_fast_changing_wind_is_flagged_rough():

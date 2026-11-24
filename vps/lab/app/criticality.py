@@ -83,8 +83,9 @@ class _Grid:
 
 
 def _physics(wf, P, cur, waves, helm_factor, wave_coeffs, wave_uniform_hs):
-    """speed(lat, lon, t, track_deg) -> knots over the ground along the track, or None. The
-    router's model: polar at the wind over the water, x helm x sea state, plus the current."""
+    """(at, speed): at(lat, lon, t) -> the node's conditions or None; speed(env, track) ->
+    (knots over the ground along the track, heading through the water) or None. The router's
+    model: polar at the wind over the water and the crab heading, x helm x sea state, + current."""
     from . import optimizer as OPT
     realized_on = (abs(helm_factor - 1.0) > 1e-3) or (waves is not None and getattr(waves, "loaded", False))
 
@@ -109,20 +110,31 @@ def _physics(wf, P, cur, waves, helm_factor, wave_coeffs, wave_uniform_hs):
         return tws, twd, cs, cd, hs
 
     def speed(env, track):
+        """(knots over the ground along `track`, heading through the water) or None. In a cross
+        current the boat crabs: the heading that holds the track is solved with the router's own
+        `_crab_onto` (as its closing board does), and the polar is read at that HEADING."""
         tws, twd, cs, cd, hs = env
-        twa = abs(OPT._wrap180(track - twd))
-        sp = OPT._polar_speed(P, tws, twa)
-        if sp < MIN_SOG:
-            return None
-        if realized_on:
-            sp *= OPT._realized_factor(hs, twa, helm_factor, wave_coeffs)
-        if cd > 0.01:                      # crab to hold the track: along + across the current
-            rel = math.radians(cs - track)
-            c_par, c_perp = cd * math.cos(rel), cd * math.sin(rel)
-            if abs(c_perp) >= sp:
+
+        def speed_at(hdg):
+            twa = abs(OPT._wrap180(hdg - twd))
+            sp = OPT._polar_speed(P, tws, twa)
+            if sp < MIN_SOG:
                 return None
-            sp = math.sqrt(sp * sp - c_perp * c_perp) + c_par
-        return sp if sp >= MIN_SOG else None
+            if realized_on:
+                sp *= OPT._realized_factor(hs, twa, helm_factor, wave_coeffs)
+            return sp, None
+
+        if cd <= 0.01:
+            got = speed_at(track)
+            return (got[0], track) if got and got[0] >= MIN_SOG else None
+        rel = math.radians(cs - track)
+        c_par, c_perp = cd * math.cos(rel), cd * math.sin(rel)   # along / across (+ = to the right)
+        lay = OPT._crab_onto(track, c_perp, speed_at)
+        if lay is None:
+            return None
+        hdg, sp, crab, _x = lay
+        gs = sp * math.cos(math.radians(crab)) + c_par
+        return (gs, hdg) if gs > MIN_SOG else None
 
     return at, speed
 
@@ -153,12 +165,12 @@ def _edges(g, obstacles):
     return out
 
 
-def _side(env, track):
+def _side(env, hdg):
     """Which tack/gybe a step is on: +1 wind on one side of the track, -1 the other (a change
     of sign is a tack or a gybe, the router's rule); 0 dead up/down wind, which keeps the tack
     the boat is on (else a dead run would count as one gybe side and break the mirror)."""
     from . import optimizer as OPT
-    a = OPT._wrap180(track - env[1])
+    a = OPT._wrap180(hdg - env[1])
     if abs(a) < 0.5 or abs(a) > 179.5:
         return 0
     return 1 if a > 0 else -1
@@ -191,17 +203,18 @@ def _forward(edges, env, speed, src, t0, horizon, tack_s):
         if e is None:
             continue
         for v, nm, brg in edges.get(u, ()):
-            side = _side(e, brg)
-            dep, ed = t, e
-            if s and side and side != s:                       # tack first; the step leaves after it
+            got = speed(e, brg)
+            if got is None:
+                continue
+            side = _side(e, got[1])                   # the tack is the heading's, as the router's
+            dep = t
+            if s and side and side != s:              # tack first; the step leaves after it
                 dep = t + tack_s
                 ed = env(u, dep)
-                if ed is None:
+                got = speed(ed, brg) if ed is not None else None
+                if got is None:
                     continue
-            sp = speed(ed, brg)
-            if sp is None:
-                continue
-            tv = dep + nm / sp * 3600.0
+            tv = dep + nm / got[0] * 3600.0
             side = side or s
             if tv < best.get((v, side), math.inf):
                 best[(v, side)] = tv
@@ -215,14 +228,14 @@ def _latest_departure(env, speed, v, track, nm, t, s, tack_s, floor, iters=6, bi
     leaves. Returns (departure, side) or None. A few fixed-point passes find it in smooth wind;
     the answer is always CHECKED (sailed forward, it must arrive by t). If the passes don't give
     a checked one (a sharp wind change can make them flip-flop), it brackets a departure that
-    arrives in time, stepping back (doubling) no further than `floor`, and bisects to the latest."""
+    arrives in time, stepping back (doubling, `floor` itself tried last) and bisects to the latest."""
     def arrive(x):
         e = env(v, x)
-        sp = speed(e, track) if e is not None else None
-        if sp is None:
+        got = speed(e, track) if e is not None else None
+        if got is None:
             return None, 0
-        side = _side(e, track)
-        return x + nm / sp * 3600.0 + (tack_s if s and side and side != s else 0.0), side
+        side = _side(e, got[1])
+        return x + nm / got[0] * 3600.0 + (tack_s if s and side and side != s else 0.0), side
 
     x = t
     for _ in range(iters):
@@ -240,12 +253,13 @@ def _latest_departure(env, speed, v, track, nm, t, s, tack_s, floor, iters=6, bi
     hi = min(x, t)                          # leaving here (or later) doesn't make it
     step = max(60.0, nm / 20.0 * 3600.0)    # as if at 20 kn, then doubling
     lo = None
-    while hi - step >= floor:
-        a, _ = arrive(hi - step)
+    while hi > floor:
+        cand = max(hi - step, floor)        # the window's own end is always the last one tried
+        a, _ = arrive(cand)
         if a is not None and a <= t + 1.0:
-            lo = hi - step
+            lo = cand
             break
-        hi, step = hi - step, step * 2.0
+        hi, step = cand, step * 2.0
     if lo is None:
         return None                         # no departure in the window makes it: no edge
     for _ in range(bisect):
