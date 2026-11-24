@@ -304,7 +304,11 @@ def run(definition, course_id, start_epoch, models, axes, *, cap=DEFAULT_CAP, en
     specs = plan(axes, model_keys, member_keys)[:cap]
     per_model, per_series = blend_weights(wf)
     cycles = {m.get("model"): m.get("cycle") for m in wf.meta if isinstance(m, dict)}
-    corr = (wf.status().get("corrections") or {}) if getattr(wf, "corrections", None) else {}
+    corr = {}                         # #384: each model's manual correction, in words
+    if getattr(wf, "corrections", None):
+        st = wf.status().get("corrections") or {}
+        for it in (st.get("items") or []) if isinstance(st, dict) else []:
+            corr[it.get("model")] = it.get("text")
 
     rows, baseline = [], None
     t_started = time.time()
@@ -326,7 +330,7 @@ def run(definition, course_id, start_epoch, models, axes, *, cap=DEFAULT_CAP, en
             view = Nudged(wf, tws_scale=spec["tws_pct"] / 100.0)
         elif spec["axis"] == "twd_deg":
             view = Nudged(wf, twd_shift=spec["twd_deg"])
-        if spec.get("model") and isinstance(corr, dict) and corr.get(spec["model"]):
+        if spec.get("model") and corr.get(spec["model"]):
             spec["correction"] = corr[spec["model"]]
         eta = ""
         if i:

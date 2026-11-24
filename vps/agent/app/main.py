@@ -600,6 +600,19 @@ def racelog_trust(start: float, end: float, step_s: float = None):
             "summary": trust_window.summarize(channels)}
 
 
+@app.get("/racelog/channels")
+def racelog_channels(start: float, end: float, step_s: float = None, max_points: int = 4000):
+    """Logged channels (BSP, TWS, TWA, TWD, heel, heading, SOG/COG, AWS/AWA) over a window, one
+    averaged sample per step — the Lab debrief strip chart (#374). `app/racelog_channels.py`."""
+    from . import racelog_channels as RC
+    step = RC.pick_step(start, end, max_points, step_s)
+    devices = n2k_sources.devices_for(tools.BOAT_ID)
+    with pool.connection() as conn:
+        rows = RC.query(conn, tools.BOAT_ID, start, end, tools.ais_bearing_sources())
+    samples = RC.assemble(rows, lambda p, s: source_policy.rank_for(p, s, devices), start, step)
+    return {"step_s": step, "n": len(samples), "samples": samples}
+
+
 @app.post("/summary")
 async def summary_ep(minutes: float | None = None):
     """On-demand short recap of the recent window; stored in agent_summaries."""

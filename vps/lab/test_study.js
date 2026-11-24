@@ -46,6 +46,12 @@ check("failed run says why", h.includes("No full route."));
 check("not run: says why", S.resultsHtml({ available: false, note: "9 runs is over the limit of 5." }, esc).includes("over the limit"));
 check("left shift blue, right shift red", S.colorOf({ axis: "twd_deg", twd_deg: -10 }) !== S.colorOf({ axis: "twd_deg", twd_deg: 10 }));
 
+const rc = Object.assign({}, r, { windfield: { corrections: { text: ["GFS: 10° right"] } } });
+rc.rows = [Object.assign({}, r.rows[1], { correction: "GFS: 10° right" })];
+const hc = S.resultsHtml(rc, esc, "UTC");
+check("corrections shown on the summary and the model row", hc.includes("Corrected: GFS: 10° right") &&
+  hc.includes("corrected: GFS: 10° right"));
+
 console.log("map fan");
 const route = S.asRoute({ race_id: "t", start: {}, rows: r.rows,
   baseline: { available: true, path: [], candidate_paths: [{ model: "gfs", label: "GFS alone", path: [[1, 2]] },

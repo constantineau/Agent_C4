@@ -31,6 +31,9 @@ INGESTED_DIR = os.environ.get("INGESTED_DIR", "/srv/ingested")
 
 app = FastAPI(title="C4 Performance Lab", version="0.1.0")
 
+from . import replay as _replay  # noqa: E402 — debrief replay + strip chart (#373/#374)
+app.include_router(_replay.router)
+
 # gzip the static shell + JSON responses (app.js alone is ~175 KB raw / ~49 KB gzipped — the Lab
 # is used over hotel Wi-Fi and Starlink; optimize results are large JSON too)
 app.add_middleware(GZipMiddleware, minimum_size=1024)
@@ -421,7 +424,7 @@ def _active_wave():
 
 def _run_optimize(definition, course_id, start_epoch, model_names, ensemble_members, avoid=True,
                   per_model=False, resolution="auto", use_waves=True, use_current=True,
-                  on_progress=None, criticality=False):
+                  on_progress=None, corrections=None, criticality=False):
     """Blocking: build the multi-model wind field, route the course, write the briefing.
     `on_progress(msg)` (optional) mirrors the log lines out live — the background-job status
     endpoint serves them so the UI can show which weather source it's waiting on. The run itself
@@ -432,7 +435,8 @@ def _run_optimize(definition, course_id, start_epoch, model_names, ensemble_memb
                                ensemble_members=ensemble_members, avoid=avoid, per_model=per_model,
                                resolution=resolution, use_waves=use_waves, use_current=use_current,
                                on_progress=on_progress, boat=boats.active_boat(),
-                               chart_source=chart_source(), criticality=criticality)
+                               chart_source=chart_source(), corrections=corrections,
+                               criticality=criticality)
 
 
 @app.post("/api/optimize")
@@ -460,13 +464,15 @@ async def optimize(body: dict):
     resolution = body.get("resolution") or "auto"
     use_waves = body.get("use_waves", True)
     use_current = body.get("use_current", True)
+    from .wind import corrections as wind_corr
+    corrections = wind_corr.normalize(body.get("corrections"))      # #384 manual per-model fix
     criticality = bool(body.get("criticality"))          # #379: time-loss band (opt-in, slower)
     from . import jobs
 
     def _work(progress):
         r = _run_optimize(d, course_id, start_epoch, model_names, ens, avoid, per_model,
                           resolution, use_waves, use_current, on_progress=progress,
-                          criticality=criticality)
+                          corrections=corrections, criticality=criticality)
         if isinstance(r, dict):
             r["start"] = start                   # which start it routed from, and why (UI says it)
         return r
@@ -501,7 +507,9 @@ async def study_start(body: dict):
         ens = int(body.get("ensemble_members") or 0)
     except (TypeError, ValueError):
         ens = 0
+    from .wind import corrections as wind_corr
     kw = {"cap": body.get("cap") or study.DEFAULT_CAP, "ensemble_members": ens,
+          "corrections": wind_corr.normalize(body.get("corrections")),      # #384, as Optimize
           "avoid": body.get("avoid_land", True), "resolution": body.get("resolution") or "auto",
           "use_waves": body.get("use_waves", True), "use_current": body.get("use_current", True)}
 

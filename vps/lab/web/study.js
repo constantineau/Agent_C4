@@ -83,8 +83,14 @@ const Study = (function () {
     const bits = [];
     if (row.cycle) bits.push(row.cycle);
     if (row.weight_pct != null) bits.push(`${row.weight_pct}% of blend`);
-    if (row.correction) bits.push("corrected");
+    if (row.correction) bits.push("corrected: " + row.correction);
     return bits.join(" · ");
+  }
+
+  // the manual model corrections every run used (#384), in words
+  function corrText(r) {
+    const c = r && r.windfield && r.windfield.corrections;
+    return c && c.text && c.text.length ? c.text.join("; ") : "";
   }
 
   function rowHtml(row, esc, tz) {
@@ -107,6 +113,7 @@ const Study = (function () {
     const spread = r.spread_min != null ? `Finish spread ${Math.round(r.spread_min)} min.` : "";
     return `<div class="st-sum"><b>${r.finished} of ${r.rows.length} runs finished.</b> ${esc(spread)}
         ${esc(sidesText(r.sides))}</div>
+      ${corrText(r) ? `<div class="muted st-note">Corrected: ${esc(corrText(r))}</div>` : ""}
       <div class="muted st-note">${esc(r.agreement_note || "")}</div>
       <div class="muted st-note">${esc(r.tie_note || "")}</div>
       <div class="st-wrap"><table class="legs st-table"><thead><tr><th>Run</th><th>Finish</th><th>Time</th>
@@ -190,6 +197,8 @@ const Study = (function () {
       cap: Math.min(MAX_RUNS, parseInt(S.cap, 10) || 24) };
     const se = optStartEpoch();
     if (se != null) body.start_epoch = se;
+    const corr = typeof mcRequest === "function" ? mcRequest(Opt.raceId, Opt.chosen, optTz()) : null;
+    if (corr) body.corrections = corr;                   // manual model corrections (#384), as Find route
     S.running = true; S.err = ""; jobWebVersion(true);
     const b = document.getElementById("stRun"); if (b) { b.disabled = true; b.textContent = "Studying…"; }
     const prog = (t) => { const p = document.getElementById("stProg"); if (p) p.textContent = t; };

@@ -553,6 +553,27 @@ two-team resync + GPX + scoring math + caveats) + a LIVE decode of the real bayv
 (Illuminati Port Huron→Mackinac) + end-to-end (GPX upload → judge → scorecard, Playwright UI).
 Tunables `TRACK_YB_TIMEOUT_S`.
 
+### Replay + strip chart (#373, #374)
+
+A **Replay** button on any recording row with a stored track opens one card (`web/replay.js`,
+`app/replay.py`): a map with our track, the fleet, the course and the day's wind, a strip chart of the
+logged channels underneath, and one time cursor for both (slider, ▶ at 1–300×, tap the chart, or tap our
+track on the map). Up to 4 markers: 1–2 are window A, 3–4 window B; each shows mean ± SD per channel and
+B − A. Window A saves as a named 2–5 min **test** (stats worked out on the server).
+- Our track: the stored debrief track. The fleet: the retro archive (Fleet retro: YB or a fleet file),
+  clipped to the recording ±1 h. Wind: **Load wind** builds the judge's oracle wind over the track's area
+  and hours and keeps it (`POST /api/debrief/replay/wind`, a background job).
+- Channels: a boat-log recording reads the agent's `GET /racelog/channels` (BSP, TWS, TWA, TWD, heel,
+  HDG, SOG/COG, AWS/AWA; averaged per second in the database, best source per second, then per step);
+  VMG and % of polar are added in the Lab
+  against the session's boat. A GPX/YB track, or an unreachable boat log, falls back to the track's own
+  fixes and says so.
+- Faulty stretches (the trust sweep's danger intervals) are grey on the chart and left out of every
+  mean/SD, the scorer's rule; a step that only partly overlaps one counts as faulty.
+- Stored per recording in `_replay_<race>[__<recording>].json` next to the track: `{wind_grid, tests}`.
+  Routes: `GET /api/debrief/replay`, `GET /api/debrief/replay/channels`, `POST /api/debrief/replay/tests`
+  (+ `/delete`), `POST /api/debrief/replay/wind` (+ `GET .../wind/status`).
+
 ## Fleet roster auto-import — public entry list (YB) + ORC handicaps
 
 The fleet roster (competitor names + ORC handicaps — the corrected-time tactics homework) used to be
@@ -678,6 +699,18 @@ but marked degraded: "Forecast ends before the finish: last hours use the final 
   is ~an hour; poll `GET /api/model-skill/backfill/status`; weights otherwise ride inside the
   optimize result), and the `optModelSkill` web panel.
 - **Full design + math + as-built ops + env vars:** **`docs/MODEL_SKILL_WEIGHTING.md`**.
+
+## Manual model corrections (#384)
+
+Under the Gameplan **Weather models** checkboxes, **Correct models** opens one row per chosen model:
+turn (°, + = wind shifted right), speed (% of the forecast), later (h, + = the weather comes after
+the forecast: at time t the model is read at t − shift), and an optional fade back to the plain
+forecast over N minutes from a chosen time (blank = the route start). Kept per race in the browser
+and sent with every route run (`corrections` in `POST /api/optimize`). Applied in
+`app/wind/windfield.py` to each model's own wind before the blend, after its venue-skill de-bias
+(`app/wind/corrections.py`, shared with the Orin re-route). A route that used one says so: the
+route rail ("Corrected forecast: GFS: 10° right"), the PDF route summary, and the run log; the
+Deploy plume says its lines are the raw forecasts. The playbook routes the raw blend for now.
 
 ## Race documents (found 2026-06-17)
 

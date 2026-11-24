@@ -58,17 +58,19 @@ def frames(model, u0, v0):
 
 
 BUILDS = []
+CORR = []
 
 
 def fake_build_windfield(bbox, t_start, t_end, models=(), ensemble_members=0, on_progress=None,
-                         model_weights=None, model_bias=None, fallback_tries=None, **_kw):
+                         model_weights=None, model_bias=None, fallback_tries=None, corrections=None):
     BUILDS.append((t_start, t_end))
+    CORR.append(corrections)
     series = {("gfs", "det"): frames("gfs", -3.0, -5.0), ("rrfs", "det"): frames("rrfs", -1.0, -6.5)}
     meta = [{"model": m, "cycle": c, "members": 1, "frames": 20, "expected_frames": 20,
              "cycle_fallbacks": 0, "priority": 1.0, "kind": "deterministic"}
             for m, c in (("gfs", "2026-11-01 12Z"), ("rrfs", "2026-11-01 15Z"))]
     return windfield.WindField(series, meta, bbox, t_start, t_end, model_weights=model_weights,
-                               model_bias=model_bias)
+                               model_bias=model_bias, corrections=corrections)
 
 
 WIND.build_windfield = fake_build_windfield
@@ -175,6 +177,18 @@ check("baseline carries the fan: every run but itself", len(fanned) == 7
 check("baseline has the map's wind grid; the others don't carry one",
       "wind_grid" in r["baseline"] and "path" in rows["base"])
 check("progress says which run", any("Study run 3 of 8" in m for m in prog))
+
+print("manual model corrections (#384)")
+CORR.clear()
+rc = study.run(COURSE, "x", T0, ["gfs", "rrfs"], study.parse_axes({"models": True}), boat=BOAT,
+               avoid=False, resolution="fast", use_waves=False, use_current=False,
+               model_skill=False, corrections={"gfs": {"rotate_deg": 10}})
+crow = {x["id"]: x for x in rc["rows"]}
+check("passed to the one weather load", CORR == [{"gfs": {"rotate_deg": 10}}])
+check("GFS alone says it was corrected, RRFS alone doesn't",
+      "10° right" in (crow["model:gfs"].get("correction") or "")
+      and "correction" not in crow["model:rrfs"])
+check("the result names the corrections", rc["windfield"]["corrections"]["applied"])
 
 print("ties and spread")
 fake = [{"id": "base", "ok": True, "finish_epoch": 1000 * 60, "minutes": 1000, "side": "left"},
