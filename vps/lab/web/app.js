@@ -1741,6 +1741,7 @@ function updateResHint() {
   const sel = document.getElementById("optRes"), hint = document.getElementById("optResHint");
   if (!sel || !hint) return;
   hint.textContent = RES_HINTS[sel.value] || "";
+  if (typeof Study !== "undefined") Study.repaint();   // #378 time estimate follows Detail
 }
 
 function updateEnsembleControl() {
@@ -1764,6 +1765,7 @@ function updateEnsembleControl() {
       ? `${n} extra forecast${n > 1 ? "s" : ""} to download. 10–20 is plenty.`
       : "";
   }
+  if (typeof Study !== "undefined") Study.repaint();   // #378 run count follows models + ensemble
 }
 
 /* Boat profile ([B]): active boat + editable draft + chart source. Draft sets the ENC depth no-go,

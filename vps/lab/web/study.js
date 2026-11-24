@@ -24,6 +24,16 @@ const Study = (function () {
   function keyOf(raceId, courseId) { return String(raceId || "") + "|" + String(courseId || ""); }
   function curKey() { return keyOf(Opt.raceId, Opt.courseId); }
 
+  // the Gameplan route is a study's (asRoute) for another race/course → drop it (a Find route
+  // result is left alone). → true when it dropped one.
+  function dropStaleRoute(opt, nowKey) {
+    if (opt.result && opt.result.study_key != null && opt.result.study_key !== nowKey) {
+      opt.result = null;
+      return true;
+    }
+    return false;
+  }
+
   // a study finished (r) or failed (err) for `key`. Kept only if that race + course is still
   // picked; a completion for an old selection is dropped. → true when it was kept.
   function settle(st, key, nowKey, r, err) {
@@ -157,6 +167,7 @@ const Study = (function () {
   }
 
   function set(k, v) { S[k] = v; paintPlan(); }
+  function repaint() { paintPlan(); }
 
   function field(k, label, help) {
     return `<label class="st-field">${label} <input type="text" value="${esc(S[k])}" placeholder="none"
@@ -166,6 +177,9 @@ const Study = (function () {
   function mount(id) {
     const el = document.getElementById(id); if (!el) return;
     if (S.key !== curKey()) { S.result = null; S.err = ""; S.key = null; }   // another race/course picked
+    if (dropStaleRoute(Opt, curKey())) {        // the map was showing a study for another course
+      const out = document.getElementById("optOut"); if (out) out.innerHTML = "";
+    }
     el.innerHTML = `<div class="card st">
       <h3>Study <span class="muted" style="font-weight:400">— route it many ways</span></h3>
       <div class="muted" style="font-size:12px;margin-bottom:6px">Routes the course again with one thing changed each time. Uses the race, models and settings above.
@@ -189,9 +203,9 @@ const Study = (function () {
   }
 
   // the baseline with every run on top, for the Gameplan map
-  function asRoute(r) {
+  function asRoute(r, key) {
     const base = Object.assign({}, r.baseline, { race_id: r.race_id, start: r.start,
-      fan_label: "Study runs" });
+      fan_label: "Study runs", study_key: key });
     const byLabel = {};
     r.rows.forEach((row) => { byLabel[row.label] = row; });
     base.candidate_paths = (base.candidate_paths || []).map((cp) =>
@@ -232,7 +246,7 @@ const Study = (function () {
       }
       // the map shows it only if the same race + course is still picked
       if (settle(S, key, curKey(), r, "") && r && r.available && r.baseline && r.baseline.available) {
-        Opt.result = asRoute(r);
+        Opt.result = asRoute(r, key);
       }
     } catch (e) {
       settle(S, key, curKey(), null, "Study failed: " + String((e && e.message) || e));
@@ -241,8 +255,8 @@ const Study = (function () {
     renderGameplan();
   }
 
-  return { set, mount, run, parseList, axesOf, runCount, estimateMin, colorOf, resultsHtml,
-    sidesText, sourceText, fmtDelta, asRoute, keyOf, settle, MAX_RUNS };
+  return { set, repaint, mount, run, parseList, axesOf, runCount, estimateMin, colorOf, resultsHtml,
+    sidesText, sourceText, fmtDelta, asRoute, keyOf, settle, dropStaleRoute, MAX_RUNS };
 })();
 
 if (typeof module !== "undefined" && module.exports) module.exports = Study;

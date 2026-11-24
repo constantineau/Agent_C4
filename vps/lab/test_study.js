@@ -69,10 +69,25 @@ check("another course of the same race is another selection", S.keyOf("raceA", "
 check("a failure for an old selection is dropped too", S.settle({ err: "" }, kA, kB, null, "Study failed") === false);
 const src0 = fs.readFileSync(path.join(__dirname, "web", "study.js"), "utf8");
 check("the card clears a result when the selection changed", src0.includes("if (S.key !== curKey())"));
-check("the map takes the study's route only through settle()", /if \(settle\(S, key, curKey\(\), r, ""\)[^\n]*\n\s*Opt\.result = asRoute\(r\)/.test(src0));
+check("the map takes the study's route only through settle()", /if \(settle\(S, key, curKey\(\), r, ""\)[^\n]*\n\s*Opt\.result = asRoute\(r, key\)/.test(src0));
 
 check("changing course re-mounts the card (clears another course's study)",
   fs.readFileSync(path.join(__dirname, "web", "app.js"), "utf8").includes("Opt.courseId=this.value; if (typeof Study !== 'undefined') Study.mount('studyCard')"));
+
+const kOld = S.keyOf("raceA", "c1"), kNew = S.keyOf("raceA", "c2");
+const studyRoute = S.asRoute({ race_id: "raceA", rows: [], baseline: { available: true, candidate_paths: [] } }, kOld);
+check("a study's route is tagged with its race + course", studyRoute.study_key === kOld);
+const o1 = { result: studyRoute };
+check("course changed: the study's route leaves the map", S.dropStaleRoute(o1, kNew) === true && o1.result === null);
+const o2 = { result: studyRoute };
+check("same course: it stays", S.dropStaleRoute(o2, kOld) === false && o2.result === studyRoute);
+const o3 = { result: { available: true, path: [] } };
+check("a Find route result is never touched", S.dropStaleRoute(o3, kNew) === false && o3.result);
+const appSrc = fs.readFileSync(path.join(__dirname, "web", "app.js"), "utf8");
+check("run count repaints on model, ensemble and Detail changes",
+  (appSrc.match(/Study\.repaint\(\)/g) || []).length === 2 &&
+  /function updateEnsembleControl[\s\S]*?Study\.repaint\(\)[\s\S]*?\n}/.test(appSrc) &&
+  appSrc.includes("updateEnsembleControl();\n  if (typeof mcRepaint"));
 
 console.log("wiring");
 const web = path.join(__dirname, "web");
