@@ -4,11 +4,14 @@
    lost against the best route if the boat sails through each point. Here it is drawn as a shaded
    band: dark within 5 min of the best route, then 10, then 20. A narrow band = the route matters;
    a wide one = the side hardly matters. Pure helpers (no Leaflet); mapview.js calls draw() from its
-   own canvas layer. vps/lab/test_criticality.js requires this file directly. */
+   own canvas layer. When the wind changes fast the band is only approximate (a detour meets
+   different wind than the best route); legs where it changes a lot say "rough".
+   vps/lab/test_criticality.js requires this file directly. */
 "use strict";
 
 const Criticality = (function () {
   // one hue, darker = closer to the best route; [max minutes, colour, alpha]
+  const APPROX = "The wind changes a lot on this leg. The band is a rough guide there.";
   const SHADES = [[5, "#5b2a86", 0.42], [10, "#8e5cc4", 0.30], [20, "#c9a8ee", 0.22]];
 
   function has(result) {
@@ -66,7 +69,7 @@ const Criticality = (function () {
     if (!has(result)) return [];
     return result.criticality.legs
       .filter((l) => l.width_nm && l.width_nm["10"] != null)
-      .map((l) => ({ to: l.to || "mark", nm: l.width_nm["10"] }));
+      .map((l) => ({ to: l.to || "mark", nm: l.width_nm["10"], rough: !!l.rough }));
   }
 
   function esc(t) {
@@ -79,8 +82,9 @@ const Criticality = (function () {
     return `<span class="cc-sep"></span><span class="cc-lbl">Time lost</span>` +
       SHADES.map(([m, col, al]) =>
         `<span class="mv-sw"><i style="background:${col};opacity:${Math.min(1, al * 2)}"></i>&lt;${m} min</span>`).join("") +
-      `<span class="mv-legnote">narrow = route matters</span>` +
-      (w.length ? `<span class="mv-legnote">10 min wide: ${w.map((x) => `${esc(x.to)} ${x.nm} nm`).join(", ")}</span>` : "");
+      `<span class="mv-legnote" title="${esc(APPROX)}">narrow = route matters. Approximate when the wind changes fast.</span>` +
+      (w.length ? `<span class="mv-legnote">10 min wide: ${w.map((x) =>
+        `${esc(x.to)} ${x.nm} nm${x.rough ? ` <b title="${esc(APPROX)}">rough</b>` : ""}`).join(", ")}</span>` : "");
   }
 
   return { SHADES, has, shadeOf, cells, draw, widths, legendHtml };

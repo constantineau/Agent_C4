@@ -21,6 +21,13 @@ state carries the tack the boat is on. Obstacles exactly as the router: every st
 `ObstacleField.crosses` (the exact supercover, and a step leaving the chart box counts as
 blocked). Sail-change costs are left out.
 
+A known limit (reviewed on #395, accepted; Expedition's bands are the same): when the wind changes
+fast, the slack is only approximately the time lost. The reverse run prices the rest of the leg at
+the times that meet the ORIGINAL ETA, while a boat that detoured reaches that point later and
+meets different wind. The exact answer is a full onward route from every grid point, far too slow.
+So each leg says how much its wind changes (`wind_change`) and is flagged `rough` past
+ROUGH_DIR_DEG / ROUGH_KN; the map says "approximate when the wind changes fast".
+
 Opt-in (`optimize_course(..., criticality=True)`): it costs a few seconds per leg.
 """
 from __future__ import annotations
@@ -34,6 +41,9 @@ MAX_NODES = int(os.environ.get("ROUTE_CRIT_MAX_NODES", "4000"))
 CAP_MIN = float(os.environ.get("ROUTE_CRIT_CAP_MIN", "20"))    # loss past this isn't sent (null)
 BANDS_MIN = (5, 10, 20)                                       # the map's shades
 MIN_SOG = 0.3
+# a leg whose wind changes more than this over its window is flagged "rough" (see wind_change)
+ROUGH_DIR_DEG = float(os.environ.get("ROUTE_CRIT_ROUGH_DEG", "25"))
+ROUGH_KN = float(os.environ.get("ROUTE_CRIT_ROUGH_KN", "4"))
 # 32 moves: every (a, b) step with |a|, |b| <= 3 and no common factor — headings every ~18 deg
 # at worst, so a reach isn't forced far off its course.
 MOVES = sorted({(a, b) for a in range(-3, 4) for b in range(-3, 4)
@@ -119,7 +129,6 @@ def _physics(wf, P, cur, waves, helm_factor, wave_coeffs, wave_uniform_hs):
 
 def _edges(g, obstacles):
     """Per node, its usable moves: [(neighbour, nm, bearing)], every step checked like the router's."""
-    from . import optimizer as OPT
     blk = getattr(obstacles, "blocked", None) if obstacles else None
     free = [[not (blk and blk(*g.ll(i, j))) for i in range(g.nx)] for j in range(g.ny)]
     out = {}
@@ -136,7 +145,10 @@ def _edges(g, obstacles):
                 lb, lob = g.ll(ii, jj)
                 if obstacles and obstacles.crosses(la, lo, lb, lob):
                     continue
-                lst.append(((ii, jj), OPT._hav_nm(la, lo, lb, lob), OPT._bearing(la, lo, lb, lob)))
+                # flat over the grid (its cells are square in nm): the step v->u is exactly the
+                # reverse of u->v, so the forward and reverse runs price the same track
+                lst.append(((ii, jj), g.cell * math.hypot(di, dj),
+                            math.degrees(math.atan2(di, dj)) % 360.0))
             out[(i, j)] = lst
     return out
 
@@ -197,12 +209,60 @@ def _forward(edges, env, speed, src, t0, horizon, tack_s):
     return best
 
 
-def _reverse(edges, env, speed, dst, eta, horizon, tack_s, iters=4):
+def _latest_departure(env, speed, v, track, nm, t, s, tack_s, floor, iters=6, bisect=14):
+    """Latest time the boat can leave node v on `track` and be ready to leave u at `t` on tack
+    `s` (a tack at u costs `tack_s` first), priced like `_forward`: on the wind at v when it
+    leaves. Returns (departure, side) or None. A few fixed-point passes find it in smooth wind;
+    the answer is always CHECKED (sailed forward, it must arrive by t). If the passes don't give
+    a checked one (a sharp wind change can make them flip-flop), it brackets a departure that
+    arrives in time, stepping back (doubling) no further than `floor`, and bisects to the latest."""
+    def arrive(x):
+        e = env(v, x)
+        sp = speed(e, track) if e is not None else None
+        if sp is None:
+            return None, 0
+        side = _side(e, track)
+        return x + nm / sp * 3600.0 + (tack_s if s and side and side != s else 0.0), side
+
+    x = t
+    for _ in range(iters):
+        a = arrive(x)[0]
+        if a is None:
+            break
+        nx = x - (a - t)                    # move the departure by how late/early it arrives
+        if abs(nx - x) < 1.0:
+            x = nx
+            break
+        x = nx
+    a, side = arrive(x)
+    if a is not None and a <= t + 1.0:
+        return x, side
+    hi = min(x, t)                          # leaving here (or later) doesn't make it
+    step = max(60.0, nm / 20.0 * 3600.0)    # as if at 20 kn, then doubling
+    lo = None
+    while hi - step >= floor:
+        a, _ = arrive(hi - step)
+        if a is not None and a <= t + 1.0:
+            lo = hi - step
+            break
+        hi, step = hi - step, step * 2.0
+    if lo is None:
+        return None                         # no departure in the window makes it: no edge
+    for _ in range(bisect):
+        mid = (lo + hi) / 2.0
+        a, _ = arrive(mid)
+        if a is not None and a <= t + 1.0:
+            lo = mid
+        else:
+            hi = mid
+    return lo, arrive(lo)[1]
+
+
+def _reverse(edges, env, speed, dst, eta, horizon, tack_s):
     """Latest departure from every (node, side) that still reaches `dst` at `eta` (time runs
     back). `side` = the tack the boat leaves on (0 at the mark). Priced exactly like `_forward`:
-    a step v->u is sailed on the wind at v when it LEAVES v, so its departure time is solved
-    (a few fixed-point passes) for the arrival the reverse clock needs at u; a tack at u costs
-    `tack_s` before the boat can leave it."""
+    a step v->u is sailed on the wind at v when it LEAVES v (`_latest_departure` solves for that
+    time and checks it); a tack at u costs `tack_s` before the boat can leave it."""
     best = {(dst, 0): eta}
     pq = [(-eta, dst, 0)]
     while pq:
@@ -211,22 +271,11 @@ def _reverse(edges, env, speed, dst, eta, horizon, tack_s, iters=4):
         if t < best.get((u, s), -math.inf) or t < horizon:
             continue
         for v, nm, brg in edges.get(u, ()):            # moves are symmetric: v is a predecessor too
-            track = (brg + 180.0) % 360.0               # the boat sails v -> u
-            tv, e, sp, side = t, None, None, 0
-            for _ in range(iters):
-                e = env(v, tv)
-                sp = speed(e, track) if e is not None else None
-                if sp is None:
-                    break
-                side = _side(e, track)
-                arr = t - (tack_s if s and side and side != s else 0.0)   # latest arrival at u
-                tv_new = arr - nm / sp * 3600.0
-                if abs(tv_new - tv) < 1.0:
-                    tv = tv_new
-                    break
-                tv = tv_new
-            if sp is None:
+            got = _latest_departure(env, speed, v, (brg + 180.0) % 360.0, nm, t, s, tack_s,
+                                    horizon)
+            if got is None:
                 continue
+            tv, side = got
             side = side or s
             if tv > best.get((v, side), -math.inf):
                 best[(v, side)] = tv
@@ -249,6 +298,23 @@ def _slack(fw, bw, tack_s):
         out[n] = min(ta - tb + (tack_s if a and b and a != b else 0.0)
                      for a, ta in arr for b, tb in bout[n])
     return out
+
+
+def wind_change(at, slat, slon, dlat, dlon, t0, eta):
+    """How much the wind changes over the leg's window: the largest shift (deg) and change in
+    speed (kn) at the start, the midpoint and the mark between the leg's start, middle and end
+    times. The band is approximate when this is large (see the module notes)."""
+    from . import optimizer as OPT
+    pts = [(slat, slon), ((slat + dlat) / 2.0, (slon + dlon) / 2.0), (dlat, dlon)]
+    times = [t0, (t0 + eta) / 2.0, eta]
+    ddir = dkn = 0.0
+    for la, lo in pts:
+        ws = [w for w in (at(la, lo, t) for t in times) if w]
+        for i in range(len(ws)):
+            for k in range(i + 1, len(ws)):
+                ddir = max(ddir, abs(OPT._wrap180(ws[i][1] - ws[k][1])))
+                dkn = max(dkn, abs(ws[i][0] - ws[k][0]))
+    return round(ddir), round(dkn, 1)
 
 
 def leg_band(wf, P, slat, slon, t0, dlat, dlon, eta, obstacles=None, cur=None, waves=None,
@@ -274,6 +340,7 @@ def leg_band(wf, P, slat, slon, t0, dlat, dlon, eta, obstacles=None, cur=None, w
     if fw_dst is None or bw_src is None or not slack:
         return None
     base = min(slack.values())
+    ddir, dkn = wind_change(at, slat, slon, dlat, dlon, float(t0), float(eta))
     loss = [None] * (g.nx * g.ny)
     for (i, j), s in slack.items():
         # "here" = within one cell: the best of this node and the neighbours it can sail straight
@@ -297,6 +364,9 @@ def leg_band(wf, P, slat, slon, t0, dlat, dlon, eta, obstacles=None, cur=None, w
         "grid_minutes": round((fw_dst - float(t0)) / 60.0, 1),
         "reverse_minutes": round((float(eta) - bw_src) / 60.0, 1),   # the reverse run's leg time
         "tack_s": tack_s,
+        # how much the wind changes over the leg: past ROUGH_* the band is only a rough guide
+        "wind_change": {"dir_deg": ddir, "kn": dkn},
+        "rough": ddir > ROUGH_DIR_DEG or dkn > ROUGH_KN,
         "width_nm": widths,                       # mean width of the 5/10/20-min band
     }
 

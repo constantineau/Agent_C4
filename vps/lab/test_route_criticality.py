@@ -141,6 +141,57 @@ def test_reverse_run_sails_the_forward_physics_on_a_changing_wind():
     assert min(v for v in b["loss_min"] if v is not None) == 0.0
 
 
+class Step:
+    """18 kn from the north, dying at T0+1 h to 5 kn from the north-west. A step that straddles
+    the drop flip-flops a plain fixed-point solve (leave late: light air, so leave early: fresh
+    breeze, so leave late...) and four passes stopped on a departure that arrives too late."""
+    loaded = True
+
+    def wind_at(self, lat, lon, t):
+        return (18.0, 0.0) if t < T0 + 3600 else (5.0, 315.0)
+
+
+def test_reverse_departures_are_checked_on_a_step_change():
+    """Every latest departure the reverse run keeps must be sailable: leaving that node then,
+    priced like the forward run, some step reaches a kept state of the next node in time."""
+    g = CRIT._Grid(*S, *M)
+    at_, speed = CRIT._physics(Step(), P, None, None, 1.0, None, None)
+    env = CRIT._cached(g, at_)
+    edges = CRIT._edges(g, None)
+    dst = g.snap(*M)
+    eta = T0 + 2.0 * 3600
+    bw = CRIT._reverse(edges, env, speed, dst, eta, eta - 6 * 3600, 30.0)
+    assert len(bw) > 500
+    for (v, side), tv in bw.items():
+        if v == dst:
+            continue
+        e = env(v, tv)
+        ok_ = False
+        for u, nm, brg in edges[v]:
+            sp = speed(e, brg) if e else None
+            if sp is None:
+                continue
+            sd = CRIT._side(e, brg)
+            if (sd or side) != side:
+                continue
+            arr = tv + nm / sp * 3600.0
+            for s2 in (-1, 0, 1):
+                tu = bw.get((u, s2))
+                if tu is not None and arr + (30.0 if s2 and sd and sd != s2 else 0.0) <= tu + 1.0:
+                    ok_ = True
+                    break
+            if ok_:
+                break
+        assert ok_, (v, side, tv)
+
+
+def test_fast_changing_wind_is_flagged_rough():
+    steady = CRIT.leg_band(WF(12.0, 0.0), P, *S, T0, *M, T0 + 3 * 3600)
+    assert steady["rough"] is False and steady["wind_change"] == {"dir_deg": 0, "kn": 0.0}
+    b = CRIT.leg_band(Shifty(), P, *S, T0, *M, T0 + 3 * 3600)
+    assert b["rough"] is True and b["wind_change"]["dir_deg"] >= 25
+
+
 def test_tacks_cost_time_inside_the_laylines():
     free = CRIT.leg_band(WF(12.0, 0.0), P, *S, T0, *M, T0 + 4 * 3600, tack_s=0)
     tk = CRIT.leg_band(WF(12.0, 0.0), P, *S, T0, *M, T0 + 4 * 3600, tack_s=120)

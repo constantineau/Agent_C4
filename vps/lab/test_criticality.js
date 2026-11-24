@@ -31,6 +31,12 @@ check("has a band", C.has(R) && !C.has({}) && !C.has({ criticality: { legs: [] }
 check("width line", C.widths(R)[0].nm === 1.5 && /Top 1.5 nm/.test(C.legendHtml(R)));
 check("names are escaped", !/<b>/.test(C.legendHtml({ criticality: { legs: [Object.assign({}, leg, { to: "<b>x" })] } })));
 
+console.log("rough legs and the caveat");
+const rough = { criticality: { legs: [Object.assign({}, leg, { rough: true })] } };
+check("rough leg says so", /Top 1.5 nm <b[^>]*>rough<\/b>/.test(C.legendHtml(rough)));
+check("steady leg doesn't", !/rough<\/b>/.test(C.legendHtml(R)));
+check("legend says it's approximate in fast-changing wind", /Approximate when the wind changes fast/.test(C.legendHtml(R)));
+
 console.log("draw");
 const rects = [];
 const ctx = { beginPath() {}, fill() { rects.push("fill"); }, rect(x, y, w, h) { rects.push([x, y, w, h]); } };
