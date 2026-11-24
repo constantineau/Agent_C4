@@ -215,6 +215,10 @@ def build_gameplan_pdf(payload: dict) -> bytes:
     if cur.get("source"):
         rows.append(("current", _esc(cur.get("source"))))
     story.append(_kv_table(rows, st))
+    corr = r.get("corrections") or {}
+    if isinstance(corr, dict) and corr.get("applied"):     # #384: a corrected forecast says so
+        story.append(Paragraph("<b>Corrected forecast:</b> "
+                               + _esc("; ".join(corr.get("text") or [])), st["small"]))
 
     # ---- route schematic ----
     if r.get("path"):

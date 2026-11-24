@@ -692,6 +692,18 @@ but marked degraded: "Forecast ends before the finish: last hours use the final 
   optimize result), and the `optModelSkill` web panel.
 - **Full design + math + as-built ops + env vars:** **`docs/MODEL_SKILL_WEIGHTING.md`**.
 
+## Manual model corrections (#384)
+
+Under the Gameplan **Weather models** checkboxes, **Correct models** opens one row per chosen model:
+turn (°, + = wind shifted right), speed (% of the forecast), later (h, + = the weather comes after
+the forecast: at time t the model is read at t − shift), and an optional fade back to the plain
+forecast over N minutes from a chosen time (blank = the route start). Kept per race in the browser
+and sent with every route run (`corrections` in `POST /api/optimize`). Applied in
+`app/wind/windfield.py` to each model's own wind before the blend, after its venue-skill de-bias
+(`app/wind/corrections.py`, shared with the Orin re-route). A route that used one says so: the
+route rail ("Corrected forecast: GFS: 10° right"), the PDF route summary, and the run log; the
+Deploy plume says its lines are the raw forecasts. The playbook routes the raw blend for now.
+
 ## Race documents (found 2026-06-17)
 
 **2026 Bayview Mackinac** (static — auto-fetch works):
