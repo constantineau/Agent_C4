@@ -239,6 +239,13 @@ def _n2k_loop():
 
 
 @app.on_event("startup")
+def _recover_course_edit():
+    """A course edit cut off by a power loss (#406) is finished or undone before anything reads
+    the course or the navigator."""
+    orinroute.recover_if_needed()
+
+
+@app.on_event("startup")
 def _start_n2k_check():
     if os.environ.get("N2K_CHECK", "1") != "0":
         threading.Thread(target=_n2k_loop, name="n2k-check", daemon=True).start()

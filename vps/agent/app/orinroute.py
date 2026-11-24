@@ -292,7 +292,7 @@ def record_for(route, marks):
     """The whole stored course record (definition, revision, edits aboard, the Lab's base), if it
     is the course the navigator holds, else None. See `_definition_for`. A course edit cut off half
     way (power lost) is finished or undone first (`recover`)."""
-    if os.path.exists(_journal_path()) and recover():
+    if recover_if_needed():
         marks = NAV._marks(route) or marks          # recovery may have put other marks back
     rec = _read(_definition_path())
     if not rec or rec.get("route") != route or not rec.get("marks_hash"):
@@ -342,6 +342,20 @@ def end_edit():
         pass
 
 
+# set while recover() runs (its own pick_mark must not start it again) or while a course edit
+# writes its stores (courserev.edit: a navigator call inside it must not "recover" the edit
+# half way). Only ever set by the thread holding COURSE_LOCK, so other threads just wait.
+_RECOVERING = []
+
+
+def recover_if_needed():
+    """Run `recover` when a journal is on disk (a cheap check; called before every course record
+    read and every navigator read or move, and at engine start)."""
+    if not os.path.exists(_journal_path()):
+        return False                  # (a run in progress holds COURSE_LOCK: recover() waits)
+    return recover()
+
+
 def recover():
     """Finish or undo a course edit that a power cut stopped part way. The marks aboard decide:
     the new course's marks (or the new load id, for an edit that kept the marks) → finish it (load
@@ -350,37 +364,48 @@ def recover():
     changed anything. Never raises."""
     try:
         with COURSE_LOCK:
-            j = _read(_journal_path())
-            if not isinstance(j, dict) or not isinstance(j.get("new"), dict) \
-                    or not isinstance(j.get("old"), dict):
-                end_edit()
+            if _RECOVERING:
                 return False
-            route, old, new = j.get("route"), j["old"], j["new"]
-            have = _marks_hash([(m.get("name"), m.get("lat"), m.get("lon"))
-                                for m in NAV._marks(route) or []])
-            load = (_read(_load_id_path()) or {}).get("load_id")
-            if have == new.get("marks_hash") and (load == new.get("load_id")
-                                                  or have != old.get("marks_hash")):
-                keep = new
-            elif have == old.get("marks_hash"):
-                keep = old
-            else:
-                end_edit()
-                return False
-            set_load_id(route, keep.get("load_id"))
-            write_record(keep)
-            # the run, if the cut came between the marks and the run; then the edit's next mark
-            NAV.restore_progress(route, j.get("progress"))
-            nav = j.get("nav_index")
-            if keep is new and isinstance(nav, int) and not isinstance(nav, bool):
-                NAV.pick_mark(nav, route)
-            end_edit()
-            print(f"[course/edit] recovered after a cut: kept the {'new' if keep is new else 'old'}"
-                  " course", flush=True)
-            return True
+            _RECOVERING.append(1)
+            try:
+                return _recover()
+            finally:
+                _RECOVERING.clear()
     except Exception as exc:  # noqa: BLE001
         print(f"[course/edit] recovery failed: {type(exc).__name__}: {exc}", flush=True)
         return False
+
+
+def _recover():
+    """The work of `recover`; caller holds COURSE_LOCK with _RECOVERING set."""
+    j = _read(_journal_path())
+    if not isinstance(j, dict) or not isinstance(j.get("new"), dict) \
+            or not isinstance(j.get("old"), dict):
+        end_edit()
+        return False
+    route, old, new = j.get("route"), j["old"], j["new"]
+    have = _marks_hash([(m.get("name"), m.get("lat"), m.get("lon"))
+                        for m in NAV._marks(route) or []])
+    load = (_read(_load_id_path()) or {}).get("load_id")
+    if have == new.get("marks_hash") and (load == new.get("load_id")
+                                          or have != old.get("marks_hash")):
+        keep = new
+    elif have == old.get("marks_hash"):
+        keep = old
+    else:
+        end_edit()
+        return False
+    set_load_id(route, keep.get("load_id"))
+    write_record(keep)
+    # the run, if the cut came between the marks and the run; then the edit's next mark
+    NAV.restore_progress(route, j.get("progress"))
+    nav = j.get("nav_index")
+    if keep is new and isinstance(nav, int) and not isinstance(nav, bool):
+        NAV.pick_mark(nav, route)
+    end_edit()
+    print(f"[course/edit] recovered after a cut: kept the {'new' if keep is new else 'old'}"
+          " course", flush=True)
+    return True
 
 
 def write_record(rec):

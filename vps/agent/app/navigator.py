@@ -324,6 +324,7 @@ def _set_progress(route, change):
     """Run `change(rec, marks) -> (ok, note)` on `route`'s progress under the lock and save it.
     Returns the result dict the crew's controls show."""
     from . import orinroute
+    _recover_course_edit()
     ds = _store()
     if ds is None:
         return {"ok": False, "no_store": True, "note": "Marks can't be changed here."}
@@ -415,16 +416,18 @@ def progress_snapshot(route):
     return {k: rec.get(k) for k in ("i", "hist", "hold", "run")}
 
 
-def restore_progress(route, snap):
+def restore_progress(route, snap, force=False):
     """After a power cut during a course edit (#406): put the run back when the stored one no
     longer belongs to the marks aboard (the cut came between writing the marks and the run).
-    A run that does belong to them is left alone. Returns True when it put one back."""
+    A run that does belong to them is left alone, unless `force` (a failed edit puts the run
+    back exactly as it was). Returns True when it put one back."""
     ds = _store()
     if ds is None or not isinstance(snap, dict):
         return False
     with _PROGRESS_LOCK:
         marks = _marks(route) or []
-        if not marks or (ds.get_nav_progress(route) or {}).get("fp") == _course_fp(marks):
+        if not marks or (not force and
+                         (ds.get_nav_progress(route) or {}).get("fp") == _course_fp(marks)):
             return False
         try:
             clamp = lambda v: max(0, min(int(v), len(marks) - 1))          # noqa: E731
@@ -765,8 +768,16 @@ def get_course(route: str = None):
     return {"available": bool(marks), "route": route, "marks": marks, "legs": legs}
 
 
+def _recover_course_edit():
+    """A course edit cut off by a power loss (#406) is finished or undone before the navigator
+    reads or moves its run, so an old next mark is never served or advanced first."""
+    from . import orinroute
+    orinroute.recover_if_needed()
+
+
 def get_navigator(route: str = None):
     """Next mark, ETA, leg type, and laylines from live position + wind."""
+    _recover_course_edit()
     route = route or active_route()
     marks = _marks(route)
     s = _fresh(_latest())

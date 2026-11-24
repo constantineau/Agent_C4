@@ -129,7 +129,9 @@ def edit(body, after_change=None):
         nxt = _nav_next()
         target = None
         if new_edit and op in ("skip_to", "finish_at"):
-            target = courseedit.nav_index_of(new_def if op == "skip_to" else base, cid, new_edit["pos"])
+            # the place names a mark of the course aboard NOW (edits apply in turn), so its
+            # navigator index comes from that course, before this edit
+            target = courseedit.nav_index_of(rec["definition"], cid, new_edit["pos"])
             if op == "finish_at" and nxt is not None and target is not None and target < nxt:
                 return {"ok": False, "note": BEHIND}
         if op == "skip_to" and new_edit:
@@ -152,6 +154,8 @@ def edit(body, after_change=None):
             nav_to, nav_note = _unskip_target(undone)
         kept_run = True
         journal = False
+        snap = NAV.progress_snapshot(route)
+        orinroute._RECOVERING.append(1)      # this edit's own journal: not for recovery now
         try:
             number = orinroute.next_revision()
             if new_edit:
@@ -167,8 +171,7 @@ def edit(body, after_change=None):
                 out["load_id"] = orinroute.new_load_id()
             # both records on disk first: a power cut in the steps below is put right on the next
             # read (orinroute.recover)
-            orinroute.begin_edit(route, rec, out, nav_index=nav_to,
-                                 progress=NAV.progress_snapshot(route))
+            orinroute.begin_edit(route, rec, out, nav_index=nav_to, progress=snap)
             journal = True
             if new_flat != old_flat:
                 kept_run = NAV.replace_marks(route, new_flat)
@@ -185,6 +188,8 @@ def edit(body, after_change=None):
                 try:
                     if new_flat != old_flat:
                         NAV.replace_marks(route, old_flat)
+                    # the run exactly as it was (new marks clamp it; a pick may have moved it)
+                    NAV.restore_progress(route, snap, force=True)
                     orinroute.set_load_id(route, rec.get("load_id"))
                     orinroute.write_record(rec)
                     orinroute.end_edit()
@@ -192,6 +197,8 @@ def edit(body, after_change=None):
                     # can't put it back now: the journal stays, the next read puts it right
                     pass
             return {"ok": False, "note": "Couldn't save the change. Try again."}
+        finally:
+            orinroute._RECOVERING.clear()
         if course_changed and after_change is not None:
             try:
                 after_change()

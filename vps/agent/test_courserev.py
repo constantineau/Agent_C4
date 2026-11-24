@@ -264,7 +264,7 @@ try:
     edit(op="skip_to", pos=2, name="Windward")
 except PowerCut:
     pass
-check("(the cut left the navigator where it was)", NAV.get_navigator()["next_mark"]["index"] != 3)
+check("(the cut left the navigator where it was)", NAV.progress_snapshot("wl")["i"] != 3)
 v = rev()
 check("next read: the skip's revision and its next mark, together",
       v["edits"][-1]["op"] == "skip_to" and NAV.get_navigator()["next_mark"]["index"] == 3
@@ -286,6 +286,45 @@ check("(the cut came between the marks and the run)", names()[-1] == "Finish" an
 v = rev()
 check("next read: the run is put back on the mark it was on", v["shortened"]
       and NAV.get_navigator()["next_mark"]["index"] == 2 and not os.path.exists(JOURNAL))
+
+print("round 3: the next mark never moves wrongly")
+NAV.pick_mark(3)
+check("after a shortened course, a finish behind the boat is still refused",
+      edit(op="finish_at", pos=1, name="Leeward")["note"] == "That mark is behind you.")
+edit(op="undo")                                    # back to the full course
+NAV.pick_mark(3)
+NAV.pick_mark(2)                                   # Undo history now holds 3
+snap0 = NAV.progress_snapshot("wl")
+_wr = orinroute.write_record
+orinroute.write_record = lambda rec: (_ for _ in ()).throw(OSError("disk full"))
+r = edit(op="finish_at", pos=1, name="Leeward")
+orinroute.write_record = _wr
+check("a failed shortened save: said, the marks back, the run exactly as it was",
+      r["ok"] is False and names() == ["Start", "Windward", "Leeward", "Windward", "Finish"]
+      and NAV.progress_snapshot("wl") == snap0)
+v = rev()                                          # (the journal, if the put-back couldn't finish)
+check("…and the next read keeps the old course, run untouched", v.get("available")
+      and not v["shortened"] and NAV.progress_snapshot("wl") == snap0 and not os.path.exists(JOURNAL))
+cut_at("write_record")
+try:
+    edit(op="skip_to", pos=2, name="Windward")
+except PowerCut:
+    pass
+check("(a skip cut off: the journal is there, the navigator not moved yet)",
+      os.path.exists(JOURNAL) and NAV.progress_snapshot("wl")["i"] == 2)
+nav = NAV.get_navigator()                          # the navigator is read first, not the course
+check("the first navigator read recovers first: the skip's next mark, journal gone",
+      nav["next_mark"]["index"] == 3 and not os.path.exists(JOURNAL))
+edit(op="undo")
+cut_at("write_record")
+try:
+    edit(op="skip_to", pos=2, name="Windward")
+except PowerCut:
+    pass
+from fastapi.testclient import TestClient as _TC  # noqa: E402
+with _TC(engine_app.app):                          # engine start runs the recovery
+    check("engine start recovers too", not os.path.exists(JOURNAL)
+          and NAV.progress_snapshot("wl")["i"] == 3)
 
 print("the revision number can't be written:")
 _nr = orinroute.next_revision
