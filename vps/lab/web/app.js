@@ -4548,7 +4548,8 @@ function debRecRows(rs, src) {
       : (canRun ? `<button class="mini" onclick="debRunRecording(${arg(i)})">${d ? "Re-run" : "Debrief"}</button>`
                 : '<span class="muted">not on the boat log</span>')
         + (d ? (onScreen ? ' <span class="pill ok" style="margin-left:8px">showing</span>'
-                         : ` <button class="mini" style="margin-left:8px" onclick="debOpenDebrief(${d.id})">Open</button>`) : "");
+                         : ` <button class="mini" style="margin-left:8px" onclick="debOpenDebrief(${d.id})">Open</button>`) : "")
+        + (x.track && typeof Replay !== "undefined" ? ` <button class="mini" style="margin-left:8px" onclick="Replay.openRow(${arg(i)})">Replay</button>` : "");
     return `<tr${isThis || onScreen ? ' class="winrow"' : ""}>
       <td><b>${esc(x.name || "recording")}</b><div class="muted" style="font-size:11px">${when}${x.kind ? " · " + esc(x.kind) : ""}</div>${x.kit !== undefined && x.start_ts != null
         ? `<div style="font-size:11px">Boat: <b>${esc(x.boat_name || "?")}</b>${x.boat_has_profile ? "" : ' <span class="pill warn">no profile</span>'} <a href="javascript:void 0" onclick="debEditBoat(${arg(i)})">Change</a></div>` : ""}</td>
@@ -4677,9 +4678,11 @@ function paintDebrief() {
     document.getElementById("view").innerHTML = `<div class="opt">
       <div class="card"><div class="placeholder">No race yet. <a href="#races">Add one in Races</a>.</div></div>
       ${debPracticeCard()}
+      <div id="replayHost"></div>
       ${body}
       ${typeof manCard === "function" ? manCard(r, Deb) : ""}
       ${retroCard()}</div>`;
+    if (typeof Replay !== "undefined") Replay.attach();
     if (running && !Deb.poll) Deb.poll = setInterval(debPoll, 4000);
     return;
   }
@@ -4698,11 +4701,13 @@ function paintDebrief() {
     </div>
     ${debRecordingsCard()}
     ${debPracticeCard()}
+    <div id="replayHost"></div>
     ${body}
     ${typeof manCard === "function" ? manCard(r, Deb) : ""}
     ${debTrackCard()}
     ${retroCard()}
   </div>`;
+  if (typeof Replay !== "undefined") Replay.attach();   // #373: the replay card survives repaints
   if (running && !Deb.poll) Deb.poll = setInterval(debPoll, 4000);
 }
 
