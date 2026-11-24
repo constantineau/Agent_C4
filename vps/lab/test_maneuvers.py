@@ -419,3 +419,33 @@ def test_endpoint_reads_the_stored_track(tmp_path, monkeypatch):
     track.save_track(None, {"source": "boatlog", "fixes": fixes, "window": win})
     r = client.get(f"/api/debrief/maneuvers?no_race=1&recording={T0}", headers=hdr).json()
     assert r["available"] and r["race_id"] is None and len(r["maneuvers"]) == 2
+
+
+def test_track_revision_follows_every_field_the_analysis_reads():
+    fixes, _ = sail([(300, "tack")])
+    base = {"fixes": fixes, "sail_log": [], "trust": CLEAN}
+    r0 = M.track_revision(base)
+    assert M.track_revision({**base, "fixes": [dict(f) for f in fixes]}) == r0
+    for field, bump in (("t", 1.0), ("twa", 1.0), ("stw", 0.1), ("lat", 1e-5)):
+        changed = [dict(f) for f in fixes]
+        changed[100][field] = changed[100][field] + bump
+        assert M.track_revision({**base, "fixes": changed}) != r0, field
+    assert M.track_revision({**base, "trust": None}) != r0
+    assert M.track_revision({**base, "sail_log": [{"t": T0, "flying": ["J1"]}]}) != r0
+
+
+def test_track_endpoint_carries_the_revision(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from app import auth, main, track
+    monkeypatch.setattr(track, "TRACK_DIR", str(tmp_path))
+    fixes, _ = sail([(300, "tack")])
+    client = TestClient(main.app)
+    hdr = {"Authorization": "Bearer " + auth.issue_token()}
+    track.save_track("t-race", {"source": "gpx", "fixes": fixes})
+    a = client.get("/api/debrief/track?race_id=t-race", headers=hdr).json()["revision"]
+    later = [{**f, "t": f["t"] + 3600} for f in fixes]          # same positions, new times
+    track.save_track("t-race", {"source": "gpx", "fixes": later})
+    b = client.get("/api/debrief/track?race_id=t-race", headers=hdr).json()
+    assert a and b["revision"] and b["revision"] != a
+    m = client.get("/api/debrief/maneuvers?race_id=t-race", headers=hdr).json()
+    assert m["revision"] == b["revision"]

@@ -128,3 +128,44 @@ test("a GPX replaced by another with the same fix count still asks again", async
   await new Promise((r) => setTimeout(r, 0));
   assert.equal(calls.length, 2);
 });
+
+test("the server's track revision (times, instruments) keys the cache; manForget clears it", async () => {
+  const { ctx, calls } = load();
+  vm.runInContext("this.manForget = manForget;", ctx);
+  ctx.answer = ANSWER;
+  const pts = [[26.1, -80.0], [26.2, -80.0]];
+  const deb = { raceId: "r1", track: { available: true, source: "gpx", n: 2, fixes: pts, revision: "aaa" } };
+  ctx.manCard(null, deb);
+  await new Promise((r) => setTimeout(r, 0));
+  deb.track = { ...deb.track, revision: "bbb" };            // same positions, new times
+  ctx.manCard(null, deb);
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(calls.length, 2);
+  ctx.manCard(null, deb);
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(calls.length, 2);
+  ctx.manForget();                                         // after an upload/fetch/clear
+  ctx.manCard(null, deb);
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(calls.length, 3);
+});
+
+test("the Debrief tab clears the card's cache after a track upload, fetch or removal", () => {
+  const app = fs.readFileSync(path.join(here, "..", "..", "vps", "lab", "web", "app.js"), "utf8");
+  for (const fn of ["debUploadGpx", "debFetchYb", "debClearTrack"]) {
+    const a = app.indexOf("async function " + fn + "(");
+    const body = app.slice(a, app.indexOf("\n}\n", a));
+    assert.match(body, /manForget\(\)/, fn);
+  }
+});
+
+test("measured but unchecked turns say why none are averaged", () => {
+  const { ctx } = load();
+  const m = { ...M1, counted: false, trusted: false, flags: ["instruments not checked"] };
+  const html = ctx.manBody({ ...ANSWER, trust_checked: false, maneuvers: [m],
+    summary: { found: 1, counted: 0, tack: { n: 0 }, gybe: { n: 0 }, groups: [] } });
+  assert.doesNotMatch(html, /could be measured/);
+  assert.match(html, /instrument check didn't run/);
+  const none = ctx.manBody({ ...ANSWER, maneuvers: [M2], summary: { found: 1, counted: 0, tack: { n: 0 }, gybe: { n: 0 }, groups: [] } });
+  assert.match(none, /None of these turns could be measured/);
+});

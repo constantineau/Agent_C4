@@ -1548,7 +1548,13 @@ async def debrief_track_get(race_id: str, recording: float = None):
             "matched_by": t.get("matched_by"), "n": len(fixes), "window": t.get("window"),
             "recording": track.recording_of(t), "trust": t.get("trust"),
             "sail_changes": len(t.get("sail_log") or []),
+            "revision": _man_revision(t),    # content hash: the tack/gybe card's cache key (#375)
             "fixes": [[f["lat"], f["lon"]] for f in fixes]}   # lightweight polyline for the map
+
+
+def _man_revision(t):
+    from . import maneuvers
+    return maneuvers.track_revision(t)
 
 
 @app.get("/api/debrief/maneuvers")
@@ -1564,7 +1570,8 @@ async def debrief_maneuvers(race_id: str = None, recording: float = None, no_rac
         return {"available": False, "note": "No track for this recording.", "maneuvers": []}
     res = await run_in_threadpool(maneuvers.analyze, t.get("fixes") or [], t.get("sail_log"),
                                   t.get("trust"))
-    return {**res, "race_id": rid, "recording": track.recording_of(t), "source": t.get("source")}
+    return {**res, "race_id": rid, "recording": track.recording_of(t), "source": t.get("source"),
+            "revision": maneuvers.track_revision(t)}
 
 
 @app.post("/api/debrief/track/upload")

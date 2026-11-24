@@ -61,6 +61,21 @@ M_PER_DEG = 111_195.0
 
 TYPES = ("tack", "gybe")
 
+# Every fix field the analysis reads. `track_revision` hashes exactly these, so a track whose
+# times or instrument values change (not just its positions) reads as a new track to the card.
+FIX_FIELDS = ("t", "lat", "lon", "sog", "cog", "tws", "twa", "stw")
+
+
+def track_revision(track):
+    """A short content hash of a stored track: every fix's FIX_FIELDS, plus its sail log and
+    trust sweep (both feed the answer). Changes whenever anything the analysis reads changes."""
+    import hashlib
+    import json
+    t = track or {}
+    rows = [[f.get(k) for k in FIX_FIELDS] for f in (t.get("fixes") or ())]
+    blob = json.dumps([rows, t.get("sail_log") or [], t.get("trust")], sort_keys=True, default=str)
+    return hashlib.sha1(blob.encode()).hexdigest()[:16]
+
 
 def _wrap180(d):
     return ((d + 180.0) % 360.0) - 180.0

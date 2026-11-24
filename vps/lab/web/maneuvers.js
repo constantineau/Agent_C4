@@ -25,11 +25,13 @@ function manKey(raceId, recording) { return (raceId == null ? "@norace" : raceId
 // behind it does (a GPX replaced, a track fetched or removed, a debrief re-run), so an answer is
 // never served for a track that has since changed (Codex on #396).
 function manTrackSig(t) {
-  return t && t.available ? [t.source, t.n, t.boat, t.matched_by, t.recording, manFixHash(t.fixes)].join("~") : "none";
+  // `revision` is the server's hash of every field the analysis reads (times, positions, the
+  // instrument channels, the sail log, the trust sweep). An older server sends none: fall back to
+  // hashing what the tab has (the polyline).
+  return t && t.available
+    ? [t.source, t.n, t.boat, t.matched_by, t.recording, t.revision || manFixHash(t.fixes)].join("~") : "none";
 }
-// A cheap content hash of the track's polyline ([[lat, lon], …] from /api/debrief/track), so a GPX
-// replaced by another with the same number of fixes still reads as a new track (Codex on #396).
-// Up to ~1000 evenly spaced points plus the last one.
+// A cheap hash of the polyline ([[lat, lon], …]): the fallback when no server revision is given.
 function manFixHash(fixes) {
   if (!Array.isArray(fixes) || !fixes.length) return "0";
   const step = Math.max(1, Math.floor(fixes.length / 1000));
@@ -42,6 +44,10 @@ function manFixHash(fixes) {
   add(fixes[fixes.length - 1]);
   return h.toString(36);
 }
+// Drop every kept answer. The Debrief tab calls this after any track upload, fetch or removal,
+// on top of the revision in the key.
+function manForget() { ManData.byKey = {}; }
+
 function manTarget(r, deb) {
   const t = (deb || {}).track;
   if (r && r.available) {
@@ -108,6 +114,16 @@ function manAvgRow(label, g) {
     <td>${manF(g.recover_s)}</td><td>${manF(g.entry_kn, 1)} / ${manF(g.min_kn, 1)} / ${manF(g.exit_kn, 1)}</td></tr>`;
 }
 
+// Why no turn made the averages: unmeasured, or measured but unchecked / in an instrument fault.
+function manNoneWhy(ms) {
+  const measured = ms.filter((m) => m.loss_m != null);
+  if (!measured.length) return "None of these turns could be measured.";
+  const unchecked = measured.some((m) => (m.flags || []).includes("instruments not checked"));
+  return unchecked
+    ? "None of these turns are in the averages: the instrument check didn't run on this track. Losses are in the list below."
+    : "None of these turns are in the averages: the instruments were faulty there. Losses are in the list below.";
+}
+
 function manBody(d) {
   if (!d || !d.available) return manShell(`<div class="placeholder">${esc((d && d.note) || "No track for this recording.")}</div>`);
   const ms = d.maneuvers || [];
@@ -139,7 +155,7 @@ function manBody(d) {
       <td style="font-size:11px">${esc((m.flags || []).join("; "))}</td></tr>`).join("");
   return manShell(`${warn}
     ${avg.length ? `<table class="fleet-tbl"><thead><tr><th></th><th>Count</th><th>Lost (s)</th><th>Lost (m)</th><th>Back to speed (s)</th><th>Speed in / low / out (kts)</th></tr></thead><tbody>${avg.join("")}</tbody></table>`
-      : `<div class="placeholder">None of these turns could be measured.</div>`}
+      : `<div class="placeholder">${esc(manNoneWhy(ms))}</div>`}
     ${left > 0 ? `<div class="muted" style="font-size:11px;margin-top:4px">${left} of ${s.found} not in the averages. See the notes below.</div>` : ""}
     <details style="margin-top:8px"><summary>All ${ms.length} turns</summary>
       <table class="fleet-tbl"><thead><tr><th>Time</th><th>Type</th><th>Side</th><th>Lost (s)</th><th>Lost (m)</th><th>Speed in / low / out</th><th>Back to speed (s)</th><th>Sails</th><th>Note</th></tr></thead><tbody>${rows}</tbody></table>
