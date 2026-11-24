@@ -36,6 +36,7 @@ import orin_weather as W  # noqa: E402
 
 from app import boats, optimizer, routerun  # noqa: E402  (vps/lab on PYTHONPATH)
 from app import plume as lab_plume  # noqa: E402
+from app import routesafety  # noqa: E402  (#405: the per-check states, same as the Lab's)
 from app.geo import obstacles as geo  # noqa: E402
 from shared import boat_polar, boat_profile, race_def  # noqa: E402
 from shared import boat_id as boat_id_setting  # noqa: E402
@@ -70,6 +71,7 @@ BOAT_IN_ZONE = "Boat is inside an exclusion zone. Re-route not run."
 BOAT_IN_ISLAND = "Boat is inside an island's keep-out. Re-route not run."
 INCOMPLETE = "Route incomplete."
 NO_ZONES = "No zones or rounding sides aboard. Redeploy the course."
+NO_DEPTH = "Depths not checked aboard. Check the paper chart."     # #405
 PLAN_NEAR_NM = 20.0          # compare with the plan only while the boat is this close to it
 
 
@@ -572,11 +574,42 @@ def run(req, now=None, on_progress=None, on_phase=None, is_online=None):
                         {"available": False, "note": INCOMPLETE}),
             "chart": {"land": chart_note is None,
                       "source": (res.get("obstacles") or {}).get("source")},
+            # #405: land, depth, zones, marks and chart coverage, each checked / not / failed
+            "checks": safety_checks(res.get("safety"), chart_note, bool(full)),
         })
     out["run_s"] = round(time.time() - t_wall, 1)
     out["peak_rss_mb"] = _peak_rss_mb()
     out["finished_at"] = int(time.time())
     return out
+
+
+# ---- the safety checks (#405) ------------------------------------------------------------------
+def safety_checks(safety, chart_note, has_course):
+    """[{id, label, state, texts}]: the route's own checks (optimizer.route_safety) with what the
+    boat knows on top. Land is the chart's: no chart note means the Lab's land mask was used (a
+    carried mask doesn't carry its own land/depth status, so the optimizer alone would call it
+    unchecked); a chart note means land wasn't checked, and a chart that doesn't cover the boat is a
+    coverage failure. Depth is never checked aboard: the carried mask doesn't say which water a
+    chart gave depths for. No course aboard: no zones and no rounding sides. A route with no
+    `checks` (an optimizer from before #405) counts as every check not run. Reporting only: a
+    re-route is never refused for these (degrading is right at sea); the iPad says which didn't run."""
+    own = (safety or {}).get("checks") if isinstance(safety, dict) else None
+    if isinstance(own, list) and not chart_note:
+        own = [dict(c, state=routesafety.CHECKED, texts=[]) if c.get("id") == "land" else c
+               for c in own if isinstance(c, dict)]
+    if isinstance(own, list):
+        own = [dict(c, state=routesafety.NOT_CHECKED, texts=[NO_DEPTH])
+               if c.get("id") == "depth" and c.get("state") != routesafety.FAILED else c
+               for c in own]
+    boat = []
+    if chart_note:
+        boat.append({"id": "land", "state": routesafety.NOT_CHECKED, "texts": [chart_note]})
+        boat.append({"id": "chart", "state": (routesafety.FAILED if chart_note == NO_COVER
+                                              else routesafety.NOT_CHECKED), "texts": [chart_note]})
+    if not has_course:
+        for cid in ("zones", "marks"):
+            boat.append({"id": cid, "state": routesafety.NOT_CHECKED, "texts": [NO_ZONES]})
+    return routesafety.merge_checks(own, boat)
 
 
 # ---- process entry ----------------------------------------------------------------------------

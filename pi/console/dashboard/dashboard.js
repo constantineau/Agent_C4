@@ -1935,6 +1935,7 @@
       '<div class="t-head"><span class="t-name">' + NAME.route + "</span>" + age +
       '<span class="t-chip"><span class="t-word">' + v.chip + "</span></span></div>" +
       '<div class="rt-say rt-' + v.sayKind + '">' + esc2(v.say) + "</div>" + bar +
+      (v.landBanner ? '<div class="rt-land">' + esc2(v.landBanner) + "</div>" : "") +   // #405
       (v.sub ? '<div class="rt-last">' + esc2(v.sub) + "</div>" : "") +
       rerouteBtnHtml(v);
     el.addEventListener("click", () => openDetail("route"));
@@ -1956,6 +1957,7 @@
   function routeDetailHtml() {
     const v = rerouteView();
     let h = '<div class="rt-detail">';
+    if (v.landBanner) h += '<p class="rt-land">' + esc2(v.landBanner) + "</p>";   // #405: first
     if (v.progress) {
       h += '<p class="rt-line"><b>' + esc2(v.progress.text) + "</b>" +
         (v.progress.who ? " · asked by " + esc2(v.progress.who) : "") + "</p>" +
@@ -1977,7 +1979,11 @@
         (L.shape ? '<p class="rt-line">' + esc2(L.shape) + "</p>" : "") +
         '<p class="rt-line">' + esc2(L.wx) + "</p>" +
         '<p class="rt-line">' + esc2(L.who) + "</p>" +
-        L.warnings.map((w) => '<p class="rt-line rt-warn">' + esc2(w) + "</p>").join("");
+        L.warnings.map((w) => '<p class="rt-line rt-warn">' + esc2(w) + "</p>").join("") +
+        // #405: which safety checks this route passed, each on its own line
+        '<ul class="rt-checks">' + L.checks.map((c) => '<li class="rt-ck rt-ck-' + c.state + '">' +
+          esc2(c.label) + ": " + esc2(c.word) + (c.state !== "checked" && c.text ? " · " + esc2(c.text) : "") +
+          "</li>").join("") + "</ul>";
     } else {
       h += '<p class="rt-line" style="margin-top:10px">No new route yet.</p>';
     }
