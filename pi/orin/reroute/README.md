@@ -91,6 +91,8 @@ Run request (Pi → Orin):
  "marks": [{"seq": 1, "name": "Start", "lat": 43.07, "lon": -82.42}, "..."],
  "definition": {"race_id": "...", "courses": ["the deployed course"], "zones": []},
  "course_id": "cove_island",
+ "revision": {"number": 4, "at": 1793552000, "origin": "boat", "base": 3},
+ "base_definition": {"race_id": "...", "courses": ["the Lab's course, only when edited aboard"]},
  "plan": {"variant": "left", "variant_label": "Left side", "points": [{"lat": 0, "lon": 0, "t": 0}]},
  "overrides": [{"mark": "Finish", "by": "Cole", "at": 1793500000, "why": "chart artefact"}],
  "models": ["gfs", "hrrr"],
@@ -113,6 +115,7 @@ Result (`c4.reroute/v1`):
  "job_id": "...", "asked_by": "iPad 1", "asked_at": 0, "computed_from": 0, "finished_at": 0,
  "run_s": 11.2, "peak_rss_mb": {"process": 55, "parser": 149},
  "from": {"lat": 44.4, "lon": -81.85}, "marks": ["Cove Island Virtual Gate", "Finish"],
+ "course_revision": {"number": 4, "at": 1793552000, "origin": "boat"},
  "available": true, "complete": true, "degraded": false,
  "finish_eta": 0, "total_hours": 33.3, "sailed_nm": 181.3, "tacks": 2, "first_heading": 351,
  "confidence": 0.74, "wind_coverage": 1.0, "timed_out": false,
@@ -230,6 +233,39 @@ under it too). Each load gets a load id, stored with the marks and the definitio
 only used with its own load. If any step fails it answers `loaded: false` ("Couldn't save the course. Try
 again.") and drops the old definition. The stored definition carries a hash of the marks (names
 and positions); the Pi only sends it to the Orin when that matches the marks the navigator holds.
+
+## A course changed aboard (#406)
+
+Offshore there is often no internet, so the crew can change the course on the iPad (the
+Time-to-Mark detail, "Course rev …"): pick a mark, then **Skip to**, **Finish here** (a shortened
+course; a gate becomes a finish line), **Port** / **Stbd** (the rounding side, islands too) or
+**Undo change**. The second tap saves. The Pi keeps it (`POST /course/edit`,
+`vps/agent/app/courserev.py`); it is the crew's own change, so it is taken while racing.
+
+- **Revisions.** Every Deploy load is a course revision from the Lab; every change aboard is a
+  new, higher one from the boat (`shared/courseedit.py`). The number never goes back, Undo
+  included. A new Deploy starts the edits over. `GET /course/revision` says which is aboard.
+- **What's kept.** The Lab's course stays aboard as the base; the course aboard is always the base
+  with the list of edits applied. Edits name a mark by its place in the course AND its name, so
+  lap 2's Windward is never lap 1's, and a stale edit is refused.
+- **The navigator.** Skip moves the next mark. A shortened course rewrites the navigator's marks
+  (the finish moves) and keeps the run on the mark it was on. A finish behind the boat is refused.
+  Every change but Skip counts as a new course: older routes show as "for an old course".
+- **The request** carries `revision` (`{number, at, origin, base}`) and, when there are edits,
+  `base_definition` (the Lab's course). The chart overrides signed in the playbook are checked
+  against the Lab's course.
+- **The result** names it: `course_revision: {number, at, origin}` (null from a Pi before #406).
+  The console's Route tile shows "Course rev 4 · changed aboard".
+- **Land.** The chart's fingerprint is checked as before. If it is the Lab's course's, and the
+  edits cover no new water (`courseedit.same_geography`: no point moved, no zone or island
+  changed, only which marks are sailed and on which side), the mask is used: it is land only, the
+  race layer is rebuilt from the edited course, and it must still cover what's left of the course.
+  The result then says `chart.built_for_revision`. Edits that do cover new water (moving or adding
+  marks and zones, a follow-up) get "Course changed aboard. Route doesn't check the shore." The
+  Pi's GPS export decides the same way.
+
+Not yet: moving or adding a mark or a zone on a map, and sending the boat's revision back to the
+Lab (with a prompt when the Lab changed the course too).
 
 ## Measured on the Orin (2026-11-01)
 

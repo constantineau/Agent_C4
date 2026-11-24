@@ -402,6 +402,31 @@ def pick_mark(index, route=None):
     return _set_progress(route, change)
 
 
+def replace_marks(route, marks):
+    """A course edit aboard that changes the marks (a shortened course, #406): write the new
+    [(seq, name, lat, lon)] marks and keep the run where it is (the next mark, Undo, a hold),
+    instead of the fresh run a new course gets. Edits only drop marks from the end, so the
+    places of the marks still ahead don't change. Returns True when the run was kept, False when
+    only the marks were written (no progress store, or it couldn't be saved: the navigator then
+    starts from the first mark and the crew picks it again). Caller holds orinroute.COURSE_LOCK.
+    Raises when the run can't be read or the marks can't be written: nothing changed."""
+    ds = _store()
+    with _PROGRESS_LOCK:
+        rec = _load_progress(ds, route, _marks(route) or []) if ds is not None else None
+        datasource.active().save_course(route, marks)
+        if rec is None:
+            return False
+        new = _marks(route) or []
+        if not new:
+            return False
+        clamp = lambda v: max(0, min(int(v), len(new) - 1))          # noqa: E731
+        _pending.pop(route, None)
+        return _save_progress(ds, route, {
+            "fp": _course_fp(new), "i": clamp(rec["i"]), "run": rec.get("run"),
+            "hist": [clamp(v) for v in rec["hist"]][-HIST_MAX:],
+            "hold": None if rec.get("hold") is None else clamp(rec["hold"])})
+
+
 # --- live state -------------------------------------------------------------
 _PATHS = {
     "lat": "navigation.position.latitude", "lon": "navigation.position.longitude",

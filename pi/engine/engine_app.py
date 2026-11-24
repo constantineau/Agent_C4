@@ -451,6 +451,23 @@ def course_load(body: dict):
     return {"loaded": True, "route": route, "course_id": cid, "marks": len(marks), "skipped": skipped}
 
 
+@app.get("/course/revision")
+def course_revision():
+    """Which course revision is aboard (#406): {revision: {number, at, origin}, edits, marks}."""
+    from app import courserev
+    return courserev.get()
+
+
+@app.post("/course/edit")
+def course_edit(body: dict):
+    """A course change made aboard (#406): {op: skip_to|finish_at|rounding|undo, pos, name,
+    side?, device?}. A new course revision, kept on the Pi; the next re-route uses it. The crew's
+    own decision aboard, so allowed while racing (not shore homework). A change to the course
+    stops a plotter route made for the old one, as /course/load does."""
+    from app import courserev
+    return _nav_changed(courserev.edit(body, after_change=gpsout.clear_other_courses))
+
+
 @app.post("/reroute/assets")
 def reroute_assets_load(body: dict):
     """The Orin re-route's land chart + the Lab's reviewed boat profile, from the Lab's Deploy push

@@ -71,6 +71,7 @@
      raises a status (a suggestion is quiet text, not an alarm). */
   const CELLS = ["wind", "playbook", "forecast", "sail", ["eta", "route"], "ais", "charge", PAIR];
   const RT = window.C4Reroute;
+  const CE = window.C4CourseEdit;   // course changes aboard (#406), coursedit.js
   const SHED = window.C4Shed;     // the Orin's load shed (#295): one plain line while it sheds
   // the re-route status poll: ~every 10 s, every 3 s while one runs (RT.pollEvery)
   const boatName = (r) => { const n = r.boat || r.name || ("MMSI " + (r.mmsi || "?")); return n.length > 14 ? n.slice(0, 13) + "…" : n; };
@@ -646,6 +647,13 @@
     const sel = e.target.closest && e.target.closest(".nav-pick");
     if (sel) navAction("mark", parseInt(sel.value, 10));
   });
+  if (CE) CE.attach({ post: postJSON, get: fetchJSON, device: () => deviceLabel(),
+    redraw: () => { if (App.openTile === "eta") populateDetail("eta", false); },
+    after: async () => {             // a changed course: the map and the next mark read again
+      await fetchCourse();
+      const nav = await fetchJSON("/navigator", 8000);
+      if (nav) App.nav = nav;
+    } });
   /* best available race history: the engine archive (authoritative) + the live tail not yet archived;
      falls back to the client buffer when the archive is empty (e.g. on the bench). */
   function raceData() {
@@ -1977,6 +1985,7 @@
         (L.shape ? '<p class="rt-line">' + esc2(L.shape) + "</p>" : "") +
         '<p class="rt-line">' + esc2(L.wx) + "</p>" +
         '<p class="rt-line">' + esc2(L.who) + "</p>" +
+        (L.rev ? '<p class="rt-line">' + esc2(L.rev) + "</p>" : "") +
         L.warnings.map((w) => '<p class="rt-line rt-warn">' + esc2(w) + "</p>").join("");
     } else {
       h += '<p class="rt-line" style="margin-top:10px">No new route yet.</p>';
@@ -2580,6 +2589,7 @@
       App.navNote = null;
       fetchCourse().then(() => { if (App.openTile === "eta") populateDetail("eta", false); });
       fetchTrack().then(() => { if (App.openTile === "eta") populateDetail("eta", false); });
+      if (CE && CE.refresh) CE.refresh();                                  // course changes aboard (#406)
     }
     // the gauge scrolls with the text now (#77): a fresh tile opens at its top
     document.querySelector("#detail .det-body").scrollTop = 0;
@@ -2974,6 +2984,7 @@
     }
     if (key === "eta") {
       g.insertAdjacentHTML("beforeend", navControlsHtml());
+      if (CE && App.src === "live") g.insertAdjacentHTML("beforeend", CE.html(Date.now()));   // #406
       g.insertAdjacentHTML("beforeend", '<button class="cw-btn cw-inline" ' +
         'onclick="openCoachBrief(\'mark\')">Mark pre-brief ↻</button>');
     }

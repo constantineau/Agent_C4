@@ -114,7 +114,11 @@
     if (shore) labels.push("Route doesn't check the shore");
     const other = warns.filter((x) => x.indexOf("check the shore") < 0 &&
       !(r.complete === false && x === "Route incomplete.")).slice(0, 2);
-    return { source: src.source, engine: orin ? "Orin" : "Pi", head: head, wx: wx, who: who,
+    // which course revision the route sailed (#406): a course changed aboard says so
+    const cr = r.course_revision || null;
+    const rev = cr && cr.number ? "Course rev " + cr.number +
+      (cr.origin === "boat" ? " · changed aboard" : cr.origin === "lab" ? " · from the Lab" : "") : "";
+    return { source: src.source, engine: orin ? "Orin" : "Pi", head: head, wx: wx, who: who, rev: rev,
       shape: bits.join(" · "), labels: labels, warnings: other,
       age: fin ? agoTxt(nowS - fin) : "", finished_at: fin, old: !!r.old_course,
       incomplete: r.complete === false,

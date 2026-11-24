@@ -55,6 +55,13 @@ _Avoid_: baseline forecast
 Seasonal/historical statistics for the racing venue, frozen from the retro archive
 into the homework.
 
+**Course revision**:
+Which version of the course is aboard: a number that only goes up, a time, and where it
+came from — the Lab's Deploy (`lab`) or a change made aboard (`boat`). A boat revision is
+the Lab's course plus the crew's edits (skip to a mark, finish at a mark, change a side).
+Every re-route names the revision it sailed. `course_revision` in the RaceDefinition.
+_Avoid_: course version, course update
+
 ### Live signals (the executor stack)
 
 **Deviation**:

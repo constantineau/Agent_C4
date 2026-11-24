@@ -568,7 +568,8 @@ body {
 .nav-ctl { margin: 8px 0 2px; align-items: center; }
 .cw-btn:disabled { opacity: 0.45; cursor: default; }
 .cw-btn.armed { border-color: var(--watch); color: var(--watch); }
-.nav-pick { font: inherit; font-size: 12px; padding: 5px 8px; border-radius: 7px;
+.ce-ctl { margin: 8px 0 2px; align-items: center; flex-wrap: wrap; }   /* course changes, #406 */
+.nav-pick, .ce-mark { font: inherit; font-size: 12px; padding: 5px 8px; border-radius: 7px;
   background: var(--panel2); color: inherit; border: 1px solid var(--line); max-width: 100%; }
 .cw-card { border: 1px solid var(--line); border-radius: 8px; background: var(--panel2);
   padding: 7px 10px; margin: 6px 0; }
