@@ -4,6 +4,9 @@ Made-up wind (no network, no shoreline data), sr33's polar via polar_fixture:
   1) uniform wind, beat and run: the band mirrors exactly about the rhumb line, the rhumb is in
      it, and water well outside the laylines is not;
   2) land across one side of the beat: no band on the land, the open side keeps its band;
+  2b) a building, rotating, uneven wind: the reverse run (from the forward ETA) gets back to the
+     start when the forward run left it, i.e. both price a step on the wind where it leaves;
+  2c) tacks cost time: inside the laylines the band is one tack worse than on them;
   3) optimize_course: off by default (no key, nothing computed); on, every routed leg gets a grid.
 """
 import os
@@ -118,6 +121,44 @@ def test_land_on_one_side_shows_no_band_there():
     # a corridor blocked by land: the band is no longer symmetric
     assert any((at(b, i, j) is None) != (at(b, nx - 1 - i, j) is None)
                for j in range(b["ny"]) for i in range(nx))
+
+
+class Shifty:
+    """6 kn building 3 kn an hour, veering 20 deg an hour, and 30 deg more per degree east."""
+    loaded = True
+
+    def wind_at(self, lat, lon, t):
+        h = (t - T0) / 3600.0
+        return (6.0 + 3.0 * h, (20.0 * h + 30.0 * (lon - S[1])) % 360)
+
+
+def test_reverse_run_sails_the_forward_physics_on_a_changing_wind():
+    first = CRIT.leg_band(Shifty(), P, *S, T0, *M, T0 + 3 * 3600, tack_s=30)
+    fwd = first["grid_minutes"]
+    b = CRIT.leg_band(Shifty(), P, *S, T0, *M, T0 + fwd * 60, tack_s=30)
+    # pricing each reverse step on the wind at its END (the old way) came back ~9 min short here
+    assert abs(b["reverse_minutes"] - fwd) <= 0.5, (b["reverse_minutes"], fwd)
+    assert min(v for v in b["loss_min"] if v is not None) == 0.0
+
+
+def test_tacks_cost_time_inside_the_laylines():
+    free = CRIT.leg_band(WF(12.0, 0.0), P, *S, T0, *M, T0 + 4 * 3600, tack_s=0)
+    tk = CRIT.leg_band(WF(12.0, 0.0), P, *S, T0, *M, T0 + 4 * 3600, tack_s=120)
+    mid = tk["nx"] // 2
+    j_mid = round(((S[0] + M[0]) / 2 - tk["lat0"]) / tk["dlat"])
+    assert at(free, mid, j_mid) == 0.0, "no tack cost: the whole layline box is as good"
+    # mid-rhumb needs a tack to get there and another to leave: one more than the best route
+    assert 1.5 <= at(tk, mid, j_mid) <= 2.5, at(tk, mid, j_mid)
+    # on the layline (where the one-tack route sails) nothing is lost
+    row = [at(tk, i, j_mid) for i in range(tk["nx"])]
+    assert min(v for v in row[:mid] if v is not None) == 0.0
+    assert tk["tack_s"] == 120
+
+
+def test_tack_cost_defaults_to_the_boats():
+    with OPT.boat_tack_cost(75):
+        b = CRIT.leg_band(WF(12.0, 0.0), P, *S, T0, *M, T0 + 4 * 3600)
+    assert b["tack_s"] == 75
 
 
 COURSE = {"race_id": "crit", "name": "Crit", "zones": [], "courses": [{

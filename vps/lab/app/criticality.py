@@ -10,13 +10,16 @@ At a point, (earliest arrival) - (latest departure) is how much later than the b
 finishes if it sails through that point. Shifted so the best point is 0, that is the time-loss grid.
 A narrow band of low loss = the route is critical; a wide one = the side hardly matters.
 
-Both runs are a time-dependent shortest path over a regular grid (16 headings per node), not the
+Both runs are a time-dependent shortest path over a regular grid (32 headings per node), not the
 isochrone fan: we need a time at EVERY point, not just the winning path. The physics is the
 router's: its polar lookup, wind-over-water and current drift, helm x sea state, and borrowed
-nearby wind where the forecast has a hole (none past FILL_NM: no route there). Obstacles exactly
-as the router: every step is checked with `ObstacleField.crosses` (the exact supercover, and a step
-leaving the chart box counts as blocked). Tack and sail-change costs are left out, so the grid
-route is a little quicker than the real one; only the differences matter here.
+nearby wind where the forecast has a hole (none past FILL_NM: no route there). Every step, in
+both runs, is priced on the wind where and when it LEAVES (the reverse run solves for that
+departure time), so a reverse time is a passage the forward run could sail. A tack or gybe costs
+the router's tack time (`optimizer.tack_cost_s()`, the boat's own on an optimize run): each grid
+state carries the tack the boat is on. Obstacles exactly as the router: every step is checked with
+`ObstacleField.crosses` (the exact supercover, and a step leaving the chart box counts as
+blocked). Sail-change costs are left out.
 
 Opt-in (`optimize_course(..., criticality=True)`): it costs a few seconds per leg.
 """
@@ -138,68 +141,137 @@ def _edges(g, obstacles):
     return out
 
 
-def _forward(g, edges, at, speed, src, t0, horizon):
-    """Earliest arrival time at every node, leaving `src` at t0 (time-dependent Dijkstra)."""
-    best = {src: t0}
-    pq = [(t0, src)]
+def _side(env, track):
+    """Which tack/gybe a step is on: +1 wind on one side of the track, -1 the other (a change
+    of sign is a tack or a gybe, the router's rule); 0 dead up/down wind, which keeps the tack
+    the boat is on (else a dead run would count as one gybe side and break the mirror)."""
+    from . import optimizer as OPT
+    a = OPT._wrap180(track - env[1])
+    if abs(a) < 0.5 or abs(a) > 179.5:
+        return 0
+    return 1 if a > 0 else -1
+
+
+def _cached(g, at, bucket_s=60.0):
+    """`at` per node, the time rounded to `bucket_s`: the reverse run asks the same node at many
+    nearly equal times while it solves for departures. Both runs use it, so they agree."""
+    memo = {}
+
+    def env(node, t):
+        k = (node, int(t // bucket_s))
+        if k not in memo:
+            memo[k] = at(*g.ll(*node), k[1] * bucket_s)
+        return memo[k]
+    return env
+
+
+def _forward(edges, env, speed, src, t0, horizon, tack_s):
+    """Earliest arrival at every (node, side), leaving `src` at t0 (time-dependent Dijkstra).
+    `side` = the tack the boat arrived on (0 at the start). A step on the other tack first pays
+    `tack_s`, the router's tack cost. Each step is priced on the wind where and when it leaves."""
+    best = {(src, 0): t0}
+    pq = [(t0, src, 0)]
     while pq:
-        t, u = heapq.heappop(pq)
-        if t > best.get(u, math.inf) or t > horizon:
+        t, u, s = heapq.heappop(pq)
+        if t > best.get((u, s), math.inf) or t > horizon:
             continue
-        env = at(*g.ll(*u), t)
-        if env is None:
+        e = env(u, t)
+        if e is None:
             continue
         for v, nm, brg in edges.get(u, ()):
-            sp = speed(env, brg)
+            side = _side(e, brg)
+            dep, ed = t, e
+            if s and side and side != s:                       # tack first; the step leaves after it
+                dep = t + tack_s
+                ed = env(u, dep)
+                if ed is None:
+                    continue
+            sp = speed(ed, brg)
             if sp is None:
                 continue
-            tv = t + nm / sp * 3600.0
-            if tv < best.get(v, math.inf):
-                best[v] = tv
-                heapq.heappush(pq, (tv, v))
+            tv = dep + nm / sp * 3600.0
+            side = side or s
+            if tv < best.get((v, side), math.inf):
+                best[(v, side)] = tv
+                heapq.heappush(pq, (tv, v, side))
     return best
 
 
-def _reverse(g, edges, at, speed, dst, eta, horizon):
-    """Latest departure time from every node that still reaches `dst` at `eta` (time runs back).
-    The step v->u is priced on the wind at u at the time the boat is there (the reverse run's
-    clock); the boat sails v->u, so the track is the bearing v->u."""
-    best = {dst: eta}
-    pq = [(-eta, dst)]
+def _reverse(edges, env, speed, dst, eta, horizon, tack_s, iters=4):
+    """Latest departure from every (node, side) that still reaches `dst` at `eta` (time runs
+    back). `side` = the tack the boat leaves on (0 at the mark). Priced exactly like `_forward`:
+    a step v->u is sailed on the wind at v when it LEAVES v, so its departure time is solved
+    (a few fixed-point passes) for the arrival the reverse clock needs at u; a tack at u costs
+    `tack_s` before the boat can leave it."""
+    best = {(dst, 0): eta}
+    pq = [(-eta, dst, 0)]
     while pq:
-        nt, u = heapq.heappop(pq)
+        nt, u, s = heapq.heappop(pq)
         t = -nt
-        if t < best.get(u, -math.inf) or t < horizon:
-            continue
-        env = at(*g.ll(*u), t)
-        if env is None:
+        if t < best.get((u, s), -math.inf) or t < horizon:
             continue
         for v, nm, brg in edges.get(u, ()):            # moves are symmetric: v is a predecessor too
-            sp = speed(env, (brg + 180.0) % 360.0)
+            track = (brg + 180.0) % 360.0               # the boat sails v -> u
+            tv, e, sp, side = t, None, None, 0
+            for _ in range(iters):
+                e = env(v, tv)
+                sp = speed(e, track) if e is not None else None
+                if sp is None:
+                    break
+                side = _side(e, track)
+                arr = t - (tack_s if s and side and side != s else 0.0)   # latest arrival at u
+                tv_new = arr - nm / sp * 3600.0
+                if abs(tv_new - tv) < 1.0:
+                    tv = tv_new
+                    break
+                tv = tv_new
             if sp is None:
                 continue
-            tv = t - nm / sp * 3600.0
-            if tv > best.get(v, -math.inf):
-                best[v] = tv
-                heapq.heappush(pq, (-tv, v))
+            side = side or s
+            if tv > best.get((v, side), -math.inf):
+                best[(v, side)] = tv
+                heapq.heappush(pq, (-tv, v, side))
     return best
+
+
+def _slack(fw, bw, tack_s):
+    """Per node: (earliest arrival) - (latest departure), over the tacks it arrives and leaves
+    on (a change there costs a tack). Nodes only one run reaches are left out."""
+    fin, bout = {}, {}
+    for (n, s), t in fw.items():
+        fin.setdefault(n, []).append((s, t))
+    for (n, s), t in bw.items():
+        bout.setdefault(n, []).append((s, t))
+    out = {}
+    for n, arr in fin.items():
+        if n not in bout:
+            continue
+        out[n] = min(ta - tb + (tack_s if a and b and a != b else 0.0)
+                     for a, ta in arr for b, tb in bout[n])
+    return out
 
 
 def leg_band(wf, P, slat, slon, t0, dlat, dlon, eta, obstacles=None, cur=None, waves=None,
              helm_factor=1.0, wave_coeffs=None, wave_uniform_hs=None, cells=CELLS,
-             cap_min=CAP_MIN):
+             cap_min=CAP_MIN, tack_s=None):
     """The time-loss grid for one leg. `eta` = the forward route's arrival at the mark (the
-    reverse run's clock starts there). Returns a dict for the map, or None when the grid finds no
-    way from start to mark (blocked, or no wind)."""
+    reverse run's clock starts there). `tack_s` = seconds a tack/gybe costs (None = the router's,
+    `optimizer.tack_cost_s()`: the boat's own on an optimize run). Returns a dict for the map, or
+    None when the grid finds no way from start to mark (blocked, or no wind)."""
+    from . import optimizer as OPT
+    tack_s = OPT.tack_cost_s() if tack_s is None else float(tack_s)
     g = _Grid(slat, slon, dlat, dlon, cells=cells)
     at, speed = _physics(wf, P, cur, waves, helm_factor, wave_coeffs, wave_uniform_hs)
+    env = _cached(g, at)
     edges = _edges(g, obstacles)
     src, dst = g.snap(slat, slon), g.snap(dlat, dlon)
     leg_s = max(600.0, float(eta) - float(t0))
-    fw = _forward(g, edges, at, speed, src, float(t0), float(t0) + 3.0 * leg_s)
-    bw = _reverse(g, edges, at, speed, dst, float(eta), float(eta) - 3.0 * leg_s)
-    slack = {k: fw[k] - bw[k] for k in fw if k in bw}
-    if dst not in fw or src not in bw or not slack:
+    fw = _forward(edges, env, speed, src, float(t0), float(t0) + 3.0 * leg_s, tack_s)
+    bw = _reverse(edges, env, speed, dst, float(eta), float(eta) - 3.0 * leg_s, tack_s)
+    slack = _slack(fw, bw, tack_s)
+    fw_dst = min((t for (n, _s), t in fw.items() if n == dst), default=None)
+    bw_src = max((t for (n, _s), t in bw.items() if n == src), default=None)
+    if fw_dst is None or bw_src is None or not slack:
         return None
     base = min(slack.values())
     loss = [None] * (g.nx * g.ny)
@@ -222,7 +294,9 @@ def leg_band(wf, P, slat, slon, t0, dlat, dlon, eta, obstacles=None, cur=None, w
         "dlat": round(g.dlat_deg, 7), "dlon": round(g.dlon_deg, 7),
         "nx": g.nx, "ny": g.ny, "cell_nm": round(g.cell, 3),
         "loss_min": loss,                         # row-major from the south-west node; null = > cap
-        "grid_minutes": round((fw[dst] - float(t0)) / 60.0, 1),
+        "grid_minutes": round((fw_dst - float(t0)) / 60.0, 1),
+        "reverse_minutes": round((float(eta) - bw_src) / 60.0, 1),   # the reverse run's leg time
+        "tack_s": tack_s,
         "width_nm": widths,                       # mean width of the 5/10/20-min band
     }
 
