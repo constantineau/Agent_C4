@@ -5497,6 +5497,7 @@ function polSvg() {
     out.push(`<text x="${lx}" y="${ly + 3}" fill="var(--muted)" font-size="11" text-anchor="middle">${a}°</text>`);
   }
   out.push(`<text x="${CX + R * 0.62}" y="${CY - R - 14}" fill="var(--muted)" font-size="11" text-anchor="middle">wind angle · rings = boat speed kn</text>`);
+  if (typeof polScSvg === "function") out.push(polScSvg(XY, maxV));   // log points, behind (#376)
   if (cert) {
     const d = cert.pts.map((p, i) => (i ? "L" : "M") + XY(p.twa, p.stw).map((n) => n.toFixed(1)).join(" ")).join(" ");
     out.push(`<path d="${d}" fill="none" stroke="var(--muted)" stroke-width="2" stroke-dasharray="6 5" opacity="0.75"/>`);
@@ -5678,9 +5679,11 @@ function paintPolar() {
       <div class="opt-controls" style="margin-bottom:6px">TWS: ${chips}</div>
       <div class="opt-controls" style="margin-bottom:6px">race: ${raceSel} &nbsp; sails: ${cfgSel} &nbsp;
         <span class="muted">lines by:</span> ${splitRadio}</div>
+      ${typeof polScControls === "function" ? `<div class="opt-controls" style="margin-bottom:6px">${polScControls()}</div>` : ""}
       ${byRace ? `<div class="muted" style="font-size:12px;margin-bottom:4px">One line per race, all sails together. The sail filter is off.</div>` : ""}
       ${polSvg()}
       <div class="muted" style="font-size:12px;margin-top:4px">${legend}${legendTail}</div>
+      ${typeof polScLegend === "function" ? polScLegend() : ""}
       <div class="muted" style="font-size:11px;margin-top:4px">Rings every 2 kn, up to ${polMaxV()} kn. The scale never changes, so a longer line is a faster boat.</div>
     </div>
     <div class="card"><h3>Cells at ${Pol.tws} kn${Pol.race === "all" ? "" : " · " + esc(polRaceName(Pol.race))} <span class="muted" style="font-weight:400">— best speed held, at least ${minS} s of data each</span></h3>${tbl}
