@@ -92,6 +92,23 @@ def test_overlapping_windows_count_a_second_once_in_the_pooled_view(monkeypatch)
     pooled = [r for r in rows if r["pooled"]]
     assert len(pooled) == 150 == art["cells"][0]["samples"]
     assert len({r["t"] for r in pooled}) == 150
+    assert all(r["race"] for r in rows)        # under the cap, both samples keep everything
+
+
+def test_short_unique_stretch_keeps_its_pooled_dots():
+    # race 2 is 1000 s, all but 5 s of it already counted under race 1. Thinned as one list to 50,
+    # its 5 pooled seconds (mid-race) would fall between the picks; as their own sample they stay.
+    pts = [{"t": float(i), "tws": 10.0, "twa": 90.0, "stw": 6.0, "recording": 2,
+            "band": 10.0, "twa_bin": 90.0, "pooled": int(500 <= i < 505)} for i in range(1000)]
+    out = PS.pack(pts, 2.0, per_group=50, total=6000)
+    rows = [dict(zip(out["fields"], r)) for r in out["rows"]]
+    assert sorted(r["t"] for r in rows if r["pooled"]) == [500.0, 501.0, 502.0, 503.0, 504.0]
+    assert sum(r["race"] for r in rows) == 50 == out["kept"]
+    assert out["kept_pooled"] == 5 and out["total_pooled"] == 5
+    # each sample keeps to the total cap on its own
+    out = PS.pack(pts, 2.0, per_group=1000, total=20)
+    rows = [dict(zip(out["fields"], r)) for r in out["rows"]]
+    assert sum(r["race"] for r in rows) == 20 and sum(r["pooled"] for r in rows) == 5
 
 
 def test_total_cap_holds_with_more_groups_than_points():

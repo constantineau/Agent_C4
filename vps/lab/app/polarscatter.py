@@ -17,9 +17,12 @@ import math
 
 # `band` / `twa_bin` are the polar cell's own TWS and TWA bins (obspolar's rounding), so the page
 # never re-derives them: Python rounds 9 kn to the 8 kn cell, JS Math.round would say 10.
-# `pooled` is 1 when the sample also counted in the all-races polar (overlapping windows give a
-# second to each race's own view but to the pooled view once).
-FIELDS = ("t", "tws", "twa", "stw", "config", "recording", "band", "twa_bin", "pooled")
+# Two samples share the rows. `pooled` = 1: the row is in the all-races sample (thinned from the
+# samples that counted in the pooled polar — overlapping windows give a second to each race's own
+# view but to the pooled view once). `race` = 1: the row is in its race's own sample. Thinning
+# them separately means a race whose unique stretch is short still has pooled dots, instead of
+# losing them to a thinning of the whole race. With no overlap the two samples are the same rows.
+FIELDS = ("t", "tws", "twa", "stw", "config", "recording", "band", "twa_bin", "pooled", "race")
 PER_GROUP = 250      # points kept per (TWS bucket, race); a bucket the boat sat in all day
 TOTAL = 6000         # ...and in all, so many races can't grow the page without bound
 
@@ -74,11 +77,17 @@ def decimate(points, tws_step, per_group=PER_GROUP, total=TOTAL):
 
 def pack(points, tws_step, per_group=PER_GROUP, total=TOTAL):
     """The artifact block: thinned rows under `FIELDS`, plus what was left out (counted, like
-    every other gate on this tab)."""
-    kept, n_in = decimate(points, tws_step, per_group, total)
+    every other gate on this tab). Each of the two samples keeps to `per_group` and `total`."""
+    in_pool = [p for p in points if p.get("pooled", 1)]
+    kept_pool, n_pool = decimate(in_pool, tws_step, per_group, total)
+    kept_race, n_in = decimate(points, tws_step, per_group, total)
+    pool_ids, race_ids = {id(p) for p in kept_pool}, {id(p) for p in kept_race}
+    union = {id(p): p for p in kept_race + kept_pool}.values()
+    union = sorted(union, key=lambda p: (_band(p, tws_step), p.get("recording") or 0, p["t"]))
     rows = [[round(p["t"], 1), round(p["tws"], 1), round(p["twa"], 1), round(p["stw"], 2),
              p.get("config"), p.get("recording"), _band(p, tws_step), p.get("twa_bin"),
-             p.get("pooled", 1)]
-            for p in kept]
-    return {"fields": list(FIELDS), "rows": rows, "kept": len(rows), "total": n_in,
+             int(id(p) in pool_ids), int(id(p) in race_ids)]
+            for p in union]
+    return {"fields": list(FIELDS), "rows": rows, "kept": len(kept_race), "total": n_in,
+            "kept_pooled": len(kept_pool), "total_pooled": n_pool,
             "per_group": per_group, "cap": total}

@@ -112,7 +112,8 @@ function polScSvg(XY, maxV, ctx, data) {
   const ok = polScAccepted(data, ctx);
   // the pooled view draws a second once, like the pooled polar (overlapping race windows)
   const pooled = polScPooledView(ctx);
-  const pts = polScFilter(all, ctx).filter((p) => (!pooled || p.pooled !== 0)
+  // each view reads its own sample: the pooled one, or each race's own (see app/polarscatter.py)
+  const pts = polScFilter(all, ctx).filter((p) => (pooled ? p.pooled !== 0 : p.race !== 0)
     && ok.keys.has(polScCellKey(p, ctx, ok.recs)));
   let off = 0;
   const out = [];
@@ -159,7 +160,9 @@ function polScLegend(ctx, data) {
   const keys = ctx.mode === "all"
     ? bands.map((b) => `<span style="white-space:nowrap">${dot(polScColor(b, bands))}${b} kn</span>`).join(" ")
     : `<span style="white-space:nowrap">${dot(polScColor(ctx.tws, bands))}${ctx.tws} kn</span>`;
-  const thinned = sc.total > sc.kept ? ` A sample of ${sc.kept} from ${sc.total}.` : "";
+  const [kept, total] = polScPooledView(ctx) && sc.kept_pooled != null
+    ? [sc.kept_pooled, sc.total_pooled] : [sc.kept, sc.total];
+  const thinned = total > kept ? ` A sample of ${kept} from ${total}.` : "";
   const off = last.off ? ` ${last.off} faster than the chart, not drawn.` : "";
   const extra = last.extra ? ` ◇ = saved test.` : "";
   return `<div class="muted" style="font-size:11px;margin-top:4px">${keys} Dots are logged speeds (${last.shown} shown), same filters.${thinned}${off}${extra}</div>`;

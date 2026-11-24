@@ -127,6 +127,19 @@ test("pooled view draws an overlapping second once; each race's view keeps its c
   assert.equal(circles(c.polScSvg(XY, 12)).length, 2);
 });
 
+test("each view reads its own sample (pooled / race flags)", () => {
+  const c = load();
+  c.Pol.data = { ...DATA, scatter: { ...DATA.scatter, fields: [...DATA.scatter.fields, "pooled", "race"],
+    kept: 1, total: 1000, kept_pooled: 1, total_pooled: 5,
+    rows: [[1, 10.0, 50, 6.0, "J1", R2, 10, 50, 1, 0],     // only in the pooled sample
+           [2, 10.0, 50, 6.1, "J1", R2, 10, 50, 0, 1]] } }; // only in R2's own sample
+  assert.deepEqual(circles(c.polScSvg(XY, 12)).map((p) => p.stw), [6]);
+  assert.match(c.polScLegend(), /1 from 5/);
+  c.Pol.race = R2;
+  assert.deepEqual(circles(c.polScSvg(XY, 12)).map((p) => p.stw), [6.1]);
+  assert.match(c.polScLegend(), /1 from 1000/);
+});
+
 test("a recording under 1 s off the cell's still finds its cell (same match as the race filter)", () => {
   const c = load();
   c.Pol.data = { ...DATA, race_cells: [{ tws: 10, twa: 50, config: "J1", recording: 100.49 }],
