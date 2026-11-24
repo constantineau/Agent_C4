@@ -17,6 +17,7 @@ import datetime as dt
 import math
 import os
 
+from . import corrections as corr_mod
 from . import grib
 from .models import MODELS, DEFAULT_MODELS, NOT_HERE, ModelSource
 
@@ -48,11 +49,28 @@ def _members_for(source, ensemble_members):
 def _fhrs_for_cycle(source, cycle, t_start, t_end):
     """The forecast-hours of `source` from `cycle` that fall inside [t_start, t_end] (+pad), capped
     at the horizon this cycle actually reaches (per-cycle — HRRR's off-synoptic cycles stop at 18 h)."""
+    return _pick_fhrs(source, cycle, t_start, t_end)[0]
+
+
+def _pick_fhrs(source, cycle, t_start, t_end):
+    """→ (fhrs, capped_until). Over MAX_FRAMES_PER_MEMBER, the cap is spent on the window the
+    route needs: the pad goes first (one frame either side is kept to bracket the ends); if the
+    window alone is still too long, the first frames are kept and `capped_until` is the valid
+    time of the last one (the model drops out after it: the caller says so). Else None."""
     horizon = math.ceil((t_end - cycle.timestamp()) / 3600.0) + source.fhr_step
     horizon = min(max(horizon, source.fhr_step), source.horizon_for(cycle))
     fhrs = [f for f in source.fhrs(horizon)
             if t_start - _PAD <= source.valid_time(cycle, f) <= t_end + _PAD]
-    return fhrs[:MAX_FRAMES_PER_MEMBER]
+    if len(fhrs) <= MAX_FRAMES_PER_MEMBER:
+        return fhrs, None
+    inside = [f for f in fhrs if t_start <= source.valid_time(cycle, f) <= t_end]
+    if inside:                                     # #384: trim the pad, keep one bracket frame
+        i0, i1 = fhrs.index(inside[0]), fhrs.index(inside[-1])
+        fhrs = fhrs[max(0, i0 - 1):i1 + 2]
+    if len(fhrs) <= MAX_FRAMES_PER_MEMBER:
+        return fhrs, None
+    fhrs = fhrs[:MAX_FRAMES_PER_MEMBER]
+    return fhrs, source.valid_time(cycle, fhrs[-1])
 
 
 def _load_model(source, bbox, t_start, t_end, members, on_progress, parser=None, fallback_tries=None):
@@ -68,7 +86,7 @@ def _load_model(source, bbox, t_start, t_end, members, on_progress, parser=None,
     cycle = source.pick_cycle(min_horizon_h=need_h)
     series, loaded, expected, fallbacks = {}, 0, 0, 0
     for attempt in range(tries + 1):
-        fhrs = _fhrs_for_cycle(source, cycle, t_start, t_end)
+        fhrs, capped_until = _pick_fhrs(source, cycle, t_start, t_end)
         expected = len(fhrs) * max(1, len(members))
         series, loaded = {}, 0
         for member in members:
@@ -96,6 +114,13 @@ def _load_model(source, bbox, t_start, t_end, members, on_progress, parser=None,
     meta = {"model": source.name, "cycle": cycle.strftime("%Y-%m-%d %HZ"),
             "members": len(members), "frames": loaded, "expected_frames": expected,
             "cycle_fallbacks": fallbacks, "priority": source.priority, "kind": source.kind}
+    if capped_until is not None and capped_until < t_end:   # said, like an ended forecast
+        meta["capped_until"] = capped_until
+        meta["cap_note"] = (f"{str(source.name).upper()}: only {MAX_FRAMES_PER_MEMBER} forecast "
+                            f"hours loaded, so it stops at "
+                            f"{dt.datetime.fromtimestamp(capped_until, dt.timezone.utc):%d %b %H:%MZ}")
+        if on_progress:
+            on_progress(meta["cap_note"])
     if on_progress:
         tail = f" (after {fallbacks} cycle-fallback)" if fallbacks else ""
         on_progress(f"{source.name}: {loaded}/{expected} frames @ {cycle:%Y-%m-%d %HZ}{tail}")
@@ -111,22 +136,28 @@ def not_here_meta(source):
 
 def coverage_notes(meta):
     """Plain notes for the models a wind field left out as outside their area, e.g.
-    "HRRR: not here (US only)." Empty when every model asked for covers the race."""
-    return [m["note"] + "." for m in (meta or [])
-            if isinstance(m, dict) and m.get("skipped") == NOT_HERE and m.get("note")]
+    "HRRR: not here (US only).", and for a model the frame cap cut short before the route's end
+    (it drops out of the blend after that; past every model's end the route is marked held).
+    Empty when every model asked for covers the race."""
+    return ([m["note"] + "." for m in (meta or [])
+             if isinstance(m, dict) and m.get("skipped") == NOT_HERE and m.get("note")]
+            + [m["cap_note"] + "." for m in (meta or [])     # a model cut short by the frame cap
+               if isinstance(m, dict) and m.get("cap_note")])
 
 
 def build_windfield(bbox, t_start: float, t_end: float, models=DEFAULT_MODELS,
                     ensemble_members: int = 0, on_progress=None,
-                    model_weights=None, model_bias=None, fallback_tries=None):
+                    model_weights=None, model_bias=None, fallback_tries=None, corrections=None):
     """Ingest the selected models over `bbox` for valid times spanning [t_start, t_end].
 
     bbox = (north, south, west, east). Returns a WindField. `on_progress(msg)` is called with
     short status strings as each model loads (for UI/log feedback). Per model: picks the freshest
     cycle that reaches the race window, requests only the forecast-hours that cycle actually has, and
-    falls back to the previous cycle if the freshest is still too sparse to route on."""
+    falls back to the previous cycle if the freshest is still too sparse to route on.
+    `corrections` = the navigator's manual per-model corrections (#384, `corrections.normalize`)."""
     series = {}                   # (model, member) -> [GribFrame sorted by valid_time]
     meta = []
+    corrections = corr_mod.normalize(corrections)
     parser = grib.IsolatedGribParser() if grib.ISOLATE else None   # crash-isolated cfgrib parse (1/build)
     try:
         for name in models:
@@ -142,13 +173,16 @@ def build_windfield(bbox, t_start: float, t_end: float, models=DEFAULT_MODELS,
                 if on_progress:
                     on_progress(source.not_here_note())
                 continue
+            # #384: a time-shifted model is read earlier/later than the route window, so load it
+            # over the window widened by its shift (the field keeps the route start for the fade)
+            w0, w1 = corr_mod.fetch_window(corrections.get(str(source.name).lower()), t_start, t_end)
             if hasattr(source, "load_series"):        # API-grid source (ICON via Open-Meteo) —
-                m_series, m_meta = source.load_series(bbox, t_start, t_end, on_progress)
+                m_series, m_meta = source.load_series(bbox, w0, w1, on_progress)
                 series.update(m_series)               # whole-series ingest, no per-frame GRIB fetch
                 meta.append(m_meta)
                 continue
             members = _members_for(source, ensemble_members)
-            m_series, m_meta = _load_model(source, bbox, t_start, t_end, members, on_progress,
+            m_series, m_meta = _load_model(source, bbox, w0, w1, members, on_progress,
                                            parser=parser, fallback_tries=fallback_tries)
             series.update(m_series)
             meta.append(m_meta)
@@ -156,11 +190,12 @@ def build_windfield(bbox, t_start: float, t_end: float, models=DEFAULT_MODELS,
         if parser is not None:
             parser.close()
     return WindField(series, meta, bbox, t_start, t_end,
-                     model_weights=model_weights, model_bias=model_bias)
+                     model_weights=model_weights, model_bias=model_bias, corrections=corrections)
 
 
 class WindField:
-    def __init__(self, series, meta, bbox, t_start, t_end, model_weights=None, model_bias=None):
+    def __init__(self, series, meta, bbox, t_start, t_end, model_weights=None, model_bias=None,
+                 corrections=None):
         self.series = series          # (model, member) -> [GribFrame]
         self.meta = meta
         self.bbox = bbox
@@ -170,6 +205,8 @@ class WindField:
         # bias to REMOVE from each model before the vector mean. Empty => today's static-priority blend.
         self.model_weights = model_weights or {}
         self.model_bias = model_bias or {}
+        # #384: manual per-model rotate/scale/time-shift (+ fade), applied before the blend
+        self.corrections = corr_mod.normalize(corrections)
 
     @property
     def loaded(self) -> bool:
@@ -230,32 +267,40 @@ class WindField:
             out["held_side"] = side
         return out
 
+    def _model_epoch(self, model, epoch):
+        """The time to sample `model` at for real time `epoch` (its manual time shift, #384)."""
+        c = self.corrections.get(model)
+        return corr_mod.sample_epoch(c, epoch, self.t_start) if c else epoch
+
     def _samples(self, lat, lon, epoch, hold):
         """→ (samples, held side or None)."""
         side = None
-        items = list(self.series.items())
+        items = [(k, fr, self._model_epoch(k[0], epoch)) for k, fr in self.series.items()]
         if hold:
             # stand-in only from the series whose forecast ends (or begins) NEAREST this time: an
             # 18 h model's last frame must not blend into hour 120 beside a 72 h model's
-            def gap(fr):
-                return max(fr[0].valid_time - epoch, epoch - fr[-1].valid_time, 0.0)
+            def gap(fr, e):
+                return max(fr[0].valid_time - e, e - fr[-1].valid_time, 0.0)
             # ...among the series that actually cover this POSITION (Codex on #200: a nearer-ending
             # model whose grid misses the boat must not hide a usable one → no wind at all)
-            items = [(k, fr) for k, fr in items
-                     if fr and self._series_uv(fr, lat, lon, epoch, hold=True) is not None]
+            items = [(k, fr, e) for k, fr, e in items
+                     if fr and self._series_uv(fr, lat, lon, e, hold=True) is not None]
             if items:
-                best = min(gap(fr) for _k, fr in items)
-                items = [(k, fr) for k, fr in items if gap(fr) <= best + 1.0]
-                side = "end" if epoch > items[0][1][-1].valid_time else "start"
+                best = min(gap(fr, e) for _k, fr, e in items)
+                items = [(k, fr, e) for k, fr, e in items if gap(fr, e) <= best + 1.0]
+                side = "end" if items[0][2] > items[0][1][-1].valid_time else "start"
         samples = []                  # (u, v, weight, model)
-        for (model, _member), frames in items:
-            uv = self._series_uv(frames, lat, lon, epoch, hold=hold)
+        for (model, _member), frames, e in items:
+            uv = self._series_uv(frames, lat, lon, e, hold=hold)
             if uv is None:
                 continue
             u, v = uv
             bias = self.model_bias.get(model)
             if bias:                                  # de-bias this model before it enters the mean
                 u, v = _debias_uv(u, v, bias[0], bias[1])
+            corr = self.corrections.get(model)
+            if corr:                                  # the navigator's manual correction (#384)
+                u, v = corr_mod.apply_uv(corr, u, v, epoch, self.t_start)
             src = MODELS.get(model)            # a source not in the registry blends at x1, never raises
             weight = (src.priority if src else 1.0) * self.model_weights.get(model, 1.0)
             samples.append((u, v, weight, model))
@@ -312,8 +357,12 @@ class WindField:
         return pts
 
     def status(self):
-        return {"loaded": self.loaded, "models": self.meta,
-                "window": [round(self.t_start), round(self.t_end)], "bbox": self.bbox,
-                "series": len(self.series),
-                "total_frames": sum(len(f) for f in self.series.values()),
-                "skill_weighted": bool(self.model_weights or self.model_bias)}
+        out = {"loaded": self.loaded, "models": self.meta,
+               "window": [round(self.t_start), round(self.t_end)], "bbox": self.bbox,
+               "series": len(self.series),
+               "total_frames": sum(len(f) for f in self.series.values()),
+               "skill_weighted": bool(self.model_weights or self.model_bias)}
+        if self.corrections:          # #384: only when asked, so a raw run's status is unchanged
+            out["corrections"] = corr_mod.summary(self.corrections,
+                                                  {k[0] for k, fr in self.series.items() if fr})
+        return out

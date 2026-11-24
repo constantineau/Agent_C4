@@ -2030,7 +2030,8 @@ def _per_model_paths(definition, course_id, start_epoch, wf, obstacles, P, marks
     out = []
     for model, series in by_model.items():
         meta = [m for m in wf.meta if m["model"] == model]
-        sub = WindField(series, meta, wf.bbox, wf.t_start, wf.t_end)
+        sub = WindField(series, meta, wf.bbox, wf.t_start, wf.t_end,
+                        corrections=getattr(wf, "corrections", None))   # #384: keep the manual fix
         r = optimize_course(definition, course_id, start_epoch, sub, time_budget_s=per,
                             obstacles=obstacles, leg_obstacles=leg_obstacles, avoid=False,
                             source=source, safety_depth=safety_depth,

@@ -37,6 +37,8 @@ _RANK = {CHECKED: 0, NOT_CHECKED: 1, FAILED: 2}
 NOT_RUN = "Not checked."
 LAND_SOME_LEGS = "Land not checked on every leg."
 LAND_OFF_CHART = "Land not checked off the chart."
+DEPTH_OFF_CHART = "Depths not checked off the chart."
+ZONES_OFF_CHART = "Race zones not checked off the chart."
 # which optimizer problem code (optimizer.route_safety) belongs to which check, and how it reads
 _PROBLEM_CHECK = {"land": ("land", NOT_CHECKED), "depth": ("depth", NOT_CHECKED),
                   "box": ("chart", FAILED), "blocked": ("marks", FAILED),
@@ -77,9 +79,12 @@ def route_checks(problems, notes, has_fields, land_everywhere=True):
             got["depth"][1].append((n.get("text") or "") + (" " + legs if legs else ""))
         elif code.startswith("grid_depth:"):
             got["depth"][1].append(n.get("text"))
-    if got["chart"][0] == FAILED and got["land"][0] == CHECKED:
-        # off the map's box nothing was checked, land included
-        got["land"] = [NOT_CHECKED, [LAND_OFF_CHART]]
+    if got["chart"][0] == FAILED:
+        # off the map's box nothing was checked: land, depths and race zones alike
+        for cid, text in (("land", LAND_OFF_CHART), ("depth", DEPTH_OFF_CHART),
+                          ("zones", ZONES_OFF_CHART)):
+            if got[cid][0] == CHECKED:
+                got[cid] = [NOT_CHECKED, [text]]
     return [_check(cid, st, texts) for cid, (st, texts) in got.items()]
 
 

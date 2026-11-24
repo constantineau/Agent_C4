@@ -493,7 +493,8 @@ def run(req, now=None, on_progress=None, on_phase=None, is_online=None):
         on_progress=say, on_phase=phase, boat=boat, model_skill=False, obstacles=field,
         leg_obstacles=leg_fields,
         time_budget_s=ROUTE_BUDGET_S, fallback_tries=None if online else 0,
-        bbox=bbox, t_end=t_end, briefing=False, grids=False, boat_polar=polar)
+        bbox=bbox, t_end=t_end, briefing=False, grids=False, boat_polar=polar,
+        corrections=req.get("corrections"))          # #384: manual per-model fix, if asked
     if budget.downloads:
         W.remember_box(STATE_DIR, bbox)
     weather = W.summarize(res.get("windfield"), now, budget, why, sources, names_req)
@@ -513,7 +514,9 @@ def run(req, now=None, on_progress=None, on_phase=None, is_online=None):
            # #308: the current and wave sources this route used, or "none: why", in words
            "data": res.get("data") or _sea_none(online),
            # which polar this route sailed on: the deployed boat's, or the profile's own here
-           "polar": dict(boat_polar.summary(polar), **{"from": polar_from})}
+           "polar": dict(boat_polar.summary(polar), **{"from": polar_from}),
+           # #384: the manual model corrections this route used, in words (None = raw forecasts)
+           "corrections": (res.get("windfield") or {}).get("corrections") or res.get("corrections")}
     if not res.get("available"):
         no_wind = not (res.get("windfield") or {}).get("loaded")
         out.update(available=False, note="No forecast aboard. Connect to the internet." if no_wind
@@ -544,6 +547,9 @@ def run(req, now=None, on_progress=None, on_phase=None, is_online=None):
             warnings.insert(0, SHORT_FORECAST)
         if weather.get("missing"):
             warnings.append("No forecast from " + ", ".join(weather["missing"]) + ".")
+        corr = out.get("corrections") or {}
+        if corr.get("applied"):          # #384: a corrected forecast is said on the route itself
+            warnings.append("Corrected forecast: " + "; ".join(corr["text"]) + ".")
         complete = bool(res.get("complete"))
         # #242: the route's own verdict. A mark left on the wrong side (the corner round it was
         # blocked) or a route off the chart is never a finished route, whatever the legs say

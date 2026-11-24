@@ -80,7 +80,7 @@ def run_course(definition, course_id, start_epoch, models, *, ensemble_members=0
                on_progress=None, boat=None, chart_source=None, model_skill=True,
                obstacles=None, time_budget_s=None, fallback_tries=None, bbox=None, t_end=None,
                briefing=True, grids=True, on_phase=None, leg_obstacles=None, boat_polar=None,
-               offline=False, criticality=False):
+               offline=False, corrections=None, criticality=False):
     """Blocking: build the multi-model wind field, route the course, write the briefing.
 
     `models` are model names or ModelSource instances (the Orin passes cache-first wrappers).
@@ -91,7 +91,9 @@ def run_course(definition, course_id, start_epoch, models, *, ensemble_members=0
     Orin's progress). Lab defaults reproduce the Lab route exactly. `boat_polar` = the boat's
     polar block when the caller holds it (the Orin's, from Deploy); else the profile's own. A boat
     with no polar is refused before any download. `offline` = no internet (the Orin at sea): the
-    current and waves asked for are not fetched, and the result says so. `criticality` adds the
+    current and waves asked for are not fetched, and the result says so. `corrections` = manual
+    per-model rotate/scale/time-shift (+ fade), applied in the wind field before the blend
+    (#384); the result's `corrections` says which were used, in words. `criticality` adds the
     per-leg time-loss grid (#379, opt-in: slower)."""
     from .wind import build_windfield
     from . import current, wave
@@ -111,9 +113,14 @@ def run_course(definition, course_id, start_epoch, models, *, ensemble_members=0
     # de-bias its persistent offset. Best-effort — any failure falls back to the static-priority blend.
     skill, mweights, mbias = (venue_skill(definition, course_id, bbox, start_epoch, models, log.append)
                               if model_skill else ({"enabled": False}, None, None))
+    extra = {"corrections": corrections} if corrections else {}   # #384 (only when asked)
     wf = build_windfield(bbox, start_epoch, t_end, models=models,
                          ensemble_members=ensemble_members, on_progress=log.append,
-                         model_weights=mweights, model_bias=mbias, fallback_tries=fallback_tries)
+                         model_weights=mweights, model_bias=mbias, fallback_tries=fallback_tries,
+                         **extra)
+    if getattr(wf, "corrections", None):
+        for line in corr_text(wf):
+            log.append("correction: " + line)
     if not wf.loaded:
         return {"available": False, "note": "No forecast could be loaded (not out yet, or no "
                 "internet).", "windfield": wf.status(), "log": log}
@@ -143,6 +150,8 @@ def run_course(definition, course_id, start_epoch, models, *, ensemble_members=0
     result["current"] = cur.status()
     result["waves"] = waves.status()
     result["model_skill"] = skill                # venue model-skill weights + scorecard (UI panel)
+    if getattr(wf, "corrections", None):          # #384: absent = raw forecasts
+        result["corrections"] = wf.status().get("corrections")
     if briefing:
         result["briefing"] = optimizer.briefing(result, definition.get("name", ""))
     result["boat"] = boat_profile.summary(boat) if boat else None
@@ -161,6 +170,12 @@ def run_course(definition, course_id, start_epoch, models, *, ensemble_members=0
                 result["wave_grid"] = sg
     result["log"] = log
     return result
+
+
+def corr_text(wf):
+    """The manual corrections a wind field carries, one plain line per model (#384)."""
+    from .wind import corrections as C
+    return C.describe(getattr(wf, "corrections", None))
 
 
 WIND_GRID_STEP_H = float(os.environ.get("WIND_GRID_STEP_H", "1"))     # forecast frame cadence (hours)
