@@ -80,7 +80,7 @@ def run_course(definition, course_id, start_epoch, models, *, ensemble_members=0
                on_progress=None, boat=None, chart_source=None, model_skill=True,
                obstacles=None, time_budget_s=None, fallback_tries=None, bbox=None, t_end=None,
                briefing=True, grids=True, on_phase=None, leg_obstacles=None, boat_polar=None,
-               offline=False, corrections=None):
+               offline=False, corrections=None, criticality=False):
     """Blocking: build the multi-model wind field, route the course, write the briefing.
 
     `models` are model names or ModelSource instances (the Orin passes cache-first wrappers).
@@ -93,7 +93,8 @@ def run_course(definition, course_id, start_epoch, models, *, ensemble_members=0
     with no polar is refused before any download. `offline` = no internet (the Orin at sea): the
     current and waves asked for are not fetched, and the result says so. `corrections` = manual
     per-model rotate/scale/time-shift (+ fade), applied in the wind field before the blend
-    (#384); the result's `corrections` says which were used, in words."""
+    (#384); the result's `corrections` says which were used, in words. `criticality` adds the
+    per-leg time-loss grid (#379, opt-in: slower)."""
     from .wind import build_windfield
     from . import current, wave
     from shared.boat_polar import NO_POLAR
@@ -145,7 +146,7 @@ def run_course(definition, course_id, start_epoch, models, *, ensemble_members=0
                                        leg_obstacles=leg_obstacles,
                                        time_budget_s=time_budget_s, per_model=per_model,
                                        resolution=resolution, cur=cur, waves=waves,
-                                       **binputs)
+                                       criticality=criticality, **binputs)
     result["current"] = cur.status()
     result["waves"] = waves.status()
     result["model_skill"] = skill                # venue model-skill weights + scorecard (UI panel)
