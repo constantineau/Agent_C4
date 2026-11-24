@@ -52,17 +52,22 @@ const ReplayCore = (function () {
     return Math.max(0, idxAt(times, t, (x) => x));
   }
 
-  function inDanger(t, danger) {
-    for (const iv of danger || []) if (t >= iv[0] && t <= iv[1]) return true;
+  // a boat-log sample averages [t, t + step): it is faulty when any of that touches a danger
+  // interval (same rule as app/replay._in). No step = a point sample.
+  function inDanger(t, danger, step) {
+    const span = step || 0;
+    for (const iv of danger || []) {
+      if (span ? (iv[0] < t + span && t <= iv[1]) : (t >= iv[0] && t <= iv[1])) return true;
+    }
     return false;
   }
 
   // Mean and SD per channel over [a, b], leaving out samples in a danger interval. Same rule as
   // app/replay.window_stats: angles are circular (TWA/AWA signed, directions 0..360).
-  function windowStats(samples, a, b, danger, chans) {
+  function windowStats(samples, a, b, danger, chans, step) {
     const lo = Math.min(a, b), hi = Math.max(a, b);
     const inside = (samples || []).filter((s) => s.t >= lo && s.t <= hi);
-    const used = inside.filter((s) => !inDanger(s.t, danger));
+    const used = inside.filter((s) => !inDanger(s.t, danger, step));
     const stats = {};
     for (const ch of chans || Object.keys(LABELS)) {
       const v = used.map((s) => s[ch]).filter((x) => x != null);
@@ -134,7 +139,7 @@ const Replay = (function () {
   const TEST_MIN = 120, TEST_MAX = 300;
   const FLEET_TAIL_S = 1800;                      // fleet trails: the last 30 min
   const S = { open: false, raceId: null, recording: null, boatId: null, name: "", data: null,
-    ch: null, chBusy: false, t: 0, playing: false, speed: 60, last: 0, follow: true, showFleet: true,
+    ch: null, chBusy: false, chSeq: 0, t: 0, playing: false, speed: 60, last: 0, follow: true, showFleet: true,
     showWind: true, chans: null, markers: [], view: null, msg: "", windBusy: false, windMsg: "",
     saveMsg: "", dragging: null };
   let node = null, map = null, overlay = null, ownLine = null, markGroup = null, raf = 0, drawQ = 0;
@@ -217,6 +222,7 @@ const Replay = (function () {
   }
 
   function paintBar() {
+    if (!node) return;
     const d = S.data;
     const fleetN = (d.fleet.boats || []).length;
     const wind = d.wind_grid ? `<label class="mv-chk"><input type="checkbox" ${S.showWind ? "checked" : ""} onchange="Replay.set('showWind', this.checked)"> Wind</label>`
@@ -235,6 +241,7 @@ const Replay = (function () {
   }
 
   function paintChans() {
+    if (!node) return;
     const ch = S.ch;
     const have = (ch && ch.channels) || [];
     if (ch && ch.available) {
@@ -251,6 +258,7 @@ const Replay = (function () {
   }
 
   function paintTools() {
+    if (!node) return;
     const d = S.data;
     const w = C.windows(S.markers);
     const zoomed = S.view && (S.view[0] > d.own.t0 + 1 || S.view[1] < d.own.t1 - 1);
@@ -271,12 +279,13 @@ const Replay = (function () {
   }
 
   function paintStats() {
+    if (!node) return;
     const el = node.querySelector(".rp-stats");
     const w = C.windows(S.markers);
     if (!w.A || !S.ch || !S.ch.available) { el.innerHTML = ""; return; }
     const chans = (S.ch.channels || []);
-    const a = C.windowStats(S.ch.samples, w.A[0], w.A[1], S.data.danger, chans);
-    const b = w.B ? C.windowStats(S.ch.samples, w.B[0], w.B[1], S.data.danger, chans) : null;
+    const a = C.windowStats(S.ch.samples, w.A[0], w.A[1], S.data.danger, chans, S.ch.step_s);
+    const b = w.B ? C.windowStats(S.ch.samples, w.B[0], w.B[1], S.data.danger, chans, S.ch.step_s) : null;
     const cell = (st, ch) => st && st.stats[ch] ? `${fmtVal(ch, st.stats[ch].mean)} <span class="muted">± ${st.stats[ch].sd.toFixed(ch === "pct_polar" || C.ANGLE.has(ch) ? 0 : 2)}</span>` : "—";
     const rows = Object.keys(C.LABELS).filter((c) => chans.includes(c)).map((c) => {
       const dd = b ? C.diff(c, (a.stats[c] || {}).mean, (b.stats[c] || {}).mean) : null;
@@ -293,6 +302,7 @@ const Replay = (function () {
   }
 
   function paintTests() {
+    if (!node) return;
     const el = node.querySelector(".rp-tests");
     const ts = (S.data && S.data.tests) || [];
     if (!ts.length) { el.innerHTML = ""; return; }
@@ -308,13 +318,19 @@ const Replay = (function () {
   // ---- channels --------------------------------------------------------------------------------
   async function loadChannels(a, b) {
     S.chBusy = true; paintChans();
-    const rec = S.recording;
+    // only the newest request for the recording still open may land (a slow zoom must not
+    // overwrite "Whole race", nor one race's answer another race's with the same timestamp)
+    const seq = ++S.chSeq, race = S.raceId, rec = S.recording;
+    const current = () => S.open && seq === S.chSeq && S.raceId === race && S.recording === rec;
     try {
       const r = await api("/api/debrief/replay/channels?" + q({ ...key(), start: a, end: b, max_points: 4000, boat_id: S.boatId }));
-      if (!S.open || S.recording !== rec) return;
+      if (!current()) return;
       S.ch = r;
       S.view = r.available ? [a != null ? a : S.data.own.t0, b != null ? b : S.data.own.t1] : null;
-    } catch (e) { S.ch = { available: false, note: "Couldn't load the channels." }; }
+    } catch (e) {
+      if (!current()) return;
+      S.ch = { available: false, note: "Couldn't load the channels." };
+    }
     S.chBusy = false;
     paintChans(); paintTools(); paintStats(); queueDraw();
   }
@@ -533,7 +549,7 @@ const Replay = (function () {
       for (const s of samples) {
         const val = s[ch];
         if (val == null) { prev = null; continue; }
-        const bad = C.inDanger(s.t, S.data.danger);
+        const bad = C.inDanger(s.t, S.data.danger, S.ch.step_s);
         const x = xOf(s.t, w), y = yOf(val);
         // angles: don't draw a line across a wrap (359 → 1)
         const wrap = prev && C.ANGLE.has(ch) && Math.abs(val - prev.v) > 180;
@@ -650,21 +666,27 @@ const Replay = (function () {
 
   async function loadWind() {
     S.windBusy = true; S.windMsg = ""; paintBar();
-    const rec = S.recording;
+    const rec = S.recording, race = S.raceId;
+    let jobId = "";
     try {
       const r = await (await apiPost("/api/debrief/replay/wind", { ...key(), recording: S.recording })).json();
       if (r.ok === false) { S.windBusy = false; S.windMsg = r.note || "Couldn't start."; paintBar(); return; }
+      jobId = r.job_id || "";
     } catch (e) { S.windBusy = false; S.windMsg = "Couldn't start."; paintBar(); return; }
     const poll = async () => {
-      if (!S.open || S.recording !== rec) return;
+      if (!S.open || S.recording !== rec || S.raceId !== race) return;
       let j;
-      try { j = await api("/api/debrief/replay/wind/status"); } catch (e) { j = null; }
+      try { j = await api("/api/debrief/replay/wind/status?" + q({ job_id: jobId })); } catch (e) { j = null; }
+      if (!S.open || S.recording !== rec || S.raceId !== race) return;
       if (j && j.state === "running") { S.windMsg = (j.progress || []).slice(-1)[0] || ""; paintBar(); setTimeout(poll, 4000); return; }
       S.windBusy = false;
       const res = (j && j.result) || {};
       if (j && j.state === "done" && res.ok) {
         S.windMsg = "";
-        try { const d = await api("/api/debrief/replay?" + q(key())); if (d.available) S.data.wind_grid = d.wind_grid; } catch (e) { /* keep going without */ }
+        try {
+          const d = await api("/api/debrief/replay?" + q(key()));
+          if (d.available && S.data && S.recording === rec && S.raceId === race) S.data.wind_grid = d.wind_grid;
+        } catch (e) { /* keep going without */ }
       } else S.windMsg = res.note || (j && j.error) || "No wind.";
       paintBar(); queueDraw();
     };
@@ -692,5 +714,5 @@ const Replay = (function () {
   }
 
   return { open, openRow, close, attach, toggle, seek, set, chan, mark, clearMarks, zoom, unzoom,
-           saveTest, showTest, delTest, loadWind, _state: S };
+           saveTest, showTest, delTest, loadWind, _state: S, _loadChannels: loadChannels };
 })();

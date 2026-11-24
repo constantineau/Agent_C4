@@ -608,8 +608,8 @@ def racelog_channels(start: float, end: float, step_s: float = None, max_points:
     step = RC.pick_step(start, end, max_points, step_s)
     devices = n2k_sources.devices_for(tools.BOAT_ID)
     with pool.connection() as conn:
-        rows = RC.query(conn, tools.BOAT_ID, start, end, step, tools.ais_bearing_sources())
-    samples = RC.assemble(rows, lambda p, s: source_policy.rank_for(p, s, devices))
+        rows = RC.query(conn, tools.BOAT_ID, start, end, tools.ais_bearing_sources())
+    samples = RC.assemble(rows, lambda p, s: source_policy.rank_for(p, s, devices), start, step)
     return {"step_s": step, "n": len(samples), "samples": samples}
 
 

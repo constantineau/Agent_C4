@@ -298,16 +298,21 @@ def channels(race_id, recording, start=None, end=None, max_points=4000, boat_id=
 
 
 # ---- stats ----------------------------------------------------------------------------------
-def _in(t, iv):
-    return any(a <= t <= b for a, b in iv)
+def _in(t, iv, step=None):
+    """Does the sample at `t` touch a danger interval? A boat-log sample is the average of the
+    step that starts at `t`, so it counts as faulty when ANY of [t, t + step) is (Codex on #397:
+    a 7 s step at 100 with a fault from 105 mixed healthy and faulty readings)."""
+    span = float(step or 0)
+    return any(a < t + span and t <= b if span else a <= t <= b for a, b in iv)
 
 
-def window_stats(samples, start, end, danger=(), channels_=CHANNELS):
-    """Mean and SD of each channel over [start, end], leaving out samples in a danger interval.
+def window_stats(samples, start, end, danger=(), channels_=CHANNELS, step=None):
+    """Mean and SD of each channel over [start, end], leaving out samples that touch a danger
+    interval (`step`: seconds each sample averages, None for point samples).
     Angles: circular mean (TWA/AWA signed, directions 0..360) and circular SD in degrees."""
     a, b = min(start, end), max(start, end)
     inside = [s for s in samples if a <= s["t"] <= b]
-    used = [s for s in inside if not _in(s["t"], danger)]
+    used = [s for s in inside if not _in(s["t"], danger, step)]
     out = {}
     for ch in channels_:
         vals = [s[ch] for s in used if s.get(ch) is not None]
@@ -349,7 +354,7 @@ def save_test(race_id, recording, name, start, end, boat_id=None, note="", agent
     ch = channels(race_id, rec, a, b, MAX_CHANNEL_POINTS, boat_id, agent_get)
     if not ch.get("available"):
         return {"ok": False, "note": ch.get("note")}
-    st = window_stats(ch["samples"], a, b, danger_intervals(t.get("trust")))
+    st = window_stats(ch["samples"], a, b, danger_intervals(t.get("trust")), step=ch.get("step_s"))
     test = {"id": uuid.uuid4().hex[:10], "name": name, "note": str(note or "")[:300],
             "start": a, "end": b, "created_at": time.time(), "source": ch["source"],
             "boat_id": boat_id, **{k: st[k] for k in ("seconds", "n", "left_out", "stats")}}
@@ -445,6 +450,7 @@ async def replay_wind(body: dict):
 
 
 @router.get("/api/debrief/replay/wind/status")
-async def replay_wind_status():
+async def replay_wind_status(job_id: str = ""):
+    """The wind job this caller started (`job_id` from the POST), never another user's run."""
     from . import jobs
-    return jobs.status("replaywind")
+    return jobs.status("replaywind", job_id=job_id)

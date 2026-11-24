@@ -556,11 +556,12 @@ B − A. Window A saves as a named 2–5 min **test** (stats worked out on the s
   clipped to the recording ±1 h. Wind: **Load wind** builds the judge's oracle wind over the track's area
   and hours and keeps it (`POST /api/debrief/replay/wind`, a background job).
 - Channels: a boat-log recording reads the agent's `GET /racelog/channels` (BSP, TWS, TWA, TWD, heel,
-  HDG, SOG/COG, AWS/AWA, averaged per step in the database); VMG and % of polar are added in the Lab
+  HDG, SOG/COG, AWS/AWA; averaged per second in the database, best source per second, then per step);
+  VMG and % of polar are added in the Lab
   against the session's boat. A GPX/YB track, or an unreachable boat log, falls back to the track's own
   fixes and says so.
 - Faulty stretches (the trust sweep's danger intervals) are grey on the chart and left out of every
-  mean/SD, the scorer's rule.
+  mean/SD, the scorer's rule; a step that only partly overlaps one counts as faulty.
 - Stored per recording in `_replay_<race>[__<recording>].json` next to the track: `{wind_grid, tests}`.
   Routes: `GET /api/debrief/replay`, `GET /api/debrief/replay/channels`, `POST /api/debrief/replay/tests`
   (+ `/delete`), `POST /api/debrief/replay/wind` (+ `GET .../wind/status`).

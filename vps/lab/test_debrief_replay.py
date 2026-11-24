@@ -166,6 +166,29 @@ def test_window_stats_constant_angle_has_zero_sd():
             assert st["stats"]["cog"]["mean"] == pytest.approx(a % 360)
 
 
+def test_window_stats_step_overlapping_a_fault_is_left_out():
+    # 7 s steps at 100 and 107, fault from 105: the step at 100 mixed healthy and faulty
+    # readings and used to count because its start is outside the fault (Codex on #397)
+    samples = [{"t": 93, "bsp": 6.0}, {"t": 100, "bsp": 50.0}, {"t": 107, "bsp": 50.0}]
+    st = RP.window_stats(samples, 93, 107, danger=[[105, 110]], step=7)
+    assert st["left_out"] == 2 and st["stats"]["bsp"]["mean"] == 6.0
+    assert RP.window_stats(samples, 93, 107, danger=[[105, 110]])["left_out"] == 1  # points
+    assert not RP._in(98, [[105, 110]], 7)            # [98, 105) ends as the fault starts
+
+
+def test_saved_test_uses_the_agent_step_for_faults():
+    # fault 100-110 s in: the 7 s steps at 98 and 105 both touch it (the one at 98 starts outside)
+    T.save_track("r1", boatlog(n=80, trust={"available": True,
+                                            "danger": {"heading": [(T0 + 100, T0 + 110)]}}))
+
+    def agent(path, timeout=None):
+        return {"step_s": 7, "samples": [{"t": T0 + k * 7, "bsp": 60.0 if k in (14, 15) else 6.0}
+                                         for k in range(30)]}
+    r = RP.save_test("r1", T0, "x", T0, T0 + 200, agent_get=agent)
+    assert r["ok"] and r["test"]["left_out"] == 2
+    assert r["test"]["stats"]["bsp"]["mean"] == 6.0
+
+
 # ---- saved tests -----------------------------------------------------------------------------
 def test_save_test_checks_length_name_and_keeps_stats():
     T.save_track("r1", boatlog(n=80))
@@ -210,6 +233,26 @@ def test_routes_save_and_delete():
                       json={"race_id": "r1", "recording": T0, "id": tid}).json()["ok"]
     finally:
         M.agent_json = orig
+
+
+def test_wind_status_follows_only_the_callers_job(monkeypatch):
+    from app import jobs
+    T.save_track("r1", boatlog())
+    monkeypatch.setattr(RP, "build_wind", lambda rid, rec, progress=None: {"ok": True, "frames": 1})
+    app = FastAPI()
+    app.include_router(RP.router)
+    c = TestClient(app)
+    started = c.post("/api/debrief/replay/wind", json={"race_id": "r1", "recording": T0}).json()
+    jid = started["job_id"]
+    import time as _t
+    for _ in range(100):
+        if jobs.status("replaywind")["state"] != "running":
+            break
+        _t.sleep(0.02)
+    mine = c.get(f"/api/debrief/replay/wind/status?job_id={jid}").json()
+    assert mine["state"] == "done" and mine["job_id"] == jid
+    other = c.get("/api/debrief/replay/wind/status?job_id=someoneelse").json()
+    assert other["state"] == "error"                  # never another run's state
 
 
 # ---- the day's wind --------------------------------------------------------------------------

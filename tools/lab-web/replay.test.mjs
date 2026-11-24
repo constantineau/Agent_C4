@@ -84,3 +84,37 @@ test("stats: a constant angle has SD 0, not NaN", () => {
     }
   }
 });
+
+test("a step that only partly overlaps a fault is left out (Codex on #397)", () => {
+  // 7 s steps at 100 and 107; fault from 105: the step at 100 mixes healthy and faulty seconds
+  const s = [{ t: 93, bsp: 6 }, { t: 100, bsp: 50 }, { t: 107, bsp: 50 }];
+  const st = C.windowStats(s, 93, 107, [[105, 110]], ["bsp"], 7);
+  assert.equal(st.left_out, 2); assert.equal(st.stats.bsp.mean, 6);
+  assert.equal(C.inDanger(100, [[105, 110]]), false);     // a point sample at 100 is fine
+  assert.equal(C.inDanger(100, [[105, 110]], 7), true);
+  assert.equal(C.inDanger(98, [[105, 110]], 7), false);   // [98, 105) ends as the fault starts
+});
+
+test("only the newest channel request lands, and only for the race still open", async () => {
+  const pending = [];
+  const c2 = {
+    requestAnimationFrame: () => 1, cancelAnimationFrame: () => {}, performance: { now: () => 0 },
+    apiGet: (url) => new Promise((resolve) => pending.push({ url, resolve })),
+  };
+  vm.createContext(c2);
+  vm.runInContext(src + "\nthis.R = Replay;", c2);
+  const R = c2.R, S = R._state;
+  Object.assign(S, { open: true, raceId: "A", recording: 100, data: { own: { t0: 0, t1: 1000 } } });
+  const zoom = R._loadChannels(10, 20);           // slow zoom
+  const whole = R._loadChannels(null, null);      // then "Whole race"
+  const ans = (p, tag) => p.resolve({ json: async () => ({ available: true, tag, samples: [], channels: [] }) });
+  ans(pending[1], "whole"); await whole;
+  ans(pending[0], "zoom"); await zoom;            // lands late: dropped
+  assert.equal(S.ch.tag, "whole");
+  assert.deepEqual([...S.view], [0, 1000]);
+  // another race with the same recording timestamp: its answer can't land on this one
+  const old = R._loadChannels(null, null);
+  S.raceId = "B";
+  ans(pending[2], "race A"); await old;
+  assert.equal(S.ch.tag, "whole");
+});
