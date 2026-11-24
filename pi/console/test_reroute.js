@@ -295,7 +295,9 @@ test("stale-safe: a held read shows its age; an old 'running' never blocks the b
 test("words stay short: every line the tile can show is 12 words or fewer", () => {
   const lines = [];
   const add = (x) => { lines.push(x.say, x.button.label); if (x.note) lines.push(x.note); if (x.sub) lines.push(x.sub);
-    if (x.last) lines.push(x.last.head, x.last.wx, ...x.last.labels); };
+    if (x.last) lines.push(x.last.head, x.last.wx, ...x.last.labels,
+      ...x.last.checks.map((c) => c.label + ": " + c.word));
+    if (x.landBanner) lines.push(x.landBanner); };
   add(v({ rr: IDLE }));
   add(v({ rr: Object.assign({}, IDLE, { state: "done", latest: "orin", result: ORIN_ROUTE }) }));
   add(v({ rr: IDLE, press: RT.afterPress("orin", 503, {}, NOW) }));
@@ -304,6 +306,74 @@ test("words stay short: every line the tile can show is 12 words or fewer", () =
   add(v({ rr: IDLE, press: RT.afterPress("orin", null, null, NOW) }));
   for (const l of lines) assert.ok(words(l) <= 12, "too long: " + l);
   for (const l of lines) assert.ok(!/veer|back(ed|ing)/i.test(l), "say right/left: " + l);
+});
+
+// #405: separate checks, and a red "Land not checked" line that stays up
+const CK = (land, extra) => ["land", "depth", "zones", "marks", "chart"].map((id) => ({ id: id,
+  state: id === "land" ? land : (extra && extra[id]) || "checked",
+  texts: id === "land" && land !== "checked" ? ["No chart aboard. Route doesn't check the shore."] : [] }));
+const CLEAN = Object.assign({}, ORIN_ROUTE, { warnings: [], chart: { land: true }, complete: true,
+  finish_eta: S + 3600, checks: CK("checked") });
+const done = (r) => Object.assign({}, IDLE, { state: "done", latest: "orin", result: r });
+
+test("#405 every check ran: all five listed as checked, no red line", () => {
+  const x = v({ rr: done(CLEAN) });
+  assert.deepEqual(x.last.checks.map((c) => c.id), ["land", "depth", "zones", "marks", "chart"]);
+  assert.ok(x.last.allChecked && !x.last.landUnchecked);
+  assert.equal(x.landBanner, null);
+});
+
+test("#405 land not checked: red line on the face, the reason in the checks, GPS still allowed", () => {
+  const x = v({ rr: done(Object.assign({}, CLEAN, { checks: CK("not_checked") })) });
+  assert.equal(x.landBanner, "Land not checked");
+  assert.ok(!x.last.allChecked);
+  assert.equal(x.last.checks[0].word, "not checked");
+  assert.match(x.last.checks[0].text, /check the shore/);
+  assert.ok(x.canShowOnGps, "allowed with the banner (Cole decides on the PR)");
+});
+
+test("#405 the red line stays up: while a new run goes, and after a failed press", () => {
+  const r = Object.assign({}, CLEAN, { checks: CK("not_checked") });
+  const running = Object.assign(done(r), { state: "running", progress: { pct: 40 } });
+  assert.equal(v({ rr: running }).landBanner, "Land not checked");
+  assert.equal(v({ rr: done(r), press: RT.afterPress("orin", 503, {}, NOW) }).landBanner, "Land not checked");
+});
+
+test("#405 depth not checked alone: listed, but no red land line", () => {
+  const x = v({ rr: done(Object.assign({}, CLEAN, { checks: CK("checked", { depth: "not_checked" }) })) });
+  assert.equal(x.landBanner, null);
+  assert.ok(!x.last.allChecked);
+  assert.equal(x.last.checks[1].state, "not_checked");
+});
+
+test("#405 a route for an old course: no banner (it isn't the current route)", () => {
+  const rr = done(Object.assign({}, CLEAN, { checks: CK("not_checked"), old_course: true }));
+  assert.equal(v({ rr: rr }).landBanner, null);
+});
+
+test("#405 routes that don't list checks never read as checked", () => {
+  // an Orin from before #405 that did use the chart: land checked, the rest not reported
+  const old = v({ rr: done(Object.assign({}, CLEAN, { checks: undefined })) });
+  assert.ok(!old.last.landUnchecked && !old.last.allChecked);
+  assert.equal(old.last.checks[1].text, "Not reported.");
+  // an older result that says nothing about the chart: land not checked, never assumed
+  assert.equal(v({ rr: done(Object.assign({}, CLEAN, { checks: undefined, chart: undefined })) }).landBanner,
+    "Land not checked");
+  // the same without the chart, and the Pi's own route: land not checked, red line up
+  assert.equal(v({ rr: done(Object.assign({}, ORIN_ROUTE)) }).landBanner, "Land not checked");
+  const pi = Object.assign({}, IDLE, { latest: "pi", pi: { state: "done", result: { available: true,
+    eta_min: 60, depart_epoch: S, finished_at: S - 10 } } });
+  const xp = v({ rr: pi });
+  assert.equal(xp.landBanner, "Land not checked");
+  assert.match(xp.last.checks[0].text, /no shore check/);
+});
+
+test("#405 the tile and the detail draw the red line and the checks", () => {
+  const src = fs.readFileSync(path.join(__dirname, "dashboard", "dashboard.js"), "utf8");
+  const tile = src.slice(src.indexOf("function routeTileEl"), src.indexOf("function rerouteBtnHtml"));
+  const detail = src.slice(src.indexOf("function routeDetailHtml"), src.indexOf("async function fetchSynthesis"));
+  assert.ok(tile.includes("v.landBanner") && tile.includes("rt-land"), "face shows it");
+  assert.ok(detail.includes("v.landBanner") && detail.includes("L.checks"), "detail shows it and the checks");
 });
 
 let failed = 0;

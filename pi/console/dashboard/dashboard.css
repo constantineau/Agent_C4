@@ -668,6 +668,17 @@ body {
 .rt-note { color:var(--watch); font-weight:700; }
 .rt-suggest { font-style:italic; }
 .rt-warn { color:var(--watch); }
+/* #405: land not checked — red, stays up while the route is current */
+.rt-land { font-size:14px; font-weight:800; color:var(--act); background:var(--act-fill);
+  border:2px solid var(--act); border-radius:6px; padding:3px 8px; margin:4px 0; }
+.rt-checks { list-style:none; margin:6px 0 0; padding:0; }
+.rt-ck { font-size:14px; margin:2px 0; color:var(--muted); }
+.rt-ck::before { display:inline-block; width:1.2em; font-weight:800; }
+.rt-ck-checked::before { content:"✓"; color:var(--ok); }
+.rt-ck-not_checked { color:var(--watch); font-weight:700; }
+.rt-ck-not_checked::before { content:"–"; }
+.rt-ck-failed { color:var(--act); font-weight:800; }
+.rt-ck-failed::before { content:"✗"; }
 .rt-head { font-size:22px; font-weight:800; margin:2px 0 4px; color:var(--text); }
 .rt-last { font-size:12px; font-weight:600; color:var(--muted); line-height:1.25;
   display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; }
