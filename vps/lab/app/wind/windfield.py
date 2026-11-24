@@ -325,10 +325,12 @@ class WindField:
         return pts
 
     def status(self):
-        return {"loaded": self.loaded, "models": self.meta,
-                "window": [round(self.t_start), round(self.t_end)], "bbox": self.bbox,
-                "series": len(self.series),
-                "total_frames": sum(len(f) for f in self.series.values()),
-                "skill_weighted": bool(self.model_weights or self.model_bias),
-                "corrections": corr_mod.summary(self.corrections,
-                                                {k[0] for k, fr in self.series.items() if fr})}
+        out = {"loaded": self.loaded, "models": self.meta,
+               "window": [round(self.t_start), round(self.t_end)], "bbox": self.bbox,
+               "series": len(self.series),
+               "total_frames": sum(len(f) for f in self.series.values()),
+               "skill_weighted": bool(self.model_weights or self.model_bias)}
+        if self.corrections:          # #384: only when asked, so a raw run's status is unchanged
+            out["corrections"] = corr_mod.summary(self.corrections,
+                                                  {k[0] for k, fr in self.series.items() if fr})
+        return out

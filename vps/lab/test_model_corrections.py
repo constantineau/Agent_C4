@@ -130,7 +130,7 @@ def test_normalize_and_text():
 def test_status_reports_corrections():
     st = field({"gfs": {"rotate_deg": 10}}).status()
     assert st["corrections"]["text"] == ["GFS: 10° right"]
-    assert field().status()["corrections"] is None
+    assert "corrections" not in field().status()
 
 
 def test_pdf_says_the_forecast_was_corrected():

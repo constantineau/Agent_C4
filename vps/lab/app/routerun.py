@@ -112,11 +112,12 @@ def run_course(definition, course_id, start_epoch, models, *, ensemble_members=0
     # de-bias its persistent offset. Best-effort — any failure falls back to the static-priority blend.
     skill, mweights, mbias = (venue_skill(definition, course_id, bbox, start_epoch, models, log.append)
                               if model_skill else ({"enabled": False}, None, None))
+    extra = {"corrections": corrections} if corrections else {}   # #384 (only when asked)
     wf = build_windfield(bbox, start_epoch, t_end, models=models,
                          ensemble_members=ensemble_members, on_progress=log.append,
                          model_weights=mweights, model_bias=mbias, fallback_tries=fallback_tries,
-                         corrections=corrections)
-    if wf.corrections:
+                         **extra)
+    if getattr(wf, "corrections", None):
         for line in corr_text(wf):
             log.append("correction: " + line)
     if not wf.loaded:
@@ -148,7 +149,8 @@ def run_course(definition, course_id, start_epoch, models, *, ensemble_members=0
     result["current"] = cur.status()
     result["waves"] = waves.status()
     result["model_skill"] = skill                # venue model-skill weights + scorecard (UI panel)
-    result["corrections"] = wf.status().get("corrections")   # #384: None = raw forecasts
+    if getattr(wf, "corrections", None):          # #384: absent = raw forecasts
+        result["corrections"] = wf.status().get("corrections")
     if briefing:
         result["briefing"] = optimizer.briefing(result, definition.get("name", ""))
     result["boat"] = boat_profile.summary(boat) if boat else None
