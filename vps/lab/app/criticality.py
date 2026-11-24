@@ -41,6 +41,7 @@ MAX_NODES = int(os.environ.get("ROUTE_CRIT_MAX_NODES", "4000"))
 CAP_MIN = float(os.environ.get("ROUTE_CRIT_CAP_MIN", "20"))    # loss past this isn't sent (null)
 BANDS_MIN = (5, 10, 20)                                       # the map's shades
 MIN_SOG = 0.3
+FINE_PROBES = int(os.environ.get("ROUTE_CRIT_FINE_PROBES", "20"))    # 1-min back-search probes
 # a leg whose wind changes more than this over its window is flagged "rough" (see wind_change)
 ROUGH_DIR_DEG = float(os.environ.get("ROUTE_CRIT_ROUGH_DEG", "25"))
 ROUGH_KN = float(os.environ.get("ROUTE_CRIT_ROUGH_KN", "4"))
@@ -136,7 +137,16 @@ def _physics(wf, P, cur, waves, helm_factor, wave_coeffs, wave_uniform_hs):
         gs = sp * math.cos(math.radians(crab)) + c_par
         return (gs, hdg) if gs > MIN_SOG else None
 
-    return at, speed
+    memo = {}
+
+    def speed_memo(env, track):
+        """`speed`, remembered: the back search asks the same wind and track many times."""
+        k = (env, track)
+        if k not in memo:
+            memo[k] = speed(env, track)
+        return memo[k]
+
+    return at, speed_memo
 
 
 def _edges(g, obstacles):
@@ -189,23 +199,29 @@ def _cached(g, at, bucket_s=60.0):
     return env
 
 
-def _forward(edges, env, speed, src, t0, horizon, tack_s):
+def _forward(edges, env, speed, src, t0, horizon, tack_s, wait_s=None):
     """Earliest arrival at every (node, side), leaving `src` at t0 (time-dependent Dijkstra).
     `side` = the tack the boat arrived on (0 at the start). A step on the other tack first pays
-    `tack_s`, the router's tack cost. Each step is priced on the wind where and when it leaves."""
+    `tack_s`, the router's tack cost. Each step is priced on the wind where and when it leaves.
+    BECALMED, as the router (#326): a node where no heading makes way waits `wait_s` (the router's
+    step) in place and tries again, instead of being dropped. (The router also drifts with the
+    current while it waits; the grid stays on its node.)"""
     best = {(src, 0): t0}
+    waits = {}
     pq = [(t0, src, 0)]
     while pq:
         t, u, s = heapq.heappop(pq)
-        if t > best.get((u, s), math.inf) or t > horizon:
+        if (t > best.get((u, s), math.inf) and t != waits.get((u, s))) or t > horizon:
             continue
         e = env(u, t)
         if e is None:
             continue
+        moved = False
         for v, nm, brg in edges.get(u, ()):
             got = speed(e, brg)
             if got is None:
                 continue
+            moved = True
             side = _side(e, got[1])                   # the tack is the heading's, as the router's
             dep = t
             if s and side and side != s:              # tack first; the step leaves after it
@@ -219,6 +235,9 @@ def _forward(edges, env, speed, src, t0, horizon, tack_s):
             if tv < best.get((v, side), math.inf):
                 best[(v, side)] = tv
                 heapq.heappush(pq, (tv, v, side))
+        if not moved and wait_s and edges.get(u):     # becalmed (not boxed in): wait it out
+            waits[(u, s)] = t + wait_s                 # `best` keeps the arrival; this is a retry
+            heapq.heappush(pq, (t + wait_s, u, s))
     return best
 
 
@@ -228,7 +247,8 @@ def _latest_departure(env, speed, v, track, nm, t, s, tack_s, floor, iters=6, bi
     leaves. Returns (departure, side) or None. A few fixed-point passes find it in smooth wind;
     the answer is always CHECKED (sailed forward, it must arrive by t). If the passes don't give
     a checked one (a sharp wind change can make them flip-flop), it brackets a departure that
-    arrives in time, stepping back (doubling, `floor` itself tried last) and bisects to the latest."""
+    arrives in time, stepping back (a minute at a time, then doubling; `floor` itself tried last)
+    and bisects to the latest."""
     def arrive(x):
         e = env(v, x)
         got = speed(e, track) if e is not None else None
@@ -251,15 +271,19 @@ def _latest_departure(env, speed, v, track, nm, t, s, tack_s, floor, iters=6, bi
     if a is not None and a <= t + 1.0:
         return x, side
     hi = min(x, t)                          # leaving here (or later) doesn't make it
-    step = max(60.0, nm / 20.0 * 3600.0)    # as if at 20 kn, then doubling
+    # probe back a minute at a time (the wind cache's step: a usable window is never skipped) for
+    # FINE_PROBES minutes, then doubling; the window's own end is always the last one tried
+    step, n = 60.0, 0
     lo = None
     while hi > floor:
-        cand = max(hi - step, floor)        # the window's own end is always the last one tried
+        cand = max(hi - step, floor)
         a, _ = arrive(cand)
         if a is not None and a <= t + 1.0:
             lo = cand
             break
-        hi, step = cand, step * 2.0
+        hi, n = cand, n + 1
+        if n >= FINE_PROBES:
+            step *= 2.0
     if lo is None:
         return None                         # no departure in the window makes it: no edge
     for _ in range(bisect):
@@ -346,7 +370,10 @@ def leg_band(wf, P, slat, slon, t0, dlat, dlon, eta, obstacles=None, cur=None, w
     edges = _edges(g, obstacles)
     src, dst = g.snap(slat, slon), g.snap(dlat, dlon)
     leg_s = max(600.0, float(eta) - float(t0))
-    fw = _forward(edges, env, speed, src, float(t0), float(t0) + 3.0 * leg_s, tack_s)
+    # the router's per-leg step (route_leg's dt_h): how long a becalmed boat waits before retrying
+    direct = math.hypot((dlat - slat) * 60.0, (dlon - slon) * g.kx)
+    wait_s = min(1.0, max(0.15, direct / 40.0)) * 3600.0
+    fw = _forward(edges, env, speed, src, float(t0), float(t0) + 3.0 * leg_s, tack_s, wait_s)
     bw = _reverse(edges, env, speed, dst, float(eta), float(eta) - 3.0 * leg_s, tack_s)
     slack = _slack(fw, bw, tack_s)
     fw_dst = min((t for (n, _s), t in fw.items() if n == dst), default=None)

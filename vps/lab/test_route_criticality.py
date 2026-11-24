@@ -199,6 +199,36 @@ def test_back_search_tries_the_window_end():
     assert F <= got[0] <= F + 100
 
 
+def test_back_search_finds_a_narrow_window():
+    """Only a departure 800-900 s before `t` makes it: doubling probes (t-180, t-540, t-1260)
+    stepped right over it. Probing a minute at a time finds it, then bisects to its latest end."""
+    t = T0 + 5000.0
+
+    def env(v, x):
+        return (6.0, 0.0, 0.0, 0.0, 0.0) if t - 900 <= x <= t - 800 else None
+
+    got = CRIT._latest_departure(env, lambda e, trk: (6.0, trk), (0, 0), 90.0, 1.0, t, 0, 30.0,
+                                 T0)
+    assert got is not None, "the narrow window was skipped"
+    assert t - 860 <= got[0] <= t - 800, got[0] - t
+
+
+class Calm:
+    """A flat calm (0.1 kn) for the first 2 h, then 10 kn from the north."""
+    loaded = True
+
+    def wind_at(self, lat, lon, t):
+        return (0.1, 0.0) if t < T0 + 7200 else (10.0, 0.0)
+
+
+def test_forward_run_waits_out_a_calm():
+    """As the router (#326): a becalmed boat waits for the breeze instead of the grid giving up."""
+    b = CRIT.leg_band(Calm(), P, *S, T0, *M, T0 + 6 * 3600, tack_s=30)
+    assert b is not None, "the grid gave up in the calm"
+    assert b["grid_minutes"] > 120, "the wait is on the clock"
+    assert min(v for v in b["loss_min"] if v is not None) == 0.0
+
+
 class Cross:
     """A 2 kn current setting west, everywhere."""
     loaded = True
