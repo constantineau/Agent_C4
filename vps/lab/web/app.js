@@ -4615,6 +4615,7 @@ async function debUploadGpx() {
     const fd = new FormData(); fd.append("file", f);
     const r = await (await api("/api/debrief/track/upload?race_id=" + encodeURIComponent(Deb.raceId), { method: "POST", body: fd })).json();
     Deb.trackMsg = r.ok ? `Loaded ${r.n} fixes from ${f.name}.` : (r.detail || "upload failed");
+    if (r.ok && typeof manForget === "function") manForget();
   } catch (e) { Deb.trackMsg = "upload failed"; }
   Deb.trackBusy = false;
   await debLoadRecordings();
@@ -4628,6 +4629,7 @@ async function debFetchYb() {
     const r = await (await apiPost("/api/debrief/track/fetch", { race_id: Deb.raceId, boat })).json();
     Deb.trackMsg = r.ok ? `Fetched ${r.n} fixes for ${esc(r.boat || boat)} (${r.matched_by || "matched"}).`
       : (r.note || r.detail || "fetch failed") + (r.boats ? ". Boats: " + r.boats.slice(0, 20).join(", ") : "");
+    if (r.ok && typeof manForget === "function") manForget();
   } catch (e) { Deb.trackMsg = "fetch failed"; }
   Deb.trackBusy = false;
   await debLoadRecordings();
@@ -4636,6 +4638,7 @@ async function debFetchYb() {
 
 async function debClearTrack() {
   await apiPost("/api/debrief/track/clear", { race_id: Deb.raceId });
+  if (typeof manForget === "function") manForget();
   Deb.trackMsg = "Track removed.";
   await debLoadRecordings();
   paintDebrief();
@@ -4675,6 +4678,7 @@ function paintDebrief() {
       <div class="card"><div class="placeholder">No race yet. <a href="#races">Add one in Races</a>.</div></div>
       ${debPracticeCard()}
       ${body}
+      ${typeof manCard === "function" ? manCard(r, Deb) : ""}
       ${retroCard()}</div>`;
     if (running && !Deb.poll) Deb.poll = setInterval(debPoll, 4000);
     return;
@@ -4695,6 +4699,7 @@ function paintDebrief() {
     ${debRecordingsCard()}
     ${debPracticeCard()}
     ${body}
+    ${typeof manCard === "function" ? manCard(r, Deb) : ""}
     ${debTrackCard()}
     ${retroCard()}
   </div>`;
