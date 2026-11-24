@@ -671,6 +671,11 @@ vk_old = RS.bundle_verdict(b_ok)
 check("bundle of verdicts from before #405: nothing reads as checked",
       set(states(vk_old).values()) == {"not_checked"} and RS.refusal(dict(b_ok, safety=vk_old)) is None)
 check("all_checked: a missing check is not a pass", not RS.all_checked(ck_all[:4]))
+vp = RS.bundle_verdict({"consensus": {"safety": dict(good, checks=ck_all[:4])},
+                        "variants": [{"id": "x", "route": {"path": []}, "safety": dict(good, checks=[])}]})
+check("bundle: a check a route's list leaves out is not checked, not passed",
+      set(states(vp).values()) == {"not_checked"} and RS.NOT_RUN in vp["checks"][4]["texts"],
+      vp["checks"])
 
 print("ALL OK" if ok else "SOME FAILED")
 raise SystemExit(0 if ok else 1)

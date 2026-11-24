@@ -82,19 +82,25 @@ def route_checks(problems, notes, has_fields, land_everywhere=True):
 def merge_checks(*lists):
     """One list over several routes (or a route plus what the boat knows): each check takes its
     worst state and every text once. A route with no `checks` (built before #405) counts as every
-    check not run."""
+    check not run, and so does any check a list leaves out."""
     got = {cid: [CHECKED, []] for cid, _l in CHECKS}
     for lst in lists:
         if not isinstance(lst, list):
             lst = [_check(cid, NOT_CHECKED, [NOT_RUN]) for cid, _l in CHECKS]
+        seen = set()
         for c in lst:
             if not isinstance(c, dict) or c.get("id") not in got:
                 continue
+            seen.add(c["id"])
             g = got[c["id"]]
             st = c.get("state") if c.get("state") in _RANK else NOT_CHECKED
             if _RANK[st] > _RANK[g[0]]:
                 g[0] = st
             g[1] += [t for t in c.get("texts") or [] if t and t not in g[1]]
+        for cid in got.keys() - seen:          # a check this list doesn't name didn't run
+            got[cid][0] = FAILED if got[cid][0] == FAILED else NOT_CHECKED
+            if NOT_RUN not in got[cid][1]:
+                got[cid][1].append(NOT_RUN)
     return [_check(cid, st, texts) for cid, (st, texts) in got.items()]
 
 

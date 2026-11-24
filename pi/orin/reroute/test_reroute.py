@@ -317,6 +317,10 @@ check("#405 no course aboard: zones and sides not checked, said why",
       nc["zones"]["state"] == "not_checked" and nc["marks"]["state"] == "not_checked"
       and nc["zones"]["texts"] == [job.NO_ZONES] and nc["land"]["state"] == "checked"
       and nc["depth"]["state"] == "not_checked" and nc["depth"]["texts"] == [job.NO_DEPTH])
+pc = {c["id"]: c["state"] for c in job.safety_checks(
+    {"checks": job.routesafety.route_checks([], [], True)[:3]}, None, True)}
+check("#405 a check the optimizer left out: not checked, not passed by the boat's list",
+      pc["marks"] == "not_checked" and pc["chart"] == "not_checked" and pc["land"] == "checked")
 check("#405 an optimizer with no checks: nothing reads as checked",
       {c["state"] for c in job.safety_checks({"ok": True, "problems": []}, None, True)}
       == {"not_checked"})

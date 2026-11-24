@@ -529,8 +529,8 @@ def run(req, now=None, on_progress=None, on_phase=None, is_online=None):
         # first); a layer turned off in the settings is only in `data`
         warnings += [n for n in (out["data"].get("notes") or [])
                      if n not in warnings and not n.endswith(": turned off.")]
-        if chart_note:
-            warnings.insert(0, chart_note)
+        if land_note:                   # any leg's, so it matches `chart.land` and the checks
+            warnings.insert(0, land_note)
         if not full:
             warnings.insert(0, NO_ZONES)
         if boat_note == NO_BOAT:
@@ -574,7 +574,7 @@ def run(req, now=None, on_progress=None, on_phase=None, is_online=None):
             "vs_plan": (vs_plan(req.get("plan"), lat, lon, now, res.get("finish_epoch"))
                         if complete and res.get("finish_epoch") else
                         {"available": False, "note": INCOMPLETE}),
-            "chart": {"land": chart_note is None,
+            "chart": {"land": land_note is None,
                       "source": (res.get("obstacles") or {}).get("source")},
             # #405: land, depth, zones, marks and chart coverage, each checked / not / failed
             "checks": safety_checks(res.get("safety"), land_note, bool(full)),
@@ -603,7 +603,8 @@ def safety_checks(safety, chart_note, has_course):
         own = [dict(c, state=routesafety.NOT_CHECKED, texts=[NO_DEPTH])
                if c.get("id") == "depth" and c.get("state") != routesafety.FAILED else c
                for c in own]
-    boat = []
+    # what the boat adds, as a full list (merge_checks reads a check left out as not run)
+    boat = [{"id": cid, "state": routesafety.CHECKED, "texts": []} for cid, _l in routesafety.CHECKS]
     if chart_note:
         boat.append({"id": "land", "state": routesafety.NOT_CHECKED, "texts": [chart_note]})
         boat.append({"id": "chart", "state": (routesafety.FAILED if chart_note == NO_COVER
