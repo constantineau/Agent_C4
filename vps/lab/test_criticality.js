@@ -35,6 +35,7 @@ console.log("rough legs and the caveat");
 const rough = { criticality: { legs: [Object.assign({}, leg, { rough: true })] } };
 check("rough leg says so", /Top 1.5 nm <b[^>]*>rough<\/b>/.test(C.legendHtml(rough)));
 check("steady leg doesn't", !/rough<\/b>/.test(C.legendHtml(R)));
+check("legend says the rounding isn't in the band", /up to the mark, not the rounding/.test(C.legendHtml(R)));
 check("legend says it's approximate in fast-changing wind", /Approximate when the wind changes fast/.test(C.legendHtml(R)));
 
 console.log("draw");

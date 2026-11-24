@@ -5,7 +5,8 @@
    band: dark within 5 min of the best route, then 10, then 20. A narrow band = the route matters;
    a wide one = the side hardly matters. Pure helpers (no Leaflet); mapview.js calls draw() from its
    own canvas layer. When the wind changes fast the band is only approximate (a detour meets
-   different wind than the best route); legs where it changes a lot say "rough".
+   different wind than the best route); legs where it changes a lot say "rough". Each leg's band ends at the mark approach (the inbound
+   standoff); the rounding isn't in it.
    vps/lab/test_criticality.js requires this file directly. */
 "use strict";
 
@@ -82,7 +83,7 @@ const Criticality = (function () {
     return `<span class="cc-sep"></span><span class="cc-lbl">Time lost</span>` +
       SHADES.map(([m, col, al]) =>
         `<span class="mv-sw"><i style="background:${col};opacity:${Math.min(1, al * 2)}"></i>&lt;${m} min</span>`).join("") +
-      `<span class="mv-legnote" title="${esc(APPROX)}">narrow = route matters. Approximate when the wind changes fast.</span>` +
+      `<span class="mv-legnote" title="${esc(APPROX)}">narrow = route matters. Approximate when the wind changes fast. Each leg up to the mark, not the rounding.</span>` +
       (w.length ? `<span class="mv-legnote">10 min wide: ${w.map((x) =>
         `${esc(x.to)} ${x.nm} nm${x.rough ? ` <b title="${esc(APPROX)}">rough</b>` : ""}`).join(", ")}</span>` : "");
   }

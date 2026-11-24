@@ -304,3 +304,29 @@ def test_optimize_course_opt_in():
         # every ~18 deg (a beat sails 45 deg, not its best ~40) make it slower
         router = next(x for x in on["legs"] if x["to"] == lg["to"])["leg_minutes"]
         assert 0.8 * router <= lg["grid_minutes"] <= 1.2 * router, (lg["grid_minutes"], router)
+
+
+ROUNDED = {"race_id": "crit-r", "name": "Crit rounded", "zones": [], "courses": [{
+    "id": "c", "start": {"lat": S[0], "lon": S[1]},
+    "marks": [{"name": "Top", "type": "buoy", "lat": M[0], "lon": M[1], "rounding": "port"}],
+    "finish": {"points": [{"lat": 44.1, "lon": -82.25}]}}]}
+
+
+def test_rounded_mark_band_ends_at_the_inbound_standoff():
+    """The band covers the leg up to the mark approach: it ends at the standoff the router aims
+    for on the way in, not at the exit standoff after the rounding (a straight grid step there
+    could leave the mark on the wrong side)."""
+    r = OPT.optimize_course(ROUNDED, "c", T0, WF(12.0, 0.0), avoid=False, emit_exploration=False,
+                            criticality=True)
+    assert r["available"] and r["complete"]
+    lg = r["criticality"]["legs"][0]
+    assert lg["to"] == "Top"
+    rlat, rlon = OPT._rounding_offset(*S, *M, "port")
+    assert (rlat, rlon) != M, "the standoff is off the mark itself"
+    end = r["path"][r["leg_end_idx"][0]]               # the routed leg ends after the rounding
+    assert OPT._hav_nm(end["lat"], end["lon"], rlat, rlon) > 0.02, "this course really rounds"
+    # the band's grid is centred on the midpoint of the leg it covers
+    clat = lg["lat0"] + (lg["ny"] // 2) * lg["dlat"]
+    clon = lg["lon0"] + (lg["nx"] // 2) * lg["dlon"]
+    assert abs(clat - (S[0] + rlat) / 2) < 1e-5 and abs(clon - (S[1] + rlon) / 2) < 1e-5, \
+        (clat, clon, (S[0] + rlat) / 2, (S[1] + rlon) / 2)

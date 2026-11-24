@@ -1579,6 +1579,9 @@ def _optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s
                         waves=waves, helm_factor=helm_factor, wave_coeffs=wave_coeffs,
                         wave_uniform_hs=wave_uniform_hs, maneuver_prune_mult=maneuver_prune_mult,
                         sail_config=sail_config, xo=xo)
+        if criticality and leg.get("reached", True):     # #379: up to the mark approach (no rounding)
+            crit_legs.append({"to": name, "slat": slat, "slon": slon, "t0": t, "dlat": rlat,
+                              "dlon": rlon, "eta": leg["eta"], "obstacles": leg_obs})
         # #52: round the mark the legal way and leave from the EXIT standoff, not the inbound one
         nxt = marks[mi + 1] if mi + 1 < len(marks) else None
         corner = (_rounding_corner(slat, slon, dlat, dlon, nxt[2], nxt[3], side)
@@ -1591,10 +1594,6 @@ def _optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s
                 corner = []            # no clean way round at the standoff: the side check judges
             else:
                 leg = rounded
-        if criticality and leg.get("reached", True):     # #379: where the leg really ends (after rounding)
-            _end = leg["path"][-1] if leg["path"] else {"lat": rlat, "lon": rlon}
-            crit_legs.append({"to": name, "slat": slat, "slon": slon, "t0": t, "dlat": _end["lat"],
-                              "dlon": _end["lon"], "eta": leg["eta"], "obstacles": leg_obs})
         # sample wind + confidence at the leg's midpoint and end (for the briefing)
         mid = leg["path"][len(leg["path"]) // 2] if leg["path"] else {"lat": dlat, "lon": dlon}
         det = wf.detail_at(mid["lat"], mid["lon"], (t + leg["eta"]) / 2.0)

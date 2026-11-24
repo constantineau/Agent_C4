@@ -28,6 +28,10 @@ meets different wind. The exact answer is a full onward route from every grid po
 So each leg says how much its wind changes (`wind_change`) and is flagged `rough` past
 ROUGH_DIR_DEG / ROUGH_KN; the map says "approximate when the wind changes fast".
 
+Each leg's band covers the leg up to the mark approach: it ends at the inbound standoff the router
+aims for, before the rounding. The rounding itself (and its required side) isn't in the band: a
+straight grid step to the exit standoff could leave the mark on the wrong side.
+
 Opt-in (`optimize_course(..., criticality=True)`): it costs a few seconds per leg.
 """
 from __future__ import annotations
