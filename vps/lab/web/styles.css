@@ -626,3 +626,16 @@ button.qh-btn[aria-expanded="true"] > span { color: var(--ink); border-color: va
 .vs-rose-t td, .vs-rose-t th { text-align: right; }
 .vs-rose-t td:first-child, .vs-rose-t th:first-child { text-align: left; }
 .vs-scroll { overflow-x: auto; max-width: 100%; }
+
+/* #378 Gameplan study batch (web/study.js) */
+.st-axes { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; margin-bottom: 6px; }
+.st-field { font-size: 12px; }
+.st-field input[type="text"] { width: 96px; }
+.st-plan { font-size: 12px; margin-left: 8px; }
+.st-plan.warn { color: var(--warn, #b45309); }
+.st-sum { margin: 8px 0 2px; font-size: 13px; }
+.st-note { font-size: 11px; margin: 2px 0; }
+.st-wrap { overflow-x: auto; }
+.st-sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
+.st-tie { font-size: 10px; padding: 0 5px; }
+.st-fail td { opacity: .7; }

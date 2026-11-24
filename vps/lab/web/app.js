@@ -1666,6 +1666,7 @@ async function renderGameplan() {
         ${qhelp("Downloads forecasts from NOAA and ECMWF and sails them on the boat's own polar. Later runs reuse the download. Prep only: nothing changes after the start (rule 41).")}</div>
     </div>
     <div id="optOut"></div>
+    <div id="studyCard"></div>
     <div class="card">
       <h3>Playbook <span class="muted" style="font-weight:400">— which side, and when to switch</span></h3>
       <div class="muted" style="font-size:12px;margin-bottom:8px">Routes many forecasts. Says which side to start and what would change it.
@@ -1683,6 +1684,7 @@ async function renderGameplan() {
   updateEnsembleControl();
   updateResHint();
   if (Opt.result) showResult(renderOptResult, Opt.result, "optOut");
+  if (typeof Study !== "undefined") Study.mount("studyCard");      // #378 study batch
   if (Pb.result) showResult(renderPbResult, Pb.result, "pbOut");
 }
 
