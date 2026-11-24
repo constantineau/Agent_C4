@@ -185,7 +185,13 @@ r = edit(op="undo")
 check("undo is a new revision (5), the finish back", r["ok"] and r["revision"]["number"] == 5
       and names() == ["Start", "Windward", "Leeward", "Windward", "Finish"])
 check("…the run kept", NAV.get_navigator()["next_mark"]["index"] == 3)
-edit(op="undo")
+hash_before = orinroute.current_course_hash()
+r = edit(op="undo")
+check("undo of the skip: the navigator back where it was before it (the start)",
+      r["ok"] and r["note"] == "Course rev 6 saved. Next mark: Start."
+      and NAV.get_navigator()["next_mark"]["index"] == 0)
+check("…and the course itself didn't change (routes stay current)",
+      orinroute.current_course_hash() == hash_before)
 edit(op="undo")
 v = rev()
 check("every edit undone: the Lab's course again, still a boat revision (7)", v["edits"] == []
@@ -202,6 +208,65 @@ check("the next number, from the Lab, no edits", v["revision"]["number"] == 9
       and v["revision"]["origin"] == "lab" and v["edits"] == [])
 check("a number the Lab already stated higher is kept", orinroute.next_revision(
     {"number": 40, "origin": "lab"}) == 40 and orinroute.next_revision() == 41)
+
+print("undo of a skip after the boat moved on:")
+client.post("/course/load", json={"definition": DEF, "course_id": "c"})
+edit(op="skip_to", pos=1, name="Leeward")
+check("(skipped to Leeward)", NAV.get_navigator()["next_mark"]["index"] == 2)
+NAV.pick_mark(3)                                   # the boat has gone on to lap 2's Windward
+r = edit(op="undo")
+check("undo says so and leaves the next mark", r["ok"] and r["note"].endswith(
+    "Boat has moved on. Next mark not changed.") and NAV.get_navigator()["next_mark"]["index"] == 3)
+
+
+class PowerCut(BaseException):
+    """The Pi loses power: nothing after this line runs, no handler cleans up."""
+
+
+def cut_at(name):
+    real = getattr(orinroute, name)
+
+    def boom(*a, **k):
+        setattr(orinroute, name, real)
+        raise PowerCut()
+    setattr(orinroute, name, boom)
+
+
+print("a power cut part way through an edit:")
+client.post("/course/load", json={"definition": DEF, "course_id": "c"})
+n0 = rev()["revision"]["number"]
+cut_at("write_record")                             # marks + load id written, record not
+try:
+    edit(op="finish_at", pos=2, name="Windward")
+except PowerCut:
+    pass
+JOURNAL = os.path.join(_tmp, "engine", "course-edit-journal.json")
+check("(the cut left a journal)", os.path.exists(JOURNAL))
+v = rev()
+check("next read: the edit is finished (the marks were already the new ones)",
+      v.get("available") and v["shortened"] and v["revision"]["number"] == n0 + 1
+      and names() == ["Start", "Windward", "Leeward", "Finish"] and not os.path.exists(JOURNAL))
+check("…and the re-route still gets the zones and sides",
+      orinroute._definition_for("wl", NAV._marks("wl"))[0] is not None)
+cut_at("set_load_id")                              # a side change cut before its load id
+try:
+    edit(op="rounding", pos=0, name="Windward", side="starboard")
+except PowerCut:
+    pass
+v = rev()
+check("cut before anything changed: back to the course before the edit, still pairing",
+      v.get("available") and v["revision"]["number"] == n0 + 1
+      and v["marks"][0]["rounding"] == "port" and not os.path.exists(JOURNAL))
+
+print("the revision number can't be written:")
+_nr = orinroute.next_revision
+orinroute.next_revision = lambda stated=None: (_ for _ in ()).throw(OSError("disk full"))
+resp = client.post("/course/edit", json={"op": "rounding", "pos": 0, "name": "Windward",
+                                         "side": "starboard"})
+orinroute.next_revision = _nr
+check("a plain failure, not a 500", resp.status_code == 200
+      and resp.json() == {"ok": False, "note": "Couldn't save the change. Try again."})
+check("…nothing changed", rev()["marks"][0]["rounding"] == "port")
 
 print("a failed save changes nothing:")
 _orig = orinroute.write_record

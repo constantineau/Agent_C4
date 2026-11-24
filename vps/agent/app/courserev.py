@@ -26,6 +26,8 @@ NO_COURSE = "No course aboard to change."
 NOTHING = "No course change to undo."
 BEHIND = "That mark is behind you."
 MAX_EDITS = 50
+MOVED_ON = "Boat has moved on. Next mark not changed."
+NEXT_KEPT = "Next mark not changed."
 
 
 def _device(raw):
@@ -107,10 +109,11 @@ def edit(body, after_change=None):
         cid = rec.get("course_id")
         base = orinroute.base_definition(rec) or rec["definition"]
         edits = list(rec.get("edits") or [])
+        undone = None
         if op == "undo":
             if not edits:
                 return {"ok": False, "note": NOTHING}
-            edits.pop()
+            undone = edits.pop()
             new_edit = None
         else:
             if len(edits) >= MAX_EDITS:
@@ -129,40 +132,56 @@ def edit(body, after_change=None):
             target = courseedit.nav_index_of(new_def if op == "skip_to" else base, cid, new_edit["pos"])
             if op == "finish_at" and nxt is not None and target is not None and target < nxt:
                 return {"ok": False, "note": BEHIND}
+        if op == "skip_to" and new_edit:
+            # where the navigator was, so an undo of the skip can put it back
+            new_edit.update(prev_index=nxt, to_index=target)
         now = int(time.time())
-        number = orinroute.next_revision()
-        if new_edit:
-            new_edit.update(at=now, by=_device(b.get("device")), number=number)
-        revision = {"number": number, "at": now, "origin": "boat",
-                    "base": (rec.get("revision") or {}).get("base")}
-        new_def["course_revision"] = dict(revision, edits=edits)
         old_flat = [(m.get("seq"), m.get("name"), m.get("lat"), m.get("lon")) for m in marks]
         new_flat = _flat(new_def, cid)
         if len(new_flat) < 2:
             return {"ok": False, "note": "Course too short."}
-        course_changed = op != "skip_to"
+        # a skip (or its undo) leaves the course as it was; every other change is a new course
+        shape = lambda d: (d.get("courses"), d.get("zones"))   # noqa: E731
+        course_changed = shape(new_def) != shape(rec["definition"])
         kept_run = True
+        journal = False
         try:
-            if new_flat != old_flat:
-                kept_run = NAV.replace_marks(route, new_flat)
+            number = orinroute.next_revision()
+            if new_edit:
+                new_edit.update(at=now, by=_device(b.get("device")), number=number)
+            revision = {"number": number, "at": now, "origin": "boat",
+                        "base": (rec.get("revision") or {}).get("base")}
+            new_def["course_revision"] = dict(revision, edits=edits)
             out = dict(rec, definition=new_def, edits=edits, revision=revision,
                        base_definition=base if edits else None, saved_at=now,
                        marks_hash=orinroute._marks_hash([(n, a, o) for _s, n, a, o in new_flat]))
             if course_changed:
                 # a new course: every route made before counts as an old one (orinroute)
                 out["load_id"] = orinroute.new_load_id()
+            # both records on disk first: a power cut in the steps below is put right on the next
+            # read (orinroute.recover)
+            orinroute.begin_edit(route, rec, out)
+            journal = True
+            if new_flat != old_flat:
+                kept_run = NAV.replace_marks(route, new_flat)
+            if course_changed:
                 orinroute.set_load_id(route, out["load_id"])
             orinroute.write_record(out)
+            orinroute.end_edit()
         except Exception as exc:  # noqa: BLE001
             print(f"[course/edit] failed: {type(exc).__name__}: {exc}", flush=True)
             # the marks may be the new ones now: put the old ones back, so the old record still
             # pairs with them (by its marks hash and load id)
-            try:
-                if new_flat != old_flat:
-                    NAV.replace_marks(route, old_flat)
-                orinroute.set_load_id(route, rec.get("load_id"))
-            except Exception:  # noqa: BLE001
-                orinroute.drop_definition()
+            if journal:
+                try:
+                    if new_flat != old_flat:
+                        NAV.replace_marks(route, old_flat)
+                    orinroute.set_load_id(route, rec.get("load_id"))
+                    orinroute.write_record(rec)
+                    orinroute.end_edit()
+                except Exception:  # noqa: BLE001
+                    # can't put it back now: the journal stays, the next read puts it right
+                    pass
             return {"ok": False, "note": "Couldn't save the change. Try again."}
         if course_changed and after_change is not None:
             try:
@@ -175,6 +194,20 @@ def edit(body, after_change=None):
             picked = NAV.pick_mark(target, route)
             res["note"] = f"Course rev {number} saved. Next mark: {picked.get('next_mark')}." \
                 if picked.get("ok") else f"Course rev {number} saved. {picked.get('note') or ''}".strip()
+        elif undone and undone.get("op") == "skip_to":
+            res["note"] = f"Course rev {number} saved. " + _unskip(undone, route)
         elif not kept_run:
             res["note"] = f"Course rev {number} saved. Pick the next mark again."
         return res
+
+
+def _unskip(skip, route):
+    """Undo of a skip: the navigator back to the mark it was on before it, unless the boat has
+    moved on from the skipped-to mark since (then the next mark is left as it is, and said)."""
+    prev, to = skip.get("prev_index"), skip.get("to_index")
+    if not isinstance(prev, int) or isinstance(prev, bool):
+        return NEXT_KEPT
+    if _nav_next() != to:
+        return MOVED_ON
+    picked = NAV.pick_mark(prev, route)
+    return f"Next mark: {picked.get('next_mark')}." if picked.get("ok") else NEXT_KEPT

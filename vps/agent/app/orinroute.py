@@ -97,7 +97,17 @@ def _write(path, text):
     try:
         with os.fdopen(fd, "w") as f:
             f.write(text)
+            f.flush()
+            os.fsync(f.fileno())          # on disk before the rename: the Pi loses power on boats
         os.replace(tmp, path)
+        try:
+            dfd = os.open(os.path.dirname(path), os.O_RDONLY)
+            try:
+                os.fsync(dfd)             # and the rename itself
+            finally:
+                os.close(dfd)
+        except OSError:
+            pass
     finally:
         if os.path.exists(tmp):
             os.remove(tmp)
@@ -280,7 +290,10 @@ def _definition_for(route, marks):
 
 def record_for(route, marks):
     """The whole stored course record (definition, revision, edits aboard, the Lab's base), if it
-    is the course the navigator holds, else None. See `_definition_for`."""
+    is the course the navigator holds, else None. See `_definition_for`. A course edit cut off half
+    way (power lost) is finished or undone first (`recover`)."""
+    if os.path.exists(_journal_path()) and recover():
+        marks = NAV._marks(route) or marks          # recovery may have put other marks back
     rec = _read(_definition_path())
     if not rec or rec.get("route") != route or not rec.get("marks_hash"):
         return None
@@ -303,6 +316,63 @@ def base_definition(rec):
     none (the definition aboard IS the Lab's)."""
     b = (rec or {}).get("base_definition")
     return b if isinstance(b, dict) and (rec or {}).get("edits") else None
+
+
+def _journal_path():
+    return os.path.join(_dir(), "course-edit-journal.json")
+
+
+def begin_edit(route, old_rec, new_rec):
+    """A course edit aboard (#406) changes three stores one after the other: the navigator's marks,
+    the load id, the course record. Before the first, both records go to a journal (on disk), so a
+    power cut part way is put right on the next read (`recover`). Caller holds COURSE_LOCK."""
+    with _LOCK:
+        _write(_journal_path(), json.dumps({"route": route, "old": old_rec, "new": new_rec},
+                                           separators=(",", ":")))
+
+
+def end_edit():
+    try:
+        with _LOCK:
+            os.remove(_journal_path())
+    except FileNotFoundError:
+        pass
+
+
+def recover():
+    """Finish or undo a course edit that a power cut stopped part way. The marks aboard decide:
+    the new course's marks (or the new load id, for an edit that kept the marks) → finish it (load
+    id + record); the old course's marks → back to the old record and load id. Neither → leave
+    the stores as they are (the record then doesn't pair, and is not used). Returns True when it
+    changed anything. Never raises."""
+    try:
+        with COURSE_LOCK:
+            j = _read(_journal_path())
+            if not isinstance(j, dict) or not isinstance(j.get("new"), dict) \
+                    or not isinstance(j.get("old"), dict):
+                end_edit()
+                return False
+            route, old, new = j.get("route"), j["old"], j["new"]
+            have = _marks_hash([(m.get("name"), m.get("lat"), m.get("lon"))
+                                for m in NAV._marks(route) or []])
+            load = (_read(_load_id_path()) or {}).get("load_id")
+            if have == new.get("marks_hash") and (load == new.get("load_id")
+                                                  or have != old.get("marks_hash")):
+                keep = new
+            elif have == old.get("marks_hash"):
+                keep = old
+            else:
+                end_edit()
+                return False
+            set_load_id(route, keep.get("load_id"))
+            write_record(keep)
+            end_edit()
+            print(f"[course/edit] recovered after a cut: kept the {'new' if keep is new else 'old'}"
+                  " course", flush=True)
+            return True
+    except Exception as exc:  # noqa: BLE001
+        print(f"[course/edit] recovery failed: {type(exc).__name__}: {exc}", flush=True)
+        return False
 
 
 def write_record(rec):

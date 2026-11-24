@@ -251,6 +251,12 @@ course; a gate becomes a finish line), **Port** / **Stbd** (the rounding side, i
 - **The navigator.** Skip moves the next mark. A shortened course rewrites the navigator's marks
   (the finish moves) and keeps the run on the mark it was on. A finish behind the boat is refused.
   Every change but Skip counts as a new course: older routes show as "for an old course".
+  Undo of a Skip puts the next mark back where it was, unless the boat has moved on from the
+  skipped-to mark ("Boat has moved on. Next mark not changed.").
+- **Power cuts.** An edit writes three stores in turn (navigator marks, load id, course record).
+  Both records go to a journal on disk first; the next read finishes the edit (the marks aboard
+  are already the new ones) or puts the old course back, so the course record always pairs with
+  the marks and the re-route never loses the zones and sides. Files are fsynced before rename.
 - **The request** carries `revision` (`{number, at, origin, base}`) and, when there are edits,
   `base_definition` (the Lab's course). The chart overrides signed in the playbook are checked
   against the Lab's course.
