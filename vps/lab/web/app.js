@@ -1641,6 +1641,7 @@ async function renderGameplan() {
         <div class="opt-group">
           <div class="opt-group-h">Weather models</div>
           <div class="opt-models">${optModelChecks()}</div>
+          ${typeof mcControls === "function" ? mcControls() : ""}
           <label>Ensemble runs <input type="number" id="optEns" value="0" min="0" style="width:64px" oninput="updateEnsembleControl()"></label>
           <span id="optEnsHint" class="muted" style="font-size:12px"></span>
           <div id="optEnsCost" class="muted" style="font-size:12px;margin-top:2px"></div>
@@ -1652,6 +1653,7 @@ async function renderGameplan() {
         <label class="optchk"><input type="checkbox" id="optWaves" checked> Waves</label>${qhelp("Slows the boat in waves. Uncheck for flat water.")}
         <label class="optchk"><input type="checkbox" id="optCurrent" checked> Current</label>${qhelp("Includes water current. Run once without it to see what it's worth.")}
         <label class="optchk"><input type="checkbox" id="optPerModel"> Route per model <span class="muted">(slower)</span></label>${qhelp("Also routes each weather model on its own and draws them all.")}
+        <label class="optchk"><input type="checkbox" id="optCrit"> Time-loss band <span class="muted">(slower)</span></label>${qhelp("Shades where you can sail and lose under 5, 10 or 20 min on the best route. Narrow band: the route matters. Wide: the side hardly matters. A rough guide when the wind changes fast.")}
         <label class="optchk">Detail
           <select id="optRes" oninput="updateResHint()">
             <option value="fast"${Opt.resolution === "fast" ? " selected" : ""}>Fast</option>
@@ -1712,6 +1714,7 @@ function optToggle(k, on) {
   Opt.chosen = Opt.chosen.filter((x) => x !== k);
   if (on) Opt.chosen.push(k);
   updateEnsembleControl();
+  if (typeof mcRepaint === "function") mcRepaint();     // corrections rows follow the picks (#384)
 }
 
 /* The chosen ensemble sources + their real member counts (from /api/models). The ensemble-members
@@ -2319,8 +2322,12 @@ async function runOptimize() {
   const body = { race_id: Opt.raceId, course_id: Opt.courseId, models: Opt.chosen, ensemble_members: ens,
     avoid_land: avoidEl ? avoidEl.checked : true, per_model: pmEl ? pmEl.checked : false,
     resolution: Opt.resolution, use_waves: Opt.useWaves, use_current: Opt.useCurrent };
+  const critEl = document.getElementById("optCrit");
+  if (critEl && critEl.checked) body.criticality = true;                 // #379, opt-in
   const startEpoch = optStartEpoch();
   if (startEpoch != null) body.start_epoch = startEpoch;
+  const corr = typeof mcRequest === "function" ? mcRequest(Opt.raceId, Opt.chosen, optTz()) : null;
+  if (corr) body.corrections = corr;                   // manual model corrections (#384)
   Opt.running = true; jobWebVersion(true);
   document.getElementById("optRun").disabled = true;
   document.getElementById("optRun").textContent = "Routing… (getting weather)";
@@ -2386,6 +2393,7 @@ function renderOptResult(r) {
         <button id="shareBtn" onclick="shareGameplan(this)" title="A view-only link to the route player. No login needed.">🔗 Share player</button></div>
       ${r.start && r.start.note ? `<div class="opt-start-note">${esc(r.start.note)}</div>` : ""}
       ${optDegradedBanner(r)}
+      ${typeof mcResultNote === "function" ? mcResultNote(r) : ""}
       ${seaDataNote(r.data, false)}
       ${safetyPanel(r.safety, "route", { race: r.race_id, course: r.course_id })}
       ${r.timed_out ? '<div class="pill warn">Routing ran out of time. The route may be incomplete.</div>' : ""}
@@ -3018,7 +3026,8 @@ function plumePanelInner() {
     `<div class="opt-controls">${b("field", "tws", "Speed", Plume.field === "tws")}${b("field", "twd", "Direction", Plume.field === "twd")} ${picks}</div>
      <div class="muted" style="font-size:12px">${esc(pl.label || "")} · newest run recorded ${esc(depAgo(pl.built_at))}</div>
      <div class="lab-plume" style="max-width:900px">${P.chartSvg(pl, { w: 860, h: 300, now: now, field: Plume.field, only: Plume.only, allRuns: true, back_h: 6, ahead_h: 24 })}
-     ${P.legendHtml(pl, { only: Plume.only, cycles: true, now: now })}${P.runTimesHtml(pl, now)}</div>` + push;
+     ${P.legendHtml(pl, { only: Plume.only, cycles: true, now: now })}${P.runTimesHtml(pl, now)}</div>` +
+    (typeof mcPlumeNote === "function" ? mcPlumeNote((tgt && tgt.race_id) || Dep.raceId) : "") + push;
 }
 
 // Live read of what the boat has loaded (read-only GETs over the Lab's Tailscale line). Slow when
@@ -4545,7 +4554,8 @@ function debRecRows(rs, src) {
       : (canRun ? `<button class="mini" onclick="debRunRecording(${arg(i)})">${d ? "Re-run" : "Debrief"}</button>`
                 : '<span class="muted">not on the boat log</span>')
         + (d ? (onScreen ? ' <span class="pill ok" style="margin-left:8px">showing</span>'
-                         : ` <button class="mini" style="margin-left:8px" onclick="debOpenDebrief(${d.id})">Open</button>`) : "");
+                         : ` <button class="mini" style="margin-left:8px" onclick="debOpenDebrief(${d.id})">Open</button>`) : "")
+        + (x.track && typeof Replay !== "undefined" ? ` <button class="mini" style="margin-left:8px" onclick="Replay.openRow(${arg(i)})">Replay</button>` : "");
     return `<tr${isThis || onScreen ? ' class="winrow"' : ""}>
       <td><b>${esc(x.name || "recording")}</b><div class="muted" style="font-size:11px">${when}${x.kind ? " · " + esc(x.kind) : ""}</div>${x.kit !== undefined && x.start_ts != null
         ? `<div style="font-size:11px">Boat: <b>${esc(x.boat_name || "?")}</b>${x.boat_has_profile ? "" : ' <span class="pill warn">no profile</span>'} <a href="javascript:void 0" onclick="debEditBoat(${arg(i)})">Change</a></div>` : ""}</td>
@@ -4612,6 +4622,7 @@ async function debUploadGpx() {
     const fd = new FormData(); fd.append("file", f);
     const r = await (await api("/api/debrief/track/upload?race_id=" + encodeURIComponent(Deb.raceId), { method: "POST", body: fd })).json();
     Deb.trackMsg = r.ok ? `Loaded ${r.n} fixes from ${f.name}.` : (r.detail || "upload failed");
+    if (r.ok && typeof manForget === "function") manForget();
   } catch (e) { Deb.trackMsg = "upload failed"; }
   Deb.trackBusy = false;
   await debLoadRecordings();
@@ -4625,6 +4636,7 @@ async function debFetchYb() {
     const r = await (await apiPost("/api/debrief/track/fetch", { race_id: Deb.raceId, boat })).json();
     Deb.trackMsg = r.ok ? `Fetched ${r.n} fixes for ${esc(r.boat || boat)} (${r.matched_by || "matched"}).`
       : (r.note || r.detail || "fetch failed") + (r.boats ? ". Boats: " + r.boats.slice(0, 20).join(", ") : "");
+    if (r.ok && typeof manForget === "function") manForget();
   } catch (e) { Deb.trackMsg = "fetch failed"; }
   Deb.trackBusy = false;
   await debLoadRecordings();
@@ -4633,6 +4645,7 @@ async function debFetchYb() {
 
 async function debClearTrack() {
   await apiPost("/api/debrief/track/clear", { race_id: Deb.raceId });
+  if (typeof manForget === "function") manForget();
   Deb.trackMsg = "Track removed.";
   await debLoadRecordings();
   paintDebrief();
@@ -4671,8 +4684,11 @@ function paintDebrief() {
     document.getElementById("view").innerHTML = `<div class="opt">
       <div class="card"><div class="placeholder">No race yet. <a href="#races">Add one in Races</a>.</div></div>
       ${debPracticeCard()}
+      <div id="replayHost"></div>
       ${body}
+      ${typeof manCard === "function" ? manCard(r, Deb) : ""}
       ${retroCard()}</div>`;
+    if (typeof Replay !== "undefined") Replay.attach();
     if (running && !Deb.poll) Deb.poll = setInterval(debPoll, 4000);
     return;
   }
@@ -4691,10 +4707,13 @@ function paintDebrief() {
     </div>
     ${debRecordingsCard()}
     ${debPracticeCard()}
+    <div id="replayHost"></div>
     ${body}
+    ${typeof manCard === "function" ? manCard(r, Deb) : ""}
     ${debTrackCard()}
     ${retroCard()}
   </div>`;
+  if (typeof Replay !== "undefined") Replay.attach();   // #373: the replay card survives repaints
   if (running && !Deb.poll) Deb.poll = setInterval(debPoll, 4000);
 }
 
@@ -5497,6 +5516,7 @@ function polSvg() {
     out.push(`<text x="${lx}" y="${ly + 3}" fill="var(--muted)" font-size="11" text-anchor="middle">${a}°</text>`);
   }
   out.push(`<text x="${CX + R * 0.62}" y="${CY - R - 14}" fill="var(--muted)" font-size="11" text-anchor="middle">wind angle · rings = boat speed kn</text>`);
+  if (typeof polScSvg === "function") out.push(polScSvg(XY, maxV));   // log points, behind (#376)
   if (cert) {
     const d = cert.pts.map((p, i) => (i ? "L" : "M") + XY(p.twa, p.stw).map((n) => n.toFixed(1)).join(" ")).join(" ");
     out.push(`<path d="${d}" fill="none" stroke="var(--muted)" stroke-width="2" stroke-dasharray="6 5" opacity="0.75"/>`);
@@ -5678,9 +5698,11 @@ function paintPolar() {
       <div class="opt-controls" style="margin-bottom:6px">TWS: ${chips}</div>
       <div class="opt-controls" style="margin-bottom:6px">race: ${raceSel} &nbsp; sails: ${cfgSel} &nbsp;
         <span class="muted">lines by:</span> ${splitRadio}</div>
+      ${typeof polScControls === "function" ? `<div class="opt-controls" style="margin-bottom:6px">${polScControls()}</div>` : ""}
       ${byRace ? `<div class="muted" style="font-size:12px;margin-bottom:4px">One line per race, all sails together. The sail filter is off.</div>` : ""}
       ${polSvg()}
       <div class="muted" style="font-size:12px;margin-top:4px">${legend}${legendTail}</div>
+      ${typeof polScLegend === "function" ? polScLegend() : ""}
       <div class="muted" style="font-size:11px;margin-top:4px">Rings every 2 kn, up to ${polMaxV()} kn. The scale never changes, so a longer line is a faster boat.</div>
     </div>
     <div class="card"><h3>Cells at ${Pol.tws} kn${Pol.race === "all" ? "" : " · " + esc(polRaceName(Pol.race))} <span class="muted" style="font-weight:400">— best speed held, at least ${minS} s of data each</span></h3>${tbl}

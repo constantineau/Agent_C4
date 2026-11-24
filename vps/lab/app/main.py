@@ -31,6 +31,9 @@ INGESTED_DIR = os.environ.get("INGESTED_DIR", "/srv/ingested")
 
 app = FastAPI(title="C4 Performance Lab", version="0.1.0")
 
+from . import replay as _replay  # noqa: E402 — debrief replay + strip chart (#373/#374)
+app.include_router(_replay.router)
+
 # gzip the static shell + JSON responses (app.js alone is ~175 KB raw / ~49 KB gzipped — the Lab
 # is used over hotel Wi-Fi and Starlink; optimize results are large JSON too)
 app.add_middleware(GZipMiddleware, minimum_size=1024)
@@ -421,7 +424,7 @@ def _active_wave():
 
 def _run_optimize(definition, course_id, start_epoch, model_names, ensemble_members, avoid=True,
                   per_model=False, resolution="auto", use_waves=True, use_current=True,
-                  on_progress=None):
+                  on_progress=None, corrections=None, criticality=False):
     """Blocking: build the multi-model wind field, route the course, write the briefing.
     `on_progress(msg)` (optional) mirrors the log lines out live — the background-job status
     endpoint serves them so the UI can show which weather source it's waiting on. The run itself
@@ -432,7 +435,8 @@ def _run_optimize(definition, course_id, start_epoch, model_names, ensemble_memb
                                ensemble_members=ensemble_members, avoid=avoid, per_model=per_model,
                                resolution=resolution, use_waves=use_waves, use_current=use_current,
                                on_progress=on_progress, boat=boats.active_boat(),
-                               chart_source=chart_source())
+                               chart_source=chart_source(), corrections=corrections,
+                               criticality=criticality)
 
 
 @app.post("/api/optimize")
@@ -460,11 +464,15 @@ async def optimize(body: dict):
     resolution = body.get("resolution") or "auto"
     use_waves = body.get("use_waves", True)
     use_current = body.get("use_current", True)
+    from .wind import corrections as wind_corr
+    corrections = wind_corr.normalize(body.get("corrections"))      # #384 manual per-model fix
+    criticality = bool(body.get("criticality"))          # #379: time-loss band (opt-in, slower)
     from . import jobs
 
     def _work(progress):
         r = _run_optimize(d, course_id, start_epoch, model_names, ens, avoid, per_model,
-                          resolution, use_waves, use_current, on_progress=progress)
+                          resolution, use_waves, use_current, on_progress=progress,
+                          corrections=corrections, criticality=criticality)
         if isinstance(r, dict):
             r["start"] = start                   # which start it routed from, and why (UI says it)
         return r
@@ -1548,7 +1556,30 @@ async def debrief_track_get(race_id: str, recording: float = None):
             "matched_by": t.get("matched_by"), "n": len(fixes), "window": t.get("window"),
             "recording": track.recording_of(t), "trust": t.get("trust"),
             "sail_changes": len(t.get("sail_log") or []),
+            "revision": _man_revision(t),    # content hash: the tack/gybe card's cache key (#375)
             "fixes": [[f["lat"], f["lon"]] for f in fixes]}   # lightweight polyline for the map
+
+
+def _man_revision(t):
+    from . import maneuvers
+    return maneuvers.track_revision(t)
+
+
+@app.get("/api/debrief/maneuvers")
+async def debrief_maneuvers(race_id: str = None, recording: float = None, no_race: bool = False):
+    """Every tack and gybe in a stored track with its loss (#375, `app/maneuvers.py`). The
+    replay map and strip chart can mark them from this same answer."""
+    from . import maneuvers
+    rid = None if no_race else race_id
+    if rid is None and not no_race:
+        return JSONResponse({"detail": "race_id or no_race required"}, status_code=422)
+    t = await run_in_threadpool(track.load_track, rid, recording)
+    if not t:
+        return {"available": False, "note": "No track for this recording.", "maneuvers": []}
+    res = await run_in_threadpool(maneuvers.analyze, t.get("fixes") or [], t.get("sail_log"),
+                                  t.get("trust"))
+    return {**res, "race_id": rid, "recording": track.recording_of(t), "source": t.get("source"),
+            "revision": maneuvers.track_revision(t)}
 
 
 @app.post("/api/debrief/track/upload")

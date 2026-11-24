@@ -21,6 +21,7 @@ import time
 
 from . import monitor, sessionboat
 from . import atomicio
+from . import polarscatter
 from . import track as T
 
 _ACTIVE = object()      # "the Lab's active boat" (read when called)
@@ -52,7 +53,8 @@ MAX_POINTS = 20000
 # Bumped when a fix changes what a build means, so an older cache is a miss, not served as current.
 # 2: stitched sessions' shared window read once (#49).
 # 3: logged "S2" pooled with "S1" (the same kite under its crew name).
-BUILD_VERSION = 3
+# 4: thinned log points (`scatter`) behind the polar (#376).
+BUILD_VERSION = 4
 # The crew calls the kite S1 (agent `sails.CREW_SAILS`); older sail logs call it S2, its cert id.
 # They are one sail, so the polar pools them under the crew name. The stored logs are not changed.
 CREW_NAME = {"S2": "S1"}
@@ -157,6 +159,7 @@ def compute(min_seconds=MIN_SECONDS, boat_id=_ACTIVE):
     raw_secs = {}        # key -> seconds of record its samples stand for (de-duplicated)
     pooled, pooled_secs = {}, {}   # the same, counting each second once across all races
     race_meta = []
+    log_points = []      # every accepted sample, for the thinned scatter (#376)
     by_window = {}       # (start, end) -> its race_meta row
     seen_rec, seen_pool = {}, set()    # accepted fix seconds, per recording and pooled
     if boat_id is _ACTIVE:
@@ -220,7 +223,14 @@ def compute(min_seconds=MIN_SECONDS, boat_id=_ACTIVE):
                 continue
             raw.setdefault(key, []).append(stw)
             raw_secs[key] = raw_secs.get(key, 0) + got
+            # the cell's own bins ride along, so the page files a dot under exactly the cell
+            # this code put it in (Python rounds half to even; JS doesn't)
             got = _cover(seen_pool, f["t"], stride)
+            # `pooled`: this second also counted in the all-races polar. Overlapping windows
+            # keep a fix for each race's own view, but the pooled view must draw it once.
+            log_points.append({"t": f["t"], "tws": tws, "twa": twa, "stw": stw, "config": cfg,
+                               "recording": rec, "band": key[0], "twa_bin": key[1],
+                               "pooled": 1 if got else 0})
             if not got:
                 already += 1
             else:
@@ -272,6 +282,8 @@ def compute(min_seconds=MIN_SECONDS, boat_id=_ACTIVE):
             # the refused cells themselves, so the page can say what it is not showing at the
             # TWS/race the user is actually looking at rather than only a grand total
             "refused_thin": thin_cells, "refused_thin_race": thin_race_cells,
+            # the samples behind the cells, thinned — the tab's log-point scatter (#376)
+            "scatter": polarscatter.pack(log_points, TWS_STEP_KN),
             "configs": sorted({r["config"] for r in cells if r["config"]}),
             "tws_buckets": sorted({r["tws"] for r in cells})}
 

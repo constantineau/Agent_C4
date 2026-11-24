@@ -15,7 +15,7 @@
 const MapView = (function () {
   let map = null;
   let chartLayer = null, windLayer = null, currentLayer = null, waveLayer = null, exploreLayer = null, routeGroup = null, seamarks = null;
-  let scrimLayer = null, stationGroup = null;
+  let scrimLayer = null, stationGroup = null, critLayer = null;
   let ST = [];                  // the race's picked weather stations [{id, kind, lat, lon, name}]
   const SCRIM_OPACITY = 0.7;    // white mask over the basemap so wind/current arrows read clearly
   let boatMarker = null, legHighlight = null;
@@ -25,7 +25,8 @@ const MapView = (function () {
   let windMode = "arrows";      // wind overlay style: arrows | barbs | shaded (2.4)
   let followScrub = true;       // Tier 3.3: pan the map to the projected boat position while scrubbing
   const show = { wind: true, current: true, waves: false, shoals: true, rocks: true, land: false,
-                 sea: false, iso: false, laylines: true, models: true, scrim: true, stations: true };
+                 sea: false, iso: false, laylines: true, models: true, scrim: true, stations: true,
+                 crit: true };
 
   // a stable colour per weather model for the per-model candidate-route fan (PR-4)
   const MODEL_COLORS = { gfs: "#1f77b4", hrrr: "#d62728", rrfs: "#2ca02c", gefs: "#9467bd",
@@ -416,6 +417,7 @@ const MapView = (function () {
     const hasIso = R && R.isochrones && R.isochrones.length;
     const hasLay = R && R.laylines && R.laylines.length;
     const hasModels = R && R.candidate_paths && R.candidate_paths.length;
+    const hasCrit = typeof Criticality !== "undefined" && Criticality.has(R);   // #379 band
     const hasFrames = R && R.wind_grid && (R.wind_grid.times || []).length > 1;
     const hasWind = R && R.wind_grid && (R.wind_grid.frames || []).length;
 
@@ -439,6 +441,7 @@ const MapView = (function () {
         ${chk("wind", "Wind")}${hasCurrent ? chk("current", "Current") : ""}${hasWaves ? chk("waves", "Waves") : ""}${chk("shoals", "Shoals")}${chk("rocks", "Rocks")}${chk("land", "Chart land")}${chk("sea", "Seamarks")}${chk("scrim", "Dim chart")}` +
         (hasModels ? chk("models", "Model routes") : "") +
         (hasIso ? chk("iso", "Isochrones") : "") + (hasLay ? chk("laylines", "Laylines") : "") +
+        (hasCrit ? chk("crit", "Time lost") : "") +
         ((ST || []).length ? chk("stations", "Stations") : "") +
         windSel + followChk + `</div>`;
 
@@ -452,7 +455,7 @@ const MapView = (function () {
     const waveLeg = hasWaves ? `<span class="cc-sep"></span><span class="cc-lbl">Waves m${R.wave_grid.peak_hs_m ? ` (peak ${R.wave_grid.peak_hs_m})` : ""}</span>` +
         hsStops.map(([v, lbl]) => `<span class="mv-sw"><i style="background:${hsColor(v)}"></i>${lbl}</span>`).join("") : "";
     const legend = `<div class="cc-grp cc-legend"><span class="cc-lbl">Wind kts</span>${sw}
-        <span class="mv-legnote">faint = forecasts disagree</span>${curLeg}${waveLeg}${modelLeg}</div>`;
+        <span class="mv-legnote">faint = forecasts disagree</span>${curLeg}${waveLeg}${modelLeg}${hasCrit ? Criticality.legendHtml(R) : ""}</div>`;
 
     const CC = L.Control.extend({
       options: { position: "bottomleft" },
@@ -493,6 +496,7 @@ const MapView = (function () {
     if (k === "current") { currentLayer.redraw(); return; }
     if (k === "waves") { waveLayer.redraw(); return; }
     if (k === "scrim") { scrimLayer.redraw(); return; }
+    if (k === "crit") { critLayer.redraw(); return; }
     chartLayer.redraw(); windLayer.redraw();
   }
   function setFrame(i) {
@@ -589,6 +593,10 @@ const MapView = (function () {
     scrimLayer = new CanvasOverlay(drawScrim).addTo(map);   // white mask over the basemap, UNDER all data
     waveLayer = new CanvasOverlay(drawWaves).addTo(map);    // sea-state wash sits UNDER everything
     chartLayer = new CanvasOverlay(drawChart).addTo(map);
+    // #379 time-loss band (criticality.js), under the isochrones, wind and route
+    critLayer = new CanvasOverlay(function (ctx, project) {
+      if (show.crit && typeof Criticality !== "undefined") Criticality.draw(ctx, project, R);
+    }).addTo(map);
     exploreLayer = new CanvasOverlay(drawExplore).addTo(map);
     windLayer = new CanvasOverlay(drawWind).addTo(map);
     currentLayer = new CanvasOverlay(drawCurrent).addTo(map);
