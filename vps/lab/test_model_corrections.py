@@ -149,3 +149,39 @@ def test_pdf_says_the_forecast_was_corrected():
     corr = C.summary(C.normalize({"gfs": {"rotate_deg": 10, "scale_pct": 80}}), ["gfs"])
     assert "Corrected forecast: GFS: 10° right, speed 80%" in " ".join(text(corr).split())
     assert "Corrected forecast" not in text(None)
+
+
+class _RecordingSource:
+    """A duck-typed API-grid source that records the window it was asked to load."""
+    kind, priority = "deterministic", 1.0
+
+    def __init__(self, name):
+        self.name, self.asked = name, None
+
+    def load_series(self, bbox, t0, t1, on_progress=None):
+        self.asked = (t0, t1)
+        frames = series(self.name, int((t1 - t0) / H), lambda k: 10.0, lambda k: 270.0)
+        for i, fr in enumerate(frames):
+            fr.valid_time = t0 + i * H
+        return {(self.name, "det"): frames}, {"model": self.name, "frames": len(frames)}
+
+
+def test_a_shifted_model_is_loaded_over_the_shifted_window():
+    from app.wind.windfield import build_windfield
+    late, early, plain = _RecordingSource("gfs"), _RecordingSource("hrrr"), _RecordingSource("icon")
+    wf = build_windfield(BBOX, T0, T0 + 12 * H, models=[late, early, plain],
+                         corrections={"gfs": {"shift_h": 6, "fade_min": 60},
+                                      "hrrr": {"shift_h": -3}})
+    assert late.asked == (T0 - 6 * H, T0 + 12 * H)        # +6 h reads 6 h before the start
+    assert early.asked == (T0, T0 + 15 * H)               # −3 h reads 3 h past the end
+    assert plain.asked == (T0, T0 + 12 * H)
+    assert wf.t_start == T0                                # the fade still counts from the start
+    d = wf.detail_at(44, -82, T0)
+    assert d and not d.get("held") and d["models"] == ["gfs", "hrrr", "icon"]
+
+
+def test_a_fade_start_that_is_not_a_time_falls_back_to_the_route_start():
+    for bad in (1e100, -5.0, float("inf"), "soon"):
+        c = C.normalize({"gfs": {"rotate_deg": 10, "fade_min": 30, "fade_from": bad}})["gfs"]
+        assert c["fade_from"] is None
+        assert C.describe({"gfs": c}) == ["GFS: 10° right, back to raw over 30 min from start"]

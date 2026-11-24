@@ -23,6 +23,7 @@ ROTATE_MAX = 90.0          # deg either way
 SCALE_MIN, SCALE_MAX = 25.0, 300.0
 SHIFT_MAX = 24.0           # hours either way
 FADE_MAX = 7 * 24 * 60     # minutes
+EPOCH_MIN, EPOCH_MAX = 0.0, 4_102_444_800.0   # 1970 .. 2100: a fade start outside is not a time
 
 
 def _num(v, lo, hi, default):
@@ -59,8 +60,9 @@ def normalize(raw):
             fade_from = float(fade_from) if fade_from not in (None, "") else None
         except (TypeError, ValueError):
             fade_from = None
-        if fade_from is not None and not math.isfinite(fade_from):
-            fade_from = None
+        if fade_from is not None and not (math.isfinite(fade_from)
+                                          and EPOCH_MIN <= fade_from <= EPOCH_MAX):
+            fade_from = None                  # not a real time → the fade starts at the route start
         out[str(model).lower()] = {"rotate_deg": rot, "scale_pct": scale, "shift_h": shift,
                                    "fade_min": round(fade, 1) if fade > 0 else None,
                                    "fade_from": fade_from if fade > 0 else None}
@@ -80,6 +82,14 @@ def weight(c, epoch, t_start=None):
         t0 = t_start if t_start is not None else epoch
     f = (float(epoch) - float(t0)) / (float(fade) * 60.0)
     return max(0.0, min(1.0, 1.0 - f))
+
+
+def fetch_window(c, t_start, t_end):
+    """The forecast valid times a model must be loaded over so its time shift has frames: a +6 h
+    shift reads the model 6 h before the route start, a −6 h one 6 h past the end. The fade only
+    ever shrinks the shift, so the full shift bounds it."""
+    sh = (c or {}).get("shift_h") or 0.0
+    return t_start - max(0.0, sh) * 3600.0, t_end + max(0.0, -sh) * 3600.0
 
 
 def sample_epoch(c, epoch, t_start=None):

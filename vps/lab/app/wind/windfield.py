@@ -129,6 +129,7 @@ def build_windfield(bbox, t_start: float, t_end: float, models=DEFAULT_MODELS,
     `corrections` = the navigator's manual per-model corrections (#384, `corrections.normalize`)."""
     series = {}                   # (model, member) -> [GribFrame sorted by valid_time]
     meta = []
+    corrections = corr_mod.normalize(corrections)
     parser = grib.IsolatedGribParser() if grib.ISOLATE else None   # crash-isolated cfgrib parse (1/build)
     try:
         for name in models:
@@ -144,13 +145,16 @@ def build_windfield(bbox, t_start: float, t_end: float, models=DEFAULT_MODELS,
                 if on_progress:
                     on_progress(source.not_here_note())
                 continue
+            # #384: a time-shifted model is read earlier/later than the route window, so load it
+            # over the window widened by its shift (the field keeps the route start for the fade)
+            w0, w1 = corr_mod.fetch_window(corrections.get(str(source.name).lower()), t_start, t_end)
             if hasattr(source, "load_series"):        # API-grid source (ICON via Open-Meteo) —
-                m_series, m_meta = source.load_series(bbox, t_start, t_end, on_progress)
+                m_series, m_meta = source.load_series(bbox, w0, w1, on_progress)
                 series.update(m_series)               # whole-series ingest, no per-frame GRIB fetch
                 meta.append(m_meta)
                 continue
             members = _members_for(source, ensemble_members)
-            m_series, m_meta = _load_model(source, bbox, t_start, t_end, members, on_progress,
+            m_series, m_meta = _load_model(source, bbox, w0, w1, members, on_progress,
                                            parser=parser, fallback_tries=fallback_tries)
             series.update(m_series)
             meta.append(m_meta)
