@@ -109,11 +109,20 @@ ORACLE_ANALYSES = os.environ.get("JUDGE_ORACLE_ANALYSES", "1") != "0"
 ANALYSIS_LAG_S = 2 * 3600      # the last hour's analysis is posted about this long after it
 
 
-def _enough_analyses(wf):
-    from .wind.windfield import MIN_FRAME_FRAC
-    m = next((x for x in (getattr(wf, "meta", None) or []) if isinstance(x, dict)), {})
-    return bool(wf.loaded and m.get("expected_frames")
-                and m.get("frames", 0) >= MIN_FRAME_FRAC * m["expected_frames"])
+ANALYSIS_MAX_GAP_S = 3 * 3600  # longest stretch between analyses the field may interpolate across
+
+
+def _enough_analyses(wf, start, t_end):
+    """Do the hourly analyses cover the WHOLE race window: a frame within an hour of each end and
+    no gap longer than ANALYSIS_MAX_GAP_S? A count alone isn't enough (Codex on #412): frames all
+    in the first half would leave the field holding its last one for the rest of the race."""
+    if not wf.loaded:
+        return False
+    ts = sorted(f.valid_time for frames in (getattr(wf, "series", None) or {}).values()
+                for f in frames or [] if getattr(f, "valid_time", None) is not None)
+    if not ts or ts[0] > start + 3600 or ts[-1] < t_end - 3600:
+        return False
+    return all(b - a <= ANALYSIS_MAX_GAP_S for a, b in zip(ts, ts[1:]))
 
 
 def wind_basis_for(start_epoch, now=None):
@@ -135,7 +144,7 @@ def _oracle_windfield(bbox, start, t_end, models, race_id, log):
         except Exception as e:                 # the forecasts below still serve the debrief
             log(f"hourly analyses failed ({type(e).__name__}) — using the forecasts")
             wf = None
-        if wf is not None and _enough_analyses(wf):
+        if wf is not None and _enough_analyses(wf, start, t_end):
             return wf, "analyses"
         log("not enough hourly analyses for this race — using the forecasts")
     if wind_basis_for(start) == "live":

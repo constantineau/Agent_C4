@@ -83,7 +83,20 @@ def test_no_wind_refuses():
     class Calm(WF):
         def wind_at(self, *a):
             return None
+
+        def detail_at(self, *a):
+            return None
     assert RT.sail_path(north(4), Calm(), P, T0) is None
+
+
+def test_held_wind_past_the_field_counts_missing():
+    class Ends(WF):                       # real wind for the first 20 min only, then held
+        def detail_at(self, lat, lon, t):
+            d = super().detail_at(lat, lon, t)
+            return {**d, "held": True} if t > T0 + 1200 else d
+    assert RT.sail_path(north(8), Ends(), P, T0) is None      # mostly stale: refused
+    short = RT.sail_path(north(8), WF(), P, T0)
+    assert short["missing"] == 0
 
 
 def test_calibration_cancels_the_re_timer():
@@ -212,11 +225,11 @@ def test_stub_field_is_safe():
 
 # ---- 4) analyses first for a race that is over --------------------------------------------------
 class Loaded(WF):
-    def __init__(self, frames, expected):
+    def __init__(self, hours):
         super().__init__()
-        self.meta = [{"model": "hrrr", "cycle": AR.ANALYSIS_CYCLE, "frames": frames,
-                      "expected_frames": expected}]
-        self.series = {("hrrr", "det"): [Frame(T0)]} if frames else {}
+        self.meta = [{"model": "hrrr", "cycle": AR.ANALYSIS_CYCLE, "frames": len(hours),
+                      "expected_frames": 32}]
+        self.series = {("hrrr", "det"): [Frame(T0 + h * 3600) for h in hours]} if hours else {}
 
     @property
     def loaded(self):
@@ -227,17 +240,29 @@ BBOX = (45.0, 43.5, -83.0, -81.0)
 
 
 def test_a_finished_race_uses_hourly_analyses(monkeypatch):
-    monkeypatch.setattr(AR, "analysis_field", lambda *a, **k: Loaded(30, 32))
+    monkeypatch.setattr(AR, "analysis_field", lambda *a, **k: Loaded(range(0, 31)))
     wf, kind = JD._oracle_windfield(BBOX, T0, T0 + 30 * 3600, None, "r", lambda *_: None)
     assert kind == "analyses"
 
 
 def test_too_few_analyses_fall_back_to_the_forecasts(monkeypatch):
     import app.wind as W
-    monkeypatch.setattr(AR, "analysis_field", lambda *a, **k: Loaded(3, 32))
+    monkeypatch.setattr(AR, "analysis_field", lambda *a, **k: Loaded([0, 1, 2]))
     monkeypatch.setattr(W, "build_windfield", lambda *a, **k: WF())
     wf, kind = JD._oracle_windfield(BBOX, T0, T0 + 30 * 3600, None, "r", lambda *_: None)
     assert kind == "archive"
+
+
+@pytest.mark.parametrize("hours", [
+    range(0, 17),                                   # over half the frames, all in the first half
+    [h for h in range(0, 31) if not 10 <= h <= 16],  # both ends, but a 7 h hole mid-race
+    range(3, 31),                                   # misses the start
+], ids=["first-half", "hole", "late-start"])
+def test_analyses_must_cover_the_whole_race(monkeypatch, hours):
+    import app.wind as W
+    monkeypatch.setattr(AR, "analysis_field", lambda *a, **k: Loaded(list(hours)))
+    monkeypatch.setattr(W, "build_windfield", lambda *a, **k: WF())
+    assert JD._oracle_windfield(BBOX, T0, T0 + 30 * 3600, None, "r", lambda *_: None)[1] == "archive"
 
 
 def test_analyses_off_by_switch(monkeypatch):

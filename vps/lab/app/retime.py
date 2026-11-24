@@ -48,11 +48,25 @@ def _along_speed(P, tws, twa):
     return OPT._polar_speed(P, tws, twa), twa
 
 
+def _forecast_wind(wf, lat, lon, t):
+    """(tws, twd) where the field really has wind for this time, else None. A field past its last
+    frame hands back the edge frame as `held` (Codex on #412): that is stale wind, so it counts
+    as missing here, not as a normal sample."""
+    detail = getattr(wf, "detail_at", None)
+    if detail is None:
+        return wf.wind_at(lat, lon, t)
+    d = detail(lat, lon, t)
+    if not d or d.get("held"):
+        return None
+    return (d["tws"], d["twd"])
+
+
 def sail_path(path, wf, P, start_epoch, helm_factor=1.0, cur=None, waves=None,
               wave_coeffs=None, tack_s=None):
     """Sail `path` ([{lat, lon}, ...], in order) from `start_epoch` on `wf` → {hours, missing}
     or None when the route can't be timed (too short, no polar, or too much of it has no wind).
-    `missing` is the share of the distance sailed on borrowed or held wind."""
+    `missing` is the share of the distance sailed on borrowed or held (past the field's frames)
+    wind; past MAX_MISSING the route isn't timed."""
     pts = [(p["lat"], p["lon"]) for p in (path or [])
            if p and p.get("lat") is not None and p.get("lon") is not None]
     if len(pts) < 2 or not P:
@@ -72,9 +86,10 @@ def sail_path(path, wf, P, start_epoch, helm_factor=1.0, cur=None, waves=None,
         for k in range(n):
             f = (k + 0.5) / n
             lat, lon = lat0 + (lat1 - lat0) * f, lon0 + (lon1 - lon0) * f
-            w = wf.wind_at(lat, lon, t)
+            w = _forecast_wind(wf, lat, lon, t)
             if not w:
-                w = OPT._nearby_wind(wf, lat, lon, t) or last_wind
+                # borrowed (nearby) or held (stale) wind still times the stretch, but counts missing
+                w = OPT._nearby_wind(wf, lat, lon, t) or wf.wind_at(lat, lon, t) or last_wind
                 missing += step
             if not w:
                 return None
