@@ -140,9 +140,16 @@ def edit(body, after_change=None):
         new_flat = _flat(new_def, cid)
         if len(new_flat) < 2:
             return {"ok": False, "note": "Course too short."}
-        # a skip (or its undo) leaves the course as it was; every other change is a new course
-        shape = lambda d: (d.get("courses"), d.get("zones"))   # noqa: E731
-        course_changed = shape(new_def) != shape(rec["definition"])
+        # every revision is a new course for the routes, a skip and its undo too: a route made
+        # through the skipped marks (or from before an undo) must never look current
+        course_changed = True
+        # the navigator change that goes with this edit (a skip, or the undo of one), decided now
+        # so it rides in the journal and a power cut can't separate it from the revision
+        nav_to, nav_note = None, None
+        if op == "skip_to" and target is not None:
+            nav_to = target
+        elif undone and undone.get("op") == "skip_to":
+            nav_to, nav_note = _unskip_target(undone)
         kept_run = True
         journal = False
         try:
@@ -160,13 +167,15 @@ def edit(body, after_change=None):
                 out["load_id"] = orinroute.new_load_id()
             # both records on disk first: a power cut in the steps below is put right on the next
             # read (orinroute.recover)
-            orinroute.begin_edit(route, rec, out)
+            orinroute.begin_edit(route, rec, out, nav_index=nav_to,
+                                 progress=NAV.progress_snapshot(route))
             journal = True
             if new_flat != old_flat:
                 kept_run = NAV.replace_marks(route, new_flat)
             if course_changed:
                 orinroute.set_load_id(route, out["load_id"])
             orinroute.write_record(out)
+            picked = NAV.pick_mark(nav_to, route) if nav_to is not None else None
             orinroute.end_edit()
         except Exception as exc:  # noqa: BLE001
             print(f"[course/edit] failed: {type(exc).__name__}: {exc}", flush=True)
@@ -190,24 +199,22 @@ def edit(body, after_change=None):
                 print(f"[course/edit] after change: {type(exc).__name__}: {exc}", flush=True)
         res = {"ok": True, "revision": courseedit.summary(revision),
                "note": f"Course rev {number} saved."}
-        if op == "skip_to" and target is not None:
-            picked = NAV.pick_mark(target, route)
+        if picked is not None:
             res["note"] = f"Course rev {number} saved. Next mark: {picked.get('next_mark')}." \
                 if picked.get("ok") else f"Course rev {number} saved. {picked.get('note') or ''}".strip()
-        elif undone and undone.get("op") == "skip_to":
-            res["note"] = f"Course rev {number} saved. " + _unskip(undone, route)
+        elif nav_note:
+            res["note"] = f"Course rev {number} saved. {nav_note}"
         elif not kept_run:
             res["note"] = f"Course rev {number} saved. Pick the next mark again."
         return res
 
 
-def _unskip(skip, route):
-    """Undo of a skip: the navigator back to the mark it was on before it, unless the boat has
-    moved on from the skipped-to mark since (then the next mark is left as it is, and said)."""
+def _unskip_target(skip):
+    """Undo of a skip → (navigator index to go back to, None) or (None, why not): back to the mark
+    it was on before the skip, unless the boat has moved on from the skipped-to mark since."""
     prev, to = skip.get("prev_index"), skip.get("to_index")
     if not isinstance(prev, int) or isinstance(prev, bool):
-        return NEXT_KEPT
+        return None, NEXT_KEPT
     if _nav_next() != to:
-        return MOVED_ON
-    picked = NAV.pick_mark(prev, route)
-    return f"Next mark: {picked.get('next_mark')}." if picked.get("ok") else NEXT_KEPT
+        return None, MOVED_ON
+    return prev, None

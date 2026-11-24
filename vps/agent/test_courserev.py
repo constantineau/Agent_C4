@@ -190,8 +190,8 @@ r = edit(op="undo")
 check("undo of the skip: the navigator back where it was before it (the start)",
       r["ok"] and r["note"] == "Course rev 6 saved. Next mark: Start."
       and NAV.get_navigator()["next_mark"]["index"] == 0)
-check("…and the course itself didn't change (routes stay current)",
-      orinroute.current_course_hash() == hash_before)
+check("…and a route made after the skip is old now (it started at the skipped-to mark)",
+      orinroute.current_course_hash() != hash_before)
 edit(op="undo")
 v = rev()
 check("every edit undone: the Lab's course again, still a boat revision (7)", v["edits"] == []
@@ -257,6 +257,35 @@ v = rev()
 check("cut before anything changed: back to the course before the edit, still pairing",
       v.get("available") and v["revision"]["number"] == n0 + 1
       and v["marks"][0]["rounding"] == "port" and not os.path.exists(JOURNAL))
+
+edit(op="undo")                                    # the shortened finish off again
+cut_at("write_record")                             # a skip cut before the navigator moved
+try:
+    edit(op="skip_to", pos=2, name="Windward")
+except PowerCut:
+    pass
+check("(the cut left the navigator where it was)", NAV.get_navigator()["next_mark"]["index"] != 3)
+v = rev()
+check("next read: the skip's revision and its next mark, together",
+      v["edits"][-1]["op"] == "skip_to" and NAV.get_navigator()["next_mark"]["index"] == 3
+      and not os.path.exists(JOURNAL))
+edit(op="undo")
+edit(op="undo")
+NAV.pick_mark(2)
+try:
+    _sp = NAV._save_progress
+
+    def _cut_once(*a, **k):
+        NAV._save_progress = _sp
+        raise PowerCut()
+    NAV._save_progress = _cut_once
+    edit(op="finish_at", pos=2, name="Windward")
+except PowerCut:
+    pass
+check("(the cut came between the marks and the run)", names()[-1] == "Finish" and len(names()) == 4)
+v = rev()
+check("next read: the run is put back on the mark it was on", v["shortened"]
+      and NAV.get_navigator()["next_mark"]["index"] == 2 and not os.path.exists(JOURNAL))
 
 print("the revision number can't be written:")
 _nr = orinroute.next_revision

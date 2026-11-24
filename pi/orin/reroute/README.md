@@ -250,11 +250,13 @@ course; a gate becomes a finish line), **Port** / **Stbd** (the rounding side, i
   lap 2's Windward is never lap 1's, and a stale edit is refused.
 - **The navigator.** Skip moves the next mark. A shortened course rewrites the navigator's marks
   (the finish moves) and keeps the run on the mark it was on. A finish behind the boat is refused.
-  Every change but Skip counts as a new course: older routes show as "for an old course".
+  Every change, Skip and its undo included, counts as a new course: older routes show as "for an
+  old course" (a route made through skipped marks must never look current).
   Undo of a Skip puts the next mark back where it was, unless the boat has moved on from the
   skipped-to mark ("Boat has moved on. Next mark not changed.").
 - **Power cuts.** An edit writes three stores in turn (navigator marks, load id, course record).
-  Both records go to a journal on disk first; the next read finishes the edit (the marks aboard
+  Both records, the run before the edit and the next mark the edit sets (a Skip or its undo) go
+  to a journal on disk first; the next read finishes the edit (the marks aboard
   are already the new ones) or puts the old course back, so the course record always pairs with
   the marks and the re-route never loses the zones and sides. Files are fsynced before rename.
 - **The request** carries `revision` (`{number, at, origin, base}`) and, when there are edits,

@@ -402,6 +402,41 @@ def pick_mark(index, route=None):
     return _set_progress(route, change)
 
 
+def progress_snapshot(route):
+    """The run as it stands ({i, hist, hold, run}) for a course edit's journal (#406), or None."""
+    ds = _store()
+    if ds is None:
+        return None
+    try:
+        with _PROGRESS_LOCK:
+            rec = _load_progress(ds, route, _marks(route) or [])
+    except Exception:  # noqa: BLE001
+        return None
+    return {k: rec.get(k) for k in ("i", "hist", "hold", "run")}
+
+
+def restore_progress(route, snap):
+    """After a power cut during a course edit (#406): put the run back when the stored one no
+    longer belongs to the marks aboard (the cut came between writing the marks and the run).
+    A run that does belong to them is left alone. Returns True when it put one back."""
+    ds = _store()
+    if ds is None or not isinstance(snap, dict):
+        return False
+    with _PROGRESS_LOCK:
+        marks = _marks(route) or []
+        if not marks or (ds.get_nav_progress(route) or {}).get("fp") == _course_fp(marks):
+            return False
+        try:
+            clamp = lambda v: max(0, min(int(v), len(marks) - 1))          # noqa: E731
+            rec = {"fp": _course_fp(marks), "i": clamp(snap.get("i") or 0), "run": snap.get("run"),
+                   "hist": [clamp(v) for v in snap.get("hist") or []][-HIST_MAX:],
+                   "hold": None if snap.get("hold") is None else clamp(snap["hold"])}
+        except (TypeError, ValueError):
+            return False
+        _pending.pop(route, None)
+        return _save_progress(ds, route, rec)
+
+
 def replace_marks(route, marks):
     """A course edit aboard that changes the marks (a shortened course, #406): write the new
     [(seq, name, lat, lon)] marks and keep the run where it is (the next mark, Undo, a hold),

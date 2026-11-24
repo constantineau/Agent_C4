@@ -322,12 +322,15 @@ def _journal_path():
     return os.path.join(_dir(), "course-edit-journal.json")
 
 
-def begin_edit(route, old_rec, new_rec):
+def begin_edit(route, old_rec, new_rec, nav_index=None, progress=None):
     """A course edit aboard (#406) changes three stores one after the other: the navigator's marks,
     the load id, the course record. Before the first, both records go to a journal (on disk), so a
-    power cut part way is put right on the next read (`recover`). Caller holds COURSE_LOCK."""
+    power cut part way is put right on the next read (`recover`). With them: the navigator's run
+    before the edit (`progress`, put back if the cut lost it between the marks and the run) and
+    the next mark the edit sets (`nav_index`: a skip, or its undo). Caller holds COURSE_LOCK."""
     with _LOCK:
-        _write(_journal_path(), json.dumps({"route": route, "old": old_rec, "new": new_rec},
+        _write(_journal_path(), json.dumps({"route": route, "old": old_rec, "new": new_rec,
+                                            "nav_index": nav_index, "progress": progress},
                                            separators=(",", ":")))
 
 
@@ -366,6 +369,11 @@ def recover():
                 return False
             set_load_id(route, keep.get("load_id"))
             write_record(keep)
+            # the run, if the cut came between the marks and the run; then the edit's next mark
+            NAV.restore_progress(route, j.get("progress"))
+            nav = j.get("nav_index")
+            if keep is new and isinstance(nav, int) and not isinstance(nav, bool):
+                NAV.pick_mark(nav, route)
             end_edit()
             print(f"[course/edit] recovered after a cut: kept the {'new' if keep is new else 'old'}"
                   " course", flush=True)
