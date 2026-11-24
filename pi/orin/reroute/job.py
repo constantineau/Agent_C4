@@ -596,7 +596,12 @@ def safety_checks(safety, chart_note, has_course):
     `checks` (an optimizer from before #405) counts as every check not run. Reporting only: a
     re-route is never refused for these (degrading is right at sea); the iPad says which didn't run."""
     own = (safety or {}).get("checks") if isinstance(safety, dict) else None
-    if isinstance(own, list) and not chart_note:
+    # the chart covers the route only if the optimizer's own coverage check passed too: a route
+    # that wanders off the mask's box has no land checked out there
+    covered = isinstance(own, list) and any(
+        isinstance(c, dict) and c.get("id") == "chart" and c.get("state") == routesafety.CHECKED
+        for c in own)
+    if isinstance(own, list) and not chart_note and covered:
         own = [dict(c, state=routesafety.CHECKED, texts=[]) if c.get("id") == "land" else c
                for c in own if isinstance(c, dict)]
     if isinstance(own, list):

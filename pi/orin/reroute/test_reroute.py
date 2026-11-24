@@ -321,6 +321,11 @@ pc = {c["id"]: c["state"] for c in job.safety_checks(
     {"checks": job.routesafety.route_checks([], [], True)[:3]}, None, True)}
 check("#405 a check the optimizer left out: not checked, not passed by the boat's list",
       pc["marks"] == "not_checked" and pc["chart"] == "not_checked" and pc["land"] == "checked")
+off = job.routesafety.route_checks([{"code": "land", "text": "Land not checked."},
+                                    {"code": "box", "text": "Route leaves the chart area."}], [], True)
+oc = {c["id"]: c["state"] for c in job.safety_checks({"checks": off}, None, True)}
+check("#405 chart aboard, but the route leaves its box: land not checked, coverage failed",
+      oc["land"] == "not_checked" and oc["chart"] == "failed")
 check("#405 an optimizer with no checks: nothing reads as checked",
       {c["state"] for c in job.safety_checks({"ok": True, "problems": []}, None, True)}
       == {"not_checked"})

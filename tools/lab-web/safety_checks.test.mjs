@@ -52,3 +52,9 @@ test("an unknown state counts as not checked", () => {
   const c = ck("checked", "checked"); c[1].state = "maybe";
   assert.match(html(c), /Depth: not checked/);
 });
+
+test("a partial list, all green, is not 'all checked'", () => {
+  const h = html(ck("checked", "checked").slice(0, 1));
+  assert.match(h, /data-checks="some"/);
+  assert.match(h, /Not every check ran\./);
+});
