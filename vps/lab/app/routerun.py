@@ -80,7 +80,7 @@ def run_course(definition, course_id, start_epoch, models, *, ensemble_members=0
                on_progress=None, boat=None, chart_source=None, model_skill=True,
                obstacles=None, time_budget_s=None, fallback_tries=None, bbox=None, t_end=None,
                briefing=True, grids=True, on_phase=None, leg_obstacles=None, boat_polar=None,
-               offline=False):
+               offline=False, criticality=False):
     """Blocking: build the multi-model wind field, route the course, write the briefing.
 
     `models` are model names or ModelSource instances (the Orin passes cache-first wrappers).
@@ -91,7 +91,8 @@ def run_course(definition, course_id, start_epoch, models, *, ensemble_members=0
     Orin's progress). Lab defaults reproduce the Lab route exactly. `boat_polar` = the boat's
     polar block when the caller holds it (the Orin's, from Deploy); else the profile's own. A boat
     with no polar is refused before any download. `offline` = no internet (the Orin at sea): the
-    current and waves asked for are not fetched, and the result says so."""
+    current and waves asked for are not fetched, and the result says so. `criticality` adds the
+    per-leg time-loss grid (#379, opt-in: slower)."""
     from .wind import build_windfield
     from . import current, wave
     from shared.boat_polar import NO_POLAR
@@ -138,7 +139,7 @@ def run_course(definition, course_id, start_epoch, models, *, ensemble_members=0
                                        leg_obstacles=leg_obstacles,
                                        time_budget_s=time_budget_s, per_model=per_model,
                                        resolution=resolution, cur=cur, waves=waves,
-                                       **binputs)
+                                       criticality=criticality, **binputs)
     result["current"] = cur.status()
     result["waves"] = waves.status()
     result["model_skill"] = skill                # venue model-skill weights + scorecard (UI panel)

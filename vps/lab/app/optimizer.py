@@ -1416,7 +1416,7 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
                     resolution="auto", cur=None, waves=None, helm_factor=1.0,
                     polar_adjustments=None, wave_coeffs=None, polar=None,
                     from_mark=0, exclude_sails=None, maneuver_prune_mult=1.0, sail_config=None,
-                    leg_obstacles=None, boat_polar=None, tack_cost_s=None):
+                    leg_obstacles=None, boat_polar=None, tack_cost_s=None, criticality=False):
     """`_optimize_course` (below) on the boat's own tack cost when `tack_cost_s` is given (#305)."""
     with boat_tack_cost(tack_cost_s):
         return _optimize_course(
@@ -1427,7 +1427,8 @@ def optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=
             helm_factor=helm_factor, polar_adjustments=polar_adjustments,
             wave_coeffs=wave_coeffs, polar=polar, from_mark=from_mark,
             exclude_sails=exclude_sails, maneuver_prune_mult=maneuver_prune_mult,
-            sail_config=sail_config, leg_obstacles=leg_obstacles, boat_polar=boat_polar)
+            sail_config=sail_config, leg_obstacles=leg_obstacles, boat_polar=boat_polar,
+            criticality=criticality)
 
 
 def _optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s=None,
@@ -1436,7 +1437,7 @@ def _optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s
                     resolution="auto", cur=None, waves=None, helm_factor=1.0,
                     polar_adjustments=None, wave_coeffs=None, polar=None,
                     from_mark=0, exclude_sails=None, maneuver_prune_mult=1.0, sail_config=None,
-                    leg_obstacles=None, boat_polar=None):
+                    leg_obstacles=None, boat_polar=None, criticality=False):
     """Route the whole course from its start through every mark to the finish via `wf`.
 
     The polar is the BOAT's (#303): `boat_polar` is its polar block (`boats.polar_for(boat)`:
@@ -1451,7 +1452,8 @@ def _optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s
     `avoid` is set, one is built from the course bbox + this race's zones + island marks. `source`
     (Natural Earth vs NOAA ENC) and `safety_depth` (the active boat draft + margin) flow into it.
     `leg_obstacles` (optional) is one ObstacleField per routed leg, used in place of `obstacles` for
-    that leg. With neither given and `avoid` set, both are built here (`geo.build_leg_fields`): land,
+    that leg. `criticality` (opt-in, #379) adds the per-leg time-loss grid (`criticality.py`).
+    With neither given and `avoid` set, both are built here (`geo.build_leg_fields`): land,
     zones and island disks on every leg, an island's rounding barrier only on the leg that rounds it
     (#141), so a course passing the same island twice, once each way, doesn't wall itself off."""
     marks, skipped, cid = race_def.course_to_marks(definition, course_id)
@@ -1548,6 +1550,7 @@ def _optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s
     incomplete = None         # #31: set when a leg never reaches its mark — the course stops there
     leg_end_idx = []          # full_path index where each REACHED leg ends — the mark vertices,
                               # known at construction (gpsout/synthesis keep them; no proximity guess)
+    crit_legs = []            # #379: each routed leg as the router saw it, for the time-loss grid
     for mi, (seq, name, dlat, dlon) in enumerate(marks[1:], 1):
         # #3 rounding side: route to a small standoff on the legal side of a port/starboard mark (the
         # real mark is still displayed + recorded). Gates pass between, finish/none unchanged.
@@ -1576,6 +1579,9 @@ def _optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s
                         waves=waves, helm_factor=helm_factor, wave_coeffs=wave_coeffs,
                         wave_uniform_hs=wave_uniform_hs, maneuver_prune_mult=maneuver_prune_mult,
                         sail_config=sail_config, xo=xo)
+        if criticality and leg.get("reached", True):     # #379: up to the mark approach (no rounding)
+            crit_legs.append({"to": name, "slat": slat, "slon": slon, "t0": t, "dlat": rlat,
+                              "dlon": rlon, "eta": leg["eta"], "obstacles": leg_obs})
         # #52: round the mark the legal way and leave from the EXIT standoff, not the inbound one
         nxt = marks[mi + 1] if mi + 1 < len(marks) else None
         corner = (_rounding_corner(slat, slon, dlat, dlon, nxt[2], nxt[3], side)
@@ -1732,6 +1738,11 @@ def _optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s
     data["notes"] = data.get("notes", []) + wind_notes(wf)    # #309: "HRRR: not here (US only)."
     if data.get("warning"):            # tidal water routed with no current: first, not buried
         warnings.insert(0, data["warning"])
+    crit = None
+    if criticality and not land_failed:        # no land check: no band either
+        from . import criticality as CRIT
+        crit = CRIT.course_bands(wf, P, crit_legs, cur=cur, waves=waves, helm_factor=helm_factor,
+                                 wave_coeffs=wave_coeffs, wave_uniform_hs=wave_uniform_hs)
     return {
         "available": True, "course_id": cid,
         "safety": safety,                  # #242: can this route be frozen, deployed, sent as GPX?
@@ -1768,6 +1779,8 @@ def _optimize_course(definition: dict, course_id, start_epoch, wf, time_budget_s
                           **({"land": "failed"} if land_failed else {})),
         "obstacle_steps_avoided": sum(l.get("blocked_steps", 0) for l in legs),
         "timed_out": timed_out,
+        # #379: time lost off the best route, per leg — only when asked for (opt-in, slower)
+        **({"criticality": crit} if criticality else {}),
     }
 
 

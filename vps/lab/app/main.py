@@ -424,7 +424,7 @@ def _active_wave():
 
 def _run_optimize(definition, course_id, start_epoch, model_names, ensemble_members, avoid=True,
                   per_model=False, resolution="auto", use_waves=True, use_current=True,
-                  on_progress=None):
+                  on_progress=None, criticality=False):
     """Blocking: build the multi-model wind field, route the course, write the briefing.
     `on_progress(msg)` (optional) mirrors the log lines out live — the background-job status
     endpoint serves them so the UI can show which weather source it's waiting on. The run itself
@@ -435,7 +435,7 @@ def _run_optimize(definition, course_id, start_epoch, model_names, ensemble_memb
                                ensemble_members=ensemble_members, avoid=avoid, per_model=per_model,
                                resolution=resolution, use_waves=use_waves, use_current=use_current,
                                on_progress=on_progress, boat=boats.active_boat(),
-                               chart_source=chart_source())
+                               chart_source=chart_source(), criticality=criticality)
 
 
 @app.post("/api/optimize")
@@ -463,11 +463,13 @@ async def optimize(body: dict):
     resolution = body.get("resolution") or "auto"
     use_waves = body.get("use_waves", True)
     use_current = body.get("use_current", True)
+    criticality = bool(body.get("criticality"))          # #379: time-loss band (opt-in, slower)
     from . import jobs
 
     def _work(progress):
         r = _run_optimize(d, course_id, start_epoch, model_names, ens, avoid, per_model,
-                          resolution, use_waves, use_current, on_progress=progress)
+                          resolution, use_waves, use_current, on_progress=progress,
+                          criticality=criticality)
         if isinstance(r, dict):
             r["start"] = start                   # which start it routed from, and why (UI says it)
         return r
