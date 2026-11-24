@@ -80,7 +80,8 @@ def run_course(definition, course_id, start_epoch, models, *, ensemble_members=0
                on_progress=None, boat=None, chart_source=None, model_skill=True,
                obstacles=None, time_budget_s=None, fallback_tries=None, bbox=None, t_end=None,
                briefing=True, grids=True, on_phase=None, leg_obstacles=None, boat_polar=None,
-               offline=False, corrections=None, criticality=False):
+               offline=False, corrections=None, criticality=False, windfield=None, currents=None,
+               seastate=None, speed_scale=1.0):
     """Blocking: build the multi-model wind field, route the course, write the briefing.
 
     `models` are model names or ModelSource instances (the Orin passes cache-first wrappers).
@@ -94,11 +95,15 @@ def run_course(definition, course_id, start_epoch, models, *, ensemble_members=0
     current and waves asked for are not fetched, and the result says so. `corrections` = manual
     per-model rotate/scale/time-shift (+ fade), applied in the wind field before the blend
     (#384); the result's `corrections` says which were used, in words. `criticality` adds the
-    per-leg time-loss grid (#379, opt-in: slower)."""
+    per-leg time-loss grid (#379, opt-in: slower). `windfield` / `currents` / `seastate` = fields
+    the caller already built (the Study batch, #378, loads them once for many runs): no download,
+    no model-skill pass, and any corrections are the field's own. `speed_scale` multiplies the
+    boat's speed (the Study's "Boat 95%")."""
     from .wind import build_windfield
-    from . import current, wave
     from shared.boat_polar import NO_POLAR
     binputs = boat_inputs(boat, boat_polar)
+    if speed_scale != 1.0:
+        binputs["helm_factor"] = binputs["helm_factor"] * float(speed_scale)
     if not binputs["boat_polar"]:
         return {"available": False, "note": NO_POLAR}
     bbox = bbox or optimizer.course_bbox(definition, course_id)
@@ -112,34 +117,23 @@ def run_course(definition, course_id, start_epoch, models, *, ensemble_members=0
     # venue-specific model-skill weighting: weight each model by its measured past accuracy here,
     # de-bias its persistent offset. Best-effort — any failure falls back to the static-priority blend.
     skill, mweights, mbias = (venue_skill(definition, course_id, bbox, start_epoch, models, log.append)
-                              if model_skill else ({"enabled": False}, None, None))
+                              if model_skill and windfield is None else ({"enabled": False}, None, None))
     extra = {"corrections": corrections} if corrections else {}   # #384 (only when asked)
-    wf = build_windfield(bbox, start_epoch, t_end, models=models,
-                         ensemble_members=ensemble_members, on_progress=log.append,
-                         model_weights=mweights, model_bias=mbias, fallback_tries=fallback_tries,
-                         **extra)
+    wf = windfield if windfield is not None else build_windfield(
+        bbox, start_epoch, t_end, models=models,
+        ensemble_members=ensemble_members, on_progress=log.append,
+        model_weights=mweights, model_bias=mbias, fallback_tries=fallback_tries, **extra)
     if getattr(wf, "corrections", None):
         for line in corr_text(wf):
             log.append("correction: " + line)
     if not wf.loaded:
         return {"available": False, "note": "No forecast could be loaded (not out yet, or no "
                 "internet).", "windfield": wf.status(), "log": log}
-    # water current: opt-out per run (compare with vs without) — the source that covers the area
-    # (seasource.pick), ZeroCurrent(why) on any miss
-    from . import seasource
-    if not use_current:
-        cur = current.ZeroCurrent(seasource.OFF)
-    elif offline:
-        cur = current.ZeroCurrent(seasource.OFFLINE)
+    if currents is not None and seastate is not None:
+        cur, waves = currents, seastate
     else:
-        cur = current.build_currentfield(bbox, start_epoch, t_end, on_progress=log.append)
-    # sea state — opt-out per run; helm factor still applies (it's crew efficiency, not waves)
-    if not use_waves:
-        waves = wave.ZeroWave(seasource.OFF)
-    elif offline:
-        waves = wave.ZeroWave(seasource.OFFLINE)
-    else:
-        waves = wave.build_wavefield(bbox, start_epoch, t_end, on_progress=log.append)
+        cur, waves = sea_fields(bbox, start_epoch, t_end, use_current=use_current,
+                                use_waves=use_waves, offline=offline, say=log.append)
     phase("routing")
     result = optimizer.optimize_course(definition, course_id, start_epoch, wf, avoid=avoid,
                                        source=chart_source, obstacles=obstacles,
@@ -170,6 +164,27 @@ def run_course(definition, course_id, start_epoch, models, *, ensemble_members=0
                 result["wave_grid"] = sg
     result["log"] = log
     return result
+
+
+def sea_fields(bbox, t_start, t_end, *, use_current=True, use_waves=True, offline=False, say=None):
+    """→ (current field, wave field) for the route window. Water current and sea state are each
+    opt-out per run (compare with vs without); `offline` (the Orin at sea) fetches neither. The
+    current comes from the source that covers the area (seasource.pick); a miss or an opt-out is a
+    Zero field that says why. The helm factor still applies without waves (it's crew efficiency)."""
+    from . import current, seasource, wave
+    if not use_current:
+        cur = current.ZeroCurrent(seasource.OFF)
+    elif offline:
+        cur = current.ZeroCurrent(seasource.OFFLINE)
+    else:
+        cur = current.build_currentfield(bbox, t_start, t_end, on_progress=say)
+    if not use_waves:
+        waves = wave.ZeroWave(seasource.OFF)
+    elif offline:
+        waves = wave.ZeroWave(seasource.OFFLINE)
+    else:
+        waves = wave.build_wavefield(bbox, t_start, t_end, on_progress=say)
+    return cur, waves
 
 
 def corr_text(wf):

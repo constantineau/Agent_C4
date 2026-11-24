@@ -1628,7 +1628,7 @@ async function renderGameplan() {
             <select id="optRace" onchange="optPickRace(this.value)">
               ${Opt.races.map((r) => `<option value="${esc(r.race_id)}" ${r.race_id === Opt.raceId ? "selected" : ""}>${esc(r.name)}</option>`).join("")}
             </select></label>
-          <label>Course <select id="optCourse" onchange="Opt.courseId=this.value">${optCourseOpts()}</select></label>
+          <label>Course <select id="optCourse" onchange="Opt.courseId=this.value; if (typeof Study !== 'undefined') Study.mount('studyCard')">${optCourseOpts()}</select></label>
           <label>Start (<span id="optStartTz">${esc(optStartZone())}</span>) <input type="datetime-local" id="optStart"
             value="${esc(Opt.start || "")}" oninput="optStartInput(this.value)"></label>
           <span id="optStartNote" class="opt-start-note">${esc(optStartNote())}</span>
@@ -1667,6 +1667,7 @@ async function renderGameplan() {
         ${qhelp("Downloads forecasts from NOAA and ECMWF and sails them on the boat's own polar. Later runs reuse the download. Prep only: nothing changes after the start (rule 41).")}</div>
     </div>
     <div id="optOut"></div>
+    <div id="studyCard"></div>
     <div class="card">
       <h3>Playbook <span class="muted" style="font-weight:400">— which side, and when to switch</span></h3>
       <div class="muted" style="font-size:12px;margin-bottom:8px">Routes many forecasts. Says which side to start and what would change it.
@@ -1684,6 +1685,7 @@ async function renderGameplan() {
   updateEnsembleControl();
   updateResHint();
   if (Opt.result) showResult(renderOptResult, Opt.result, "optOut");
+  if (typeof Study !== "undefined") Study.mount("studyCard");      // #378 study batch
   if (Pb.result) showResult(renderPbResult, Pb.result, "pbOut");
 }
 
@@ -1739,6 +1741,7 @@ function updateResHint() {
   const sel = document.getElementById("optRes"), hint = document.getElementById("optResHint");
   if (!sel || !hint) return;
   hint.textContent = RES_HINTS[sel.value] || "";
+  if (typeof Study !== "undefined") Study.repaint();   // #378 time estimate follows Detail
 }
 
 function updateEnsembleControl() {
@@ -1762,6 +1765,7 @@ function updateEnsembleControl() {
       ? `${n} extra forecast${n > 1 ? "s" : ""} to download. 10–20 is plenty.`
       : "";
   }
+  if (typeof Study !== "undefined") Study.repaint();   // #378 run count follows models + ensemble
 }
 
 /* Boat profile ([B]): active boat + editable draft + chart source. Draft sets the ENC depth no-go,

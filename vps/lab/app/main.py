@@ -488,6 +488,42 @@ async def optimize_status(job_id: str = ""):
     return jobs.status("optimize", job_id=job_id)
 
 
+@app.post("/api/study")
+async def study_start(body: dict):
+    """#378: the Gameplan's Study batch — the same course routed many times, one thing changed at a
+    time (study.py). Runs in the optimize job slot (one at a time with Find route); poll
+    `/api/optimize/status` with the job_id. Same course/start/model settings as /api/optimize,
+    plus `axes` and `cap`."""
+    from . import jobs, study
+    from .wind.models import DEFAULT_MODELS, MODELS
+    body = body or {}
+    d = store.get_race(body.get("race_id")) if body.get("race_id") else None
+    if not d:
+        return JSONResponse({"detail": "unknown race_id"}, status_code=404)
+    start = racestart.resolve(d, body.get("start_epoch"))
+    names = [m for m in (body.get("models") or []) if m in MODELS] or list(DEFAULT_MODELS)
+    axes = study.parse_axes(body.get("axes"))
+    try:
+        ens = int(body.get("ensemble_members") or 0)
+    except (TypeError, ValueError):
+        ens = 0
+    from .wind import corrections as wind_corr
+    kw = {"cap": body.get("cap") or study.DEFAULT_CAP, "ensemble_members": ens,
+          "corrections": wind_corr.normalize(body.get("corrections")),      # #384, as Optimize
+          "avoid": body.get("avoid_land", True), "resolution": body.get("resolution") or "auto",
+          "use_waves": body.get("use_waves", True), "use_current": body.get("use_current", True)}
+
+    def _work(progress):
+        r = study.run(d, body.get("course_id"), start["epoch"], names, axes,
+                      boat=boats.active_boat(), chart_source=chart_source(),
+                      on_progress=progress, **kw)
+        r["start"] = start
+        r["race_id"] = d.get("race_id")
+        return r
+
+    return jobs.start("optimize", _work, meta={"race_id": d.get("race_id"), "kind": "study"})
+
+
 @app.post("/api/gameplan/pdf")
 async def gameplan_pdf(body: dict):
     """Render the current gameplan (the client's optimize result + optional synthesized playbook) into

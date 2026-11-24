@@ -275,7 +275,7 @@ const MapView = (function () {
       ctx.lineWidth = 2; ctx.globalAlpha = 0.55;
       for (const cp of R.candidate_paths) {
         if (!cp.path || cp.path.length < 2) continue;
-        ctx.strokeStyle = modelColor(cp.model);
+        ctx.strokeStyle = cp.color || modelColor(cp.model);           // a study run brings its own (#378)
         ctx.beginPath();
         for (let i = 0; i < cp.path.length; i++) {
           const pt = project(cp.path[i][0], cp.path[i][1]);
@@ -439,7 +439,7 @@ const MapView = (function () {
     const hasWaves = R && R.wave_grid && (R.wave_grid.frames || []).length;
     const layers = `<div class="cc-grp cc-layers"><span class="cc-lbl">Layers</span>
         ${chk("wind", "Wind")}${hasCurrent ? chk("current", "Current") : ""}${hasWaves ? chk("waves", "Waves") : ""}${chk("shoals", "Shoals")}${chk("rocks", "Rocks")}${chk("land", "Chart land")}${chk("sea", "Seamarks")}${chk("scrim", "Dim chart")}` +
-        (hasModels ? chk("models", "Model routes") : "") +
+        (hasModels ? chk("models", R.fan_label || "Model routes") : "") +
         (hasIso ? chk("iso", "Isochrones") : "") + (hasLay ? chk("laylines", "Laylines") : "") +
         (hasCrit ? chk("crit", "Time lost") : "") +
         ((ST || []).length ? chk("stations", "Stations") : "") +
@@ -447,8 +447,8 @@ const MapView = (function () {
 
     const stops = [[3, "<6"], [9, "6–12"], [15, "12–18"], [21, "18–24"], [27, "24+"]];
     const sw = stops.map(([v, lbl]) => `<span class="mv-sw"><i style="background:${twsColor(v)}"></i>${lbl}</span>`).join("");
-    const modelLeg = hasModels ? `<span class="cc-sep"></span><span class="cc-lbl">Model routes</span>` +
-        R.candidate_paths.map((cp) => `<span class="mv-sw"><i style="background:${modelColor(cp.model)}"></i>${cp.model.toUpperCase()}` +
+    const modelLeg = hasModels ? `<span class="cc-sep"></span><span class="cc-lbl">${esc(R.fan_label || "Model routes")}</span>` +
+        R.candidate_paths.map((cp) => `<span class="mv-sw"><i style="background:${cp.color || modelColor(cp.model)}"></i>${esc(cp.label || cp.model.toUpperCase())}` +
           `${cp.total_hours != null ? " " + cp.total_hours + "h" : ""} <small>${cp.favored_side || ""}</small></span>`).join("") : "";
     const curLeg = hasCurrent ? `<span class="cc-sep"></span><span class="mv-sw"><i style="background:#1bb9c4"></i>current${R.current_grid.peak_drift_kn ? ` (peak ${R.current_grid.peak_drift_kn} kts)` : ""}</span>` : "";
     const hsStops = [[0.3, "<0.5"], [0.75, "0.5–1"], [1.25, "1–1.5"], [2, "1.5–2.5"], [3, "2.5+"]];
