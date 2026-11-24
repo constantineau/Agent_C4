@@ -25,7 +25,22 @@ function manKey(raceId, recording) { return (raceId == null ? "@norace" : raceId
 // behind it does (a GPX replaced, a track fetched or removed, a debrief re-run), so an answer is
 // never served for a track that has since changed (Codex on #396).
 function manTrackSig(t) {
-  return t && t.available ? [t.source, t.n, t.boat, t.matched_by, t.recording].join("~") : "none";
+  return t && t.available ? [t.source, t.n, t.boat, t.matched_by, t.recording, manFixHash(t.fixes)].join("~") : "none";
+}
+// A cheap content hash of the track's polyline ([[lat, lon], …] from /api/debrief/track), so a GPX
+// replaced by another with the same number of fixes still reads as a new track (Codex on #396).
+// Up to ~1000 evenly spaced points plus the last one.
+function manFixHash(fixes) {
+  if (!Array.isArray(fixes) || !fixes.length) return "0";
+  const step = Math.max(1, Math.floor(fixes.length / 1000));
+  let h = 5381;
+  const add = (p) => {
+    const str = Array.isArray(p) ? p.join(",") : String(p);
+    for (let k = 0; k < str.length; k++) h = ((h * 33) ^ str.charCodeAt(k)) >>> 0;
+  };
+  for (let i = 0; i < fixes.length; i += step) add(fixes[i]);
+  add(fixes[fixes.length - 1]);
+  return h.toString(36);
 }
 function manTarget(r, deb) {
   const t = (deb || {}).track;

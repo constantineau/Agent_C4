@@ -112,3 +112,19 @@ test("a replaced track or a new debrief asks again; a failure is not kept", asyn
   await new Promise((r) => setTimeout(r, 0));
   assert.equal(calls.length, 6);
 });
+
+test("a GPX replaced by another with the same fix count still asks again", async () => {
+  const { ctx, calls } = load();
+  ctx.answer = ANSWER;
+  const deb = { raceId: "r1", track: { available: true, source: "gpx", n: 3, fixes: [[26.1, -80.0], [26.2, -80.0], [26.3, -80.0]] } };
+  ctx.manCard(null, deb);
+  await new Promise((r) => setTimeout(r, 0));
+  deb.track = { ...deb.track, fixes: [[26.1, -80.0], [26.2, -80.0], [26.3, -80.0]] };   // same content, new object
+  ctx.manCard(null, deb);
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(calls.length, 1);
+  deb.track = { ...deb.track, fixes: [[44.1, -82.0], [44.2, -82.1], [44.3, -82.2]] };   // a different GPX, same n
+  ctx.manCard(null, deb);
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(calls.length, 2);
+});
