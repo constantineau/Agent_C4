@@ -49,11 +49,28 @@ def _members_for(source, ensemble_members):
 def _fhrs_for_cycle(source, cycle, t_start, t_end):
     """The forecast-hours of `source` from `cycle` that fall inside [t_start, t_end] (+pad), capped
     at the horizon this cycle actually reaches (per-cycle — HRRR's off-synoptic cycles stop at 18 h)."""
+    return _pick_fhrs(source, cycle, t_start, t_end)[0]
+
+
+def _pick_fhrs(source, cycle, t_start, t_end):
+    """→ (fhrs, capped_until). Over MAX_FRAMES_PER_MEMBER, the cap is spent on the window the
+    route needs: the pad goes first (one frame either side is kept to bracket the ends); if the
+    window alone is still too long, the first frames are kept and `capped_until` is the valid
+    time of the last one (the model drops out after it: the caller says so). Else None."""
     horizon = math.ceil((t_end - cycle.timestamp()) / 3600.0) + source.fhr_step
     horizon = min(max(horizon, source.fhr_step), source.horizon_for(cycle))
     fhrs = [f for f in source.fhrs(horizon)
             if t_start - _PAD <= source.valid_time(cycle, f) <= t_end + _PAD]
-    return fhrs[:MAX_FRAMES_PER_MEMBER]
+    if len(fhrs) <= MAX_FRAMES_PER_MEMBER:
+        return fhrs, None
+    inside = [f for f in fhrs if t_start <= source.valid_time(cycle, f) <= t_end]
+    if inside:                                     # #384: trim the pad, keep one bracket frame
+        i0, i1 = fhrs.index(inside[0]), fhrs.index(inside[-1])
+        fhrs = fhrs[max(0, i0 - 1):i1 + 2]
+    if len(fhrs) <= MAX_FRAMES_PER_MEMBER:
+        return fhrs, None
+    fhrs = fhrs[:MAX_FRAMES_PER_MEMBER]
+    return fhrs, source.valid_time(cycle, fhrs[-1])
 
 
 def _load_model(source, bbox, t_start, t_end, members, on_progress, parser=None, fallback_tries=None):
@@ -69,7 +86,7 @@ def _load_model(source, bbox, t_start, t_end, members, on_progress, parser=None,
     cycle = source.pick_cycle(min_horizon_h=need_h)
     series, loaded, expected, fallbacks = {}, 0, 0, 0
     for attempt in range(tries + 1):
-        fhrs = _fhrs_for_cycle(source, cycle, t_start, t_end)
+        fhrs, capped_until = _pick_fhrs(source, cycle, t_start, t_end)
         expected = len(fhrs) * max(1, len(members))
         series, loaded = {}, 0
         for member in members:
@@ -97,6 +114,13 @@ def _load_model(source, bbox, t_start, t_end, members, on_progress, parser=None,
     meta = {"model": source.name, "cycle": cycle.strftime("%Y-%m-%d %HZ"),
             "members": len(members), "frames": loaded, "expected_frames": expected,
             "cycle_fallbacks": fallbacks, "priority": source.priority, "kind": source.kind}
+    if capped_until is not None and capped_until < t_end:   # said, like an ended forecast
+        meta["capped_until"] = capped_until
+        meta["cap_note"] = (f"{str(source.name).upper()}: only {MAX_FRAMES_PER_MEMBER} forecast "
+                            f"hours loaded, so it stops at "
+                            f"{dt.datetime.fromtimestamp(capped_until, dt.timezone.utc):%d %b %H:%MZ}")
+        if on_progress:
+            on_progress(meta["cap_note"])
     if on_progress:
         tail = f" (after {fallbacks} cycle-fallback)" if fallbacks else ""
         on_progress(f"{source.name}: {loaded}/{expected} frames @ {cycle:%Y-%m-%d %HZ}{tail}")
@@ -112,9 +136,13 @@ def not_here_meta(source):
 
 def coverage_notes(meta):
     """Plain notes for the models a wind field left out as outside their area, e.g.
-    "HRRR: not here (US only)." Empty when every model asked for covers the race."""
-    return [m["note"] + "." for m in (meta or [])
-            if isinstance(m, dict) and m.get("skipped") == NOT_HERE and m.get("note")]
+    "HRRR: not here (US only).", and for a model the frame cap cut short before the route's end
+    (it drops out of the blend after that; past every model's end the route is marked held).
+    Empty when every model asked for covers the race."""
+    return ([m["note"] + "." for m in (meta or [])
+             if isinstance(m, dict) and m.get("skipped") == NOT_HERE and m.get("note")]
+            + [m["cap_note"] + "." for m in (meta or [])     # a model cut short by the frame cap
+               if isinstance(m, dict) and m.get("cap_note")])
 
 
 def build_windfield(bbox, t_start: float, t_end: float, models=DEFAULT_MODELS,

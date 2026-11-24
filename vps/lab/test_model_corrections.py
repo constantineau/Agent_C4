@@ -185,3 +185,61 @@ def test_a_fade_start_that_is_not_a_time_falls_back_to_the_route_start():
         c = C.normalize({"gfs": {"rotate_deg": 10, "fade_min": 30, "fade_from": bad}})["gfs"]
         assert c["fade_from"] is None
         assert C.describe({"gfs": c}) == ["GFS: 10° right, back to raw over 30 min from start"]
+
+
+class _HourlySource:
+    """A GRIB-like hourly source for the frame picker (no downloads: fetch finds nothing)."""
+    name, kind, priority, fhr_step = "gfs", "deterministic", 1.0, 1
+
+    def __init__(self, cycle):
+        self.cycle = cycle
+
+    def fhrs(self, horizon):
+        return list(range(0, horizon + 1))
+
+    def horizon_for(self, cycle):
+        return 384
+
+    def valid_time(self, cycle, f):
+        return cycle.timestamp() + f * 3600.0
+
+    def pick_cycle(self, now=None, min_horizon_h=0):
+        return self.cycle
+
+    def prev_cycle(self, cycle):
+        return cycle
+
+    def fetch(self, *a, **k):
+        return None
+
+
+def _cycle_before(t, hours):
+    import datetime as dt
+    return dt.datetime.fromtimestamp(t - hours * H, dt.timezone.utc)
+
+
+def test_the_frame_cap_is_spent_on_the_needed_window_first():
+    from app.wind import windfield as WF
+    src = _HourlySource(_cycle_before(T0, 12))
+    # 58 h route + a +3 h shift: 61 h needed. With the 3 h pads that was 67 frames → the last
+    # hours of the route were cut. Now the pad goes first and the whole window fits.
+    t0, t1 = T0 - 3 * H, T0 + 58 * H
+    fhrs, capped = WF._pick_fhrs(src, src.cycle, t0, t1)
+    assert capped is None and len(fhrs) <= WF.MAX_FRAMES_PER_MEMBER
+    assert src.valid_time(src.cycle, fhrs[0]) <= t0 and src.valid_time(src.cycle, fhrs[-1]) >= t1
+
+
+def test_a_window_too_long_for_the_cap_says_where_the_model_stops():
+    from app.wind import windfield as WF
+    src = _HourlySource(_cycle_before(T0, 12))
+    t0, t1 = T0 - 6 * H, T0 + 60 * H                     # 60 h route, +6 h shift: 67 h hourly
+    fhrs, capped = WF._pick_fhrs(src, src.cycle, t0, t1)
+    assert len(fhrs) == WF.MAX_FRAMES_PER_MEMBER and capped is not None and capped < t1
+    _series, meta = WF._load_model(src, BBOX, t0, t1, ["det"], None, fallback_tries=0)
+    assert meta["capped_until"] == capped
+    notes = WF.coverage_notes([meta])
+    assert len(notes) == 1 and notes[0].startswith("GFS: only 64 forecast hours loaded, so it stops at")
+    short_fhrs, short_cap = WF._pick_fhrs(src, src.cycle, T0, T0 + 24 * H)
+    assert short_cap is None                              # a normal race is untouched
+    _s, m2 = WF._load_model(src, BBOX, T0, T0 + 24 * H, ["det"], None, fallback_tries=0)
+    assert "cap_note" not in m2 and WF.coverage_notes([m2]) == []

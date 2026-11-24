@@ -18,7 +18,7 @@ function lab(raceId = "r1", chosen = ["gfs", "hrrr"]) {
     localStorage: { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, v) },
   };
   vm.createContext(ctx);
-  vm.runInContext(src + "\nthis.__f = { mcSet, mcFor, mcRequest, mcText, mcLines, mcResultNote, mcPlumeNote, mcClear };", ctx);
+  vm.runInContext(src + "\nthis.Mc = Mc;\nthis.__f = { mcClamp, mcClampNote, mcControlsInner, mcSet, mcFor, mcRequest, mcText, mcLines, mcResultNote, mcPlumeNote, mcClear };", ctx);
   return { ...ctx.__f, ctx };
 }
 
@@ -76,4 +76,23 @@ test("the route says it used a correction; the plume says its lines are raw", ()
   assert.equal(mcPlumeNote("r1"), "");
   mcSet("gfs", "rotate_deg", "10");
   assert.match(mcPlumeNote("r1"), /Raw forecasts, without your corrections \(GFS: 10° right\)/);
+});
+
+test("values past the server's limits are sent at the limit, said, and the inputs carry the limits", () => {
+  const { mcSet, mcRequest, mcClampNote, mcText, mcControlsInner, ctx } = lab();
+  mcSet("gfs", "rotate_deg", "120");
+  mcSet("gfs", "scale_pct", "400");
+  mcSet("gfs", "shift_h", "-30");
+  const r = mcRequest("r1", ["gfs"], "").gfs;
+  assert.equal(r.rotate_deg, 90);
+  assert.equal(r.scale_pct, 300);
+  assert.equal(r.shift_h, -24);
+  assert.equal(mcClampNote("rotate_deg", "120"), "Turn 120° is past the limit: 90° is used.");
+  assert.equal(mcClampNote("rotate_deg", "45"), "");
+  assert.equal(mcText("gfs", { rotate_deg: "120" }), "GFS: 90° right");
+  ctx.Mc.open = true;
+  const html = mcControlsInner();
+  assert.match(html, /min="-90" max="90"/);
+  assert.match(html, /min="25" max="300"/);
+  assert.match(html, /id="mcNote"/);
 });
