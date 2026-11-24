@@ -190,6 +190,16 @@ check("GFS alone says it was corrected, RRFS alone doesn't",
       and "correction" not in crow["model:rrfs"])
 check("the result names the corrections", rc["windfield"]["corrections"]["applied"])
 
+seen = []
+_rc = routerun.run_course
+routerun.run_course = lambda *a, **k: (seen.append((a[2], k["windfield"].t_start)), _rc(*a, **k))[1]
+study.run(COURSE, "x", T0, ["gfs", "rrfs"], study.parse_axes({"start_min": [-30]}), boat=BOAT,
+          avoid=False, resolution="fast", use_waves=False, use_current=False, model_skill=False,
+          corrections={"gfs": {"rotate_deg": 10, "fade_min": 30}})
+routerun.run_course = _rc
+check("an earlier start widens the fetch, not the fade: each run's fade starts at its own start",
+      BUILDS[-1][0] == T0 - 1800 and seen == [(T0, T0), (T0 - 1800, T0 - 1800)])
+
 print("ties and spread")
 fake = [{"id": "base", "ok": True, "finish_epoch": 1000 * 60, "minutes": 1000, "side": "left"},
         {"id": "a", "ok": True, "finish_epoch": 1004 * 60, "minutes": 1004, "side": "left"},

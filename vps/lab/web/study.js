@@ -18,7 +18,19 @@ const Study = (function () {
     ecmwf: "#ff7f0e", "ecmwf-ens": "#8c564b", icon: "#e377c2", gem: "#bcbd22" };
 
   const S = { models: true, members: false, start_min: "-30, 30", polar_pct: "95, 105",
-    tws_pct: "90, 110", twd_deg: "-10, 10", cap: 24, running: false, result: null, err: "" };
+    tws_pct: "90, 110", twd_deg: "-10, 10", cap: 24, running: false, result: null, err: "", key: null };
+
+  // a study belongs to the race + course it was run for: shown only while that's picked
+  function keyOf(raceId, courseId) { return String(raceId || "") + "|" + String(courseId || ""); }
+  function curKey() { return keyOf(Opt.raceId, Opt.courseId); }
+
+  // a study finished (r) or failed (err) for `key`. Kept only if that race + course is still
+  // picked; a completion for an old selection is dropped. → true when it was kept.
+  function settle(st, key, nowKey, r, err) {
+    if (key !== nowKey) return false;
+    st.key = key; st.result = err ? null : r; st.err = err || "";
+    return true;
+  }
 
   // "-30, 0, 30" → [-30, 30]: numbers inside the axis limits, the baseline value dropped (as the server)
   function parseList(text, key) {
@@ -153,6 +165,7 @@ const Study = (function () {
 
   function mount(id) {
     const el = document.getElementById(id); if (!el) return;
+    if (S.key !== curKey()) { S.result = null; S.err = ""; S.key = null; }   // another race/course picked
     el.innerHTML = `<div class="card st">
       <h3>Study <span class="muted" style="font-weight:400">— route it many ways</span></h3>
       <div class="muted" style="font-size:12px;margin-bottom:6px">Routes the course again with one thing changed each time. Uses the race, models and settings above.
@@ -199,7 +212,8 @@ const Study = (function () {
     if (se != null) body.start_epoch = se;
     const corr = typeof mcRequest === "function" ? mcRequest(Opt.raceId, Opt.chosen, optTz()) : null;
     if (corr) body.corrections = corr;                   // manual model corrections (#384), as Find route
-    S.running = true; S.err = ""; jobWebVersion(true);
+    const key = curKey();
+    S.running = true; S.err = ""; S.result = null; S.key = key; jobWebVersion(true);
     const b = document.getElementById("stRun"); if (b) { b.disabled = true; b.textContent = "Studying…"; }
     const prog = (t) => { const p = document.getElementById("stProg"); if (p) p.textContent = t; };
     prog("Getting the weather…");
@@ -216,17 +230,19 @@ const Study = (function () {
         if (st.state === "idle") throw new Error("The study stopped. Run it again.");
         if (st.progress && st.progress.length) prog(st.progress[st.progress.length - 1]);
       }
-      S.result = r;
-      if (r && r.available && r.baseline && r.baseline.available) Opt.result = asRoute(r);
+      // the map shows it only if the same race + course is still picked
+      if (settle(S, key, curKey(), r, "") && r && r.available && r.baseline && r.baseline.available) {
+        Opt.result = asRoute(r);
+      }
     } catch (e) {
-      S.err = "Study failed: " + String((e && e.message) || e);
+      settle(S, key, curKey(), null, "Study failed: " + String((e && e.message) || e));
     }
     S.running = false; jobWebVersion(false);
     renderGameplan();
   }
 
   return { set, mount, run, parseList, axesOf, runCount, estimateMin, colorOf, resultsHtml,
-    sidesText, sourceText, fmtDelta, asRoute, MAX_RUNS };
+    sidesText, sourceText, fmtDelta, asRoute, keyOf, settle, MAX_RUNS };
 })();
 
 if (typeof module !== "undefined" && module.exports) module.exports = Study;

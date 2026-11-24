@@ -29,7 +29,7 @@ check("estimate: weather once + runs", S.estimateMin(9, "fast") === Math.ceil((6
 
 console.log("table");
 const r = { available: true, finished: 3, spread_min: 31.6, sides: { right: 2, left: 1 },
-  tie_note: "Within about 5 min counts as a tie. Rough: the router's own noise isn't measured yet.",
+  tie_note: "Within about 5 min counts as a tie. Rough: the router can't yet tell close routes apart on some boats and shifty beats.",
   agreement_note: "Agreement, not accuracy: models can all be wrong together.",
   rows: [
     { id: "base", axis: "base", label: "Baseline", ok: true, finish_epoch: 1793560000, hours: 7.2, delta_min: 0, tie: true, side: "right" },
@@ -59,6 +59,20 @@ const route = S.asRoute({ race_id: "t", start: {}, rows: r.rows,
 check("each line coloured like its row", route.candidate_paths[0].color === S.colorOf(r.rows[1]) &&
   route.candidate_paths[1].color === S.colorOf(r.rows[2]));
 check("legend named for the study", route.fan_label === "Study runs" && route.race_id === "t");
+
+console.log("results belong to their race + course");
+const st = { result: null, err: "", key: null };
+const kA = S.keyOf("raceA", "c1"), kB = S.keyOf("raceB", "c1");
+check("a study for race A finishing after B is picked is dropped", S.settle(st, kA, kB, { available: true }, "") === false && st.result === null);
+check("still on A: kept, tagged with A", S.settle(st, kA, kA, { available: true }, "") === true && st.key === kA && st.result);
+check("another course of the same race is another selection", S.keyOf("raceA", "c2") !== kA);
+check("a failure for an old selection is dropped too", S.settle({ err: "" }, kA, kB, null, "Study failed") === false);
+const src0 = fs.readFileSync(path.join(__dirname, "web", "study.js"), "utf8");
+check("the card clears a result when the selection changed", src0.includes("if (S.key !== curKey())"));
+check("the map takes the study's route only through settle()", /if \(settle\(S, key, curKey\(\), r, ""\)[^\n]*\n\s*Opt\.result = asRoute\(r\)/.test(src0));
+
+check("changing course re-mounts the card (clears another course's study)",
+  fs.readFileSync(path.join(__dirname, "web", "app.js"), "utf8").includes("Opt.courseId=this.value; if (typeof Study !== 'undefined') Study.mount('studyCard')"));
 
 console.log("wiring");
 const web = path.join(__dirname, "web");

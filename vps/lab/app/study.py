@@ -29,7 +29,8 @@ DEFAULT_CAP = 24
 # Two routes closer than this many minutes count as a tie. A rough constant for now: the
 # optimizer validation suite (#407) is to measure the router's own noise and replace it.
 TIE_MIN = 5.0
-TIE_NOTE = "Within about {m:g} min counts as a tie. Rough: the router's own noise isn't measured yet."
+TIE_NOTE = ("Within about {m:g} min counts as a tie. Rough: the router can't yet tell close "
+            "routes apart on some boats and shifty beats.")
 AGREEMENT_NOTE = "Agreement, not accuracy: models can all be wrong together."
 SIDE_DEG = 10.0               # first heading this far off the rhumb line = a side (as the model fan)
 PATH_MAX_PTS = 200            # each run's track is thinned to this for the map
@@ -114,6 +115,15 @@ def subset(wf, keep):
     v.series = {k: fr for k, fr in wf.series.items() if keep(k)}
     names = {k[0] for k in v.series}
     v.meta = [m for m in wf.meta if m.get("model") in names]
+    return v
+
+
+def at_start(wf, start):
+    """The same wind field with its route start (the origin of a correction's fade) at `start`."""
+    if getattr(wf, "t_start", None) == start:
+        return wf
+    v = copy.copy(wf)
+    v.t_start = start
     return v
 
 
@@ -313,23 +323,25 @@ def run(definition, course_id, start_epoch, models, axes, *, cap=DEFAULT_CAP, en
     rows, baseline = [], None
     t_started = time.time()
     for i, spec in enumerate(specs):
-        view, start, scale = wf, start_epoch, 1.0
+        start = start_epoch + (spec.get("start_min") or 0) * 60
+        # the fetch window is widened for the offsets, but a correction's fade starts at THIS
+        # run's start, as it does on Find route (#384)
+        run_wf = at_start(wf, start)
+        view, scale = run_wf, 1.0
         if spec["axis"] == "model":
             m = spec["model"]
-            view = subset(wf, lambda k, m=m: k[0] == m)
+            view = subset(run_wf, lambda k, m=m: k[0] == m)
             spec.update(cycle=cycles.get(m), weight_pct=per_model.get(m))
         elif spec["axis"] == "member":
             key = (spec["model"], spec["member"])
-            view = subset(wf, lambda k, key=key: k == key)
+            view = subset(run_wf, lambda k, key=key: k == key)
             spec.update(cycle=cycles.get(spec["model"]), weight_pct=per_series.get(key))
-        elif spec["axis"] == "start_min":
-            start = start_epoch + spec["start_min"] * 60
         elif spec["axis"] == "polar_pct":
             scale = spec["polar_pct"] / 100.0
         elif spec["axis"] == "tws_pct":
-            view = Nudged(wf, tws_scale=spec["tws_pct"] / 100.0)
+            view = Nudged(run_wf, tws_scale=spec["tws_pct"] / 100.0)
         elif spec["axis"] == "twd_deg":
-            view = Nudged(wf, twd_shift=spec["twd_deg"])
+            view = Nudged(run_wf, twd_shift=spec["twd_deg"])
         if spec.get("model") and corr.get(spec["model"]):
             spec["correction"] = corr[spec["model"]]
         eta = ""
