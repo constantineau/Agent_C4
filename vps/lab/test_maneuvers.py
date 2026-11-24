@@ -242,6 +242,16 @@ def test_gap_in_the_log_keeps_the_turn_but_not_its_loss():
     assert any("gap" in fl for fl in ms[1]["flags"])
 
 
+def test_side_change_across_a_long_hole_is_not_a_turn():
+    """The log stops on one side and comes back an hour later on the other: no evidence of a
+    turn, so no tack (Codex on #396)."""
+    fixes, _ = sail([(300, "tack")])
+    before = [f for f in fixes if f["t"] < T0 + 250]
+    after = [dict(f, t=f["t"] + 3600) for f in fixes if f["t"] > T0 + 350]
+    res = analyze(before + after)
+    assert res["maneuvers"] == []
+
+
 def test_instrument_fault_window_is_flagged_and_left_out_of_averages():
     fixes, _ = sail([(300, "tack"), (600, "tack")])
     trust = {"available": True, "danger": {"heading": [(T0 + 580, T0 + 640)], "attitude": []}}

@@ -380,6 +380,8 @@ def _find(tr, twa):
         if s1 == s2:
             continue
         ta, tb = tr.t[a1], tr.t[b0]
+        if tb - ta > NEUTRAL_BREAK_S:
+            continue                 # a long hole between the sides: no evidence of a turn
         # through 0° (tack) or 180° (gybe)? the angle either side of the crossing says
         edge = [abs(twa[i]) for i in (a1, b0)]
         kind = "tack" if sum(edge) / 2.0 < 90.0 else "gybe"
