@@ -54,6 +54,11 @@ const ReplayCore = (function () {
 
   // a boat-log sample averages [t, t + step): it is faulty when any of that touches a danger
   // interval (same rule as app/replay._in). No step = a point sample.
+  // does the loaded range [v0, v1] hold the whole window iv?
+  function covers(view, iv) {
+    return !!view && !!iv && Math.min(iv[0], iv[1]) >= view[0] && Math.max(iv[0], iv[1]) <= view[1];
+  }
+
   function inDanger(t, danger, step) {
     const span = step || 0;
     for (const iv of danger || []) {
@@ -129,7 +134,7 @@ const ReplayCore = (function () {
     return tws < 6 ? "#4aa3ff" : tws < 12 ? "#43c463" : tws < 18 ? "#f5c542" : tws < 24 ? "#ef8a3a" : "#e0524a";
   }
 
-  return { LABELS, UNITS, ANGLE, idxAt, posAt, bearing, frameAt, inDanger, windowStats, diff,
+  return { LABELS, UNITS, ANGLE, covers, idxAt, posAt, bearing, frameAt, inDanger, windowStats, diff,
            windows, addMarker, fmtClock, fmtDur, twsColor };
 })();
 
@@ -168,7 +173,10 @@ const Replay = (function () {
       if (!S.open || S.recording !== recording || S.raceId !== raceId) return;
       S.data = d; S.msg = d.available ? "" : (d.note || "Can't replay this recording.");
       if (d.available) S.t = d.own.t0;
-    } catch (e) { S.msg = "Couldn't load the replay."; }
+    } catch (e) {
+      if (!S.open || S.recording !== recording || S.raceId !== raceId) return;
+      S.msg = "Couldn't load the replay.";
+    }
     paint();
     if (S.data && S.data.available) { buildMap(); loadChannels(null, null); }
     if (node) node.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -286,6 +294,14 @@ const Replay = (function () {
     const el = node.querySelector(".rp-stats");
     const w = C.windows(S.markers);
     if (!w.A || !S.ch || !S.ch.available) { el.innerHTML = ""; return; }
+    // after Zoom to markers the loaded data covers only the zoom: a window reaching outside it
+    // would be averaged on part of its samples. Show nothing until data covering it is in.
+    if (!C.covers(S.view, w.A) || (w.B && !C.covers(S.view, w.B))) {
+      el.innerHTML = '<span class="muted">Loading…</span>';
+      const full = S.data.own;
+      if (!S.chBusy && S.view && (S.view[0] > full.t0 || S.view[1] < full.t1)) loadChannels(null, null);
+      return;
+    }
     const chans = (S.ch.channels || []);
     const a = C.windowStats(S.ch.samples, w.A[0], w.A[1], S.data.danger, chans, S.ch.step_s);
     const b = w.B ? C.windowStats(S.ch.samples, w.B[0], w.B[1], S.data.danger, chans, S.ch.step_s) : null;

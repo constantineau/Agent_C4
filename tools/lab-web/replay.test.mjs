@@ -139,3 +139,74 @@ test("opening another recording clears a wind load in flight", async () => {
   await c3.R.open("A", 200, null, "other").catch(() => {});
   assert.equal(S.windBusy, false); assert.equal(S.windMsg, "");
 });
+
+test("covers: the loaded range must hold the whole window", () => {
+  assert.equal(C.covers([100, 200], [120, 180]), true);
+  assert.equal(C.covers([100, 200], [180, 120]), true);
+  assert.equal(C.covers([100, 200], [90, 150]), false);
+  assert.equal(C.covers(null, [1, 2]), false);
+});
+
+// a DOM just big enough for the card: every element is a stub that remembers its innerHTML
+function fakeDom() {
+  const made = [];
+  const mk = () => {
+    const kids = {};
+    return { innerHTML: "", style: {}, className: "", textContent: "", value: 0, clientWidth: 0, clientHeight: 0,
+      addEventListener() {}, appendChild() {}, scrollIntoView() {}, getContext: () => null,
+      querySelector(sel) { return (kids[sel] ||= mk()); } };
+  };
+  const create = () => { const e = mk(); made.push(e); return e; };
+  return { made, document: { createElement: create, getElementById: () => null, head: { appendChild() {} } },
+           window: { addEventListener() {} } };
+}
+
+test("a window outside the zoomed data shows Loading and refetches the whole race (Codex on #397)", async () => {
+  const pending = [];
+  const dom = fakeDom();
+  const c4 = { ...dom, requestAnimationFrame: () => 1, cancelAnimationFrame: () => {}, performance: { now: () => 0 },
+    esc: String, attr: String, L: undefined,
+    apiGet: (url) => new Promise((resolve) => pending.push({ url, resolve })) };
+  vm.createContext(c4);
+  vm.runInContext(src + "\nthis.R = Replay;", c4);
+  const R = c4.R, S = R._state;
+  const opened = R.open("A", 0, null, "x");
+  const t = [{ id: "far", name: "far", start: 700, end: 850, seconds: 150, stats: {} }];
+  pending.shift().resolve({ json: async () => ({ available: true, own: { t0: 0, t1: 1000, fixes: [[0, 1, 1], [1000, 1, 1]] },
+    fleet: { boats: [], note: "" }, marks: [], danger: [], tests: t, wind_grid: null }) });
+  await opened.catch(() => {});                  // buildMap needs Leaflet: not here, ignored
+  // pretend we zoomed to 100-300 and that data is in
+  const samples = Array.from({ length: 201 }, (_, i) => ({ t: 100 + i, bsp: 6 }));
+  Object.assign(S, { ch: { available: true, channels: ["bsp"], samples, step_s: 1 }, view: [100, 300], chBusy: false });
+  pending.length = 0;
+  R.showTest("far");                             // 700-850: outside the zoom
+  const card = dom.made.find((e) => e.className === "card rp-card");
+  assert.match(card.querySelector(".rp-stats").innerHTML, /Loading/);   // no stats from part of the window
+  assert.equal(pending.length, 1, "one refetch");
+  assert.ok(!/start=/.test(pending[0].url), "the whole race, not a window");
+  const whole = Array.from({ length: 1001 }, (_, i) => ({ t: i, bsp: i >= 700 && i <= 850 ? 7 : 6 }));
+  pending[0].resolve({ json: async () => ({ available: true, channels: ["bsp"], samples: whole, step_s: 1 }) });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual([...S.view], [0, 1000]);
+  assert.match(card.querySelector(".rp-stats").innerHTML, /7\.00/);
+  const st = C.windowStats(S.ch.samples, 700, 850, [], ["bsp"], 1);
+  assert.equal(st.stats.bsp.mean, 7);           // now computed on the window's own samples
+});
+
+test("a failed load for recording A can't overwrite recording B's status", async () => {
+  const pending = [];
+  const dom = fakeDom();
+  const c5 = { ...dom, requestAnimationFrame: () => 1, cancelAnimationFrame: () => {}, performance: { now: () => 0 },
+    esc: String, attr: String, apiGet: () => new Promise((resolve, reject) => pending.push({ resolve, reject })) };
+  vm.createContext(c5);
+  vm.runInContext(src + "\nthis.R = Replay;", c5);
+  const S = c5.R._state;
+  const a = c5.R.open("A", 1, null, "a");
+  const b = c5.R.open("B", 2, null, "b");
+  pending[0].reject(new Error("down"));
+  await a.catch(() => {});
+  assert.equal(S.raceId, "B"); assert.equal(S.msg, "Loading…");
+  pending[1].resolve({ json: async () => ({ available: false, note: "No track." }) });
+  await b.catch(() => {});
+  assert.equal(S.msg, "No track.");
+});
