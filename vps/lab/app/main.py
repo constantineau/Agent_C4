@@ -31,6 +31,9 @@ INGESTED_DIR = os.environ.get("INGESTED_DIR", "/srv/ingested")
 
 app = FastAPI(title="C4 Performance Lab", version="0.1.0")
 
+from . import replay as _replay  # noqa: E402 — debrief replay + strip chart (#373/#374)
+app.include_router(_replay.router)
+
 # gzip the static shell + JSON responses (app.js alone is ~175 KB raw / ~49 KB gzipped — the Lab
 # is used over hotel Wi-Fi and Starlink; optimize results are large JSON too)
 app.add_middleware(GZipMiddleware, minimum_size=1024)
