@@ -11,6 +11,9 @@ retro archive** (`retrostore.pin_grib`) so the study's inputs survive any cache 
 that moment (lag-aware), exactly what was knowable at the gun. Buckets:
   - GFS  0.25°  `noaa-gfs-bdp-pds`   (complete since ~2021-02)
   - HRRR CONUS  `noaa-hrrr-bdp-pds`  (complete since 2014-08; f48 on synoptic cycles from ~2019)
+For a race that is OVER, `analysis_field` gives the wind that actually blew instead: each hour's
+own HRRR 0-h analysis, chained over the window (#404). It costs about what the gun cycle costs (one
+small byte-range fetch per hour) and is US-only like HRRR itself.
 RRFS (NOAA's NAM replacement, operational 2026-11, #360) has no source here on purpose: its AWS
 bucket holds only the pre-operational rrfs_a prototype, so a past race replays on GFS + HRRR.
 
@@ -19,6 +22,7 @@ RAM than the live bbox-subset path but correct; crop-at-parse is a future optimi
 batches need it.
 """
 import datetime as dt
+import math
 import os
 
 from .. import atomicio, deepfc
@@ -96,3 +100,55 @@ def gun_sources(asof_epoch: float, context: str | None = None) -> list:
         s.pin_context = context
         out.append(s)
     return out
+
+
+def _inside(bbox, coverage):
+    """Is the whole race box (n, s, w, e) inside a model's area (s, n, w, e)? None = everywhere."""
+    if coverage is None:
+        return True
+    n, s, w, e = bbox
+    cs, cn, cw, ce = coverage
+    return cs <= s and n <= cn and cw <= w and e <= ce
+
+
+ANALYSIS_CYCLE = "analysis-chain"     # the meta "cycle" of a field made of hourly analyses
+
+
+def analysis_field(bbox, t0, t1, context=None, on_progress=None):
+    """The wind that actually blew over [t0, t1]: hourly HRRR f00 (analysis) frames, chained.
+    Returns a WindField; an EMPTY one (loaded False) when the race box is not wholly inside HRRR
+    (an analysis covering half the course would leave the oracle borrowing wind for the rest) or
+    nothing could be fetched. Same pinned-archive fetch path as the gun cycle."""
+    from . import grib
+    from .windfield import WindField, not_here_meta
+    log = on_progress or (lambda *_: None)
+    src = ArchiveHRRR()
+    if not _inside(bbox, src.coverage):
+        log(src.not_here_note())
+        return WindField({}, [not_here_meta(src)], bbox, t0, t1)
+    src.asof = t1 + 7200                      # cycle picks are explicit below; asof just must not veto
+    src.pin_context = context
+    parser = grib.IsolatedGribParser() if getattr(grib, "ISOLATE", False) else None
+    frames = []
+    try:
+        h = math.floor(t0 / 3600.0) * 3600.0
+        while h <= t1 + 3600.0:
+            cycle = dt.datetime.fromtimestamp(h, tz=dt.timezone.utc)
+            try:
+                path = src.fetch(cycle, 0, "det", bbox)
+                if path:
+                    frames.append(grib.GribFrame.from_file(
+                        path, "hrrr", "det", h, parser=parser).crop(bbox))
+            except Exception as e:
+                log(f"analysis {cycle:%Y-%m-%d %HZ} skipped: {type(e).__name__}")
+            h += 3600.0
+    finally:
+        if parser is not None:
+            parser.close()
+    frames.sort(key=lambda fr: fr.valid_time)
+    series = {("hrrr", "det"): frames} if frames else {}
+    meta = [{"model": "hrrr", "cycle": ANALYSIS_CYCLE, "members": 1,
+             "frames": len(frames), "expected_frames": int((t1 - t0) / 3600) + 2,
+             "cycle_fallbacks": 0, "priority": 1, "kind": "deterministic"}]
+    log(f"hrrr: {len(frames)} hourly analyses")
+    return WindField(series, meta, bbox, t0, t1)

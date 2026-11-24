@@ -24,14 +24,12 @@ archived retro race (tracks + results), the course, the gun and the boats to rep
 
 Run via docker cp + exec into the Lab container (the lab image bakes its source).
 """
-import datetime as dt
 import json
-import math
 import os
 
 from . import atomicio, retrostore, store, synthesis
-from .wind import archive, grib
-from .wind.windfield import WindField, build_windfield, not_here_meta
+from .wind import archive
+from .wind.windfield import build_windfield
 from . import optimizer
 
 OUT_DIR = os.path.join(os.path.dirname(retrostore.RETRO_DB), "backtest")
@@ -102,37 +100,10 @@ def synth_asof(*, def_race_id, retro_race_id, course_id, gun, fan_depth="standar
 # ------------------------------------------------------------- realized wind (oracle chain)
 def build_oracle_field(bbox, t0, t1, retro_race_id):
     """The wind that actually blew: hourly HRRR f00 (analysis) frames chained over the race
-    window — the judge-loop's oracle definition, via the same pinned-archive fetch path."""
-    src = archive.ArchiveHRRR()
-    if not src.covers_bbox(bbox):             # #309: no HRRR analysis outside the US: say so
-        print(f"[backtest] oracle field: {src.not_here_note()}", flush=True)
-        return WindField({}, [not_here_meta(src)], bbox, t0, t1)
-    src.asof = t1 + 7200                      # cycle picks are explicit below; asof just must not veto
-    src.pin_context = f"retro:{retro_race_id}-oracle"
-    parser = grib.IsolatedGribParser() if getattr(grib, "ISOLATE", False) else None
-    frames = []
-    try:
-        h = math.floor(t0 / 3600.0) * 3600.0
-        while h <= t1 + 3600.0:
-            cycle = dt.datetime.fromtimestamp(h, tz=dt.timezone.utc)
-            try:
-                path = src.fetch(cycle, 0, "det", bbox)
-                if path:
-                    frames.append(grib.GribFrame.from_file(
-                        path, "hrrr", "det", h, parser=parser).crop(bbox))
-            except Exception as e:
-                print(f"[backtest] oracle frame {cycle:%Y-%m-%d %HZ} skipped: {e}", flush=True)
-            h += 3600.0
-    finally:
-        if parser is not None:
-            parser.close()
-    frames.sort(key=lambda fr: fr.valid_time)
-    series = {("hrrr", "det"): frames} if frames else {}
-    meta = [{"model": "hrrr", "cycle": "analysis-chain", "members": 1,
-             "frames": len(frames), "expected_frames": int((t1 - t0) / 3600) + 2,
-             "cycle_fallbacks": 0, "priority": 1, "kind": "deterministic"}]
-    print(f"[backtest] oracle field: {len(frames)} hourly analysis frames", flush=True)
-    return WindField(series, meta, bbox, t0, t1)
+    window — the judge-loop's oracle definition (`archive.analysis_field`, shared since #404)."""
+    return archive.analysis_field(bbox, t0, t1, context=f"retro:{retro_race_id}-oracle",
+                                  on_progress=lambda m: print(f"[backtest] oracle field: {m}",
+                                                              flush=True))
 
 
 # ------------------------------------------------------------- Phase B stage 1: sampling
