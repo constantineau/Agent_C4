@@ -43,18 +43,26 @@ function polScBand(r, step) {
 // view: pooled cells for all races, that race's cells for one race, the race curves when lines
 // are by race. A dot whose cell was refused is not drawn — it would be evidence for a point the
 // chart says it doesn't have.
-function polScRecKey(rec) { return rec == null ? "" : String(Math.round(Number(rec))); }
-function polScCellKey(r, ctx) {
-  const b = r.band != null ? r.band : r.tws, a = r.twa_bin != null ? r.twa_bin : r.twa;
-  if (ctx.split === "race") return `${b}|${a}|${polScRecKey(r.recording)}`;
-  if (ctx.race === "all" || ctx.race == null) return `${b}|${a}|${r.config || ""}`;
-  return `${b}|${a}|${r.config || ""}|${polScRecKey(r.recording)}`;
+// A recording is matched like everywhere else on the tab (polSameRec: under 1 s apart), so a
+// point's recording is snapped to the cell recording it matches before it is keyed.
+function polScRecKey(rec, recs) {
+  if (rec == null) return "";
+  const m = (recs || []).find((x) => polScSame(x, rec));
+  return String(m != null ? m : rec);
 }
+function polScPooledView(ctx) { return ctx.split !== "race" && (ctx.race === "all" || ctx.race == null); }
+function polScCellKey(r, ctx, recs) {
+  const b = r.band != null ? r.band : r.tws, a = r.twa_bin != null ? r.twa_bin : r.twa;
+  if (ctx.split === "race") return `${b}|${a}|${polScRecKey(r.recording, recs)}`;
+  if (polScPooledView(ctx)) return `${b}|${a}|${r.config || ""}`;
+  return `${b}|${a}|${r.config || ""}|${polScRecKey(r.recording, recs)}`;
+}
+// {keys, recs}: the on-screen cells' keys and the recordings they name
 function polScAccepted(data, ctx) {
   const d = data || {};
-  const src = ctx.split === "race" ? d.race_curves
-    : (ctx.race === "all" || ctx.race == null) ? d.cells : d.race_cells;
-  return new Set((src || []).map((c) => polScCellKey(c, ctx)));
+  const src = (ctx.split === "race" ? d.race_curves : polScPooledView(ctx) ? d.cells : d.race_cells) || [];
+  const recs = [...new Set(src.filter((c) => c.recording != null).map((c) => c.recording))];
+  return { keys: new Set(src.map((c) => polScCellKey(c, ctx, recs))), recs };
 }
 
 function polScSame(a, b) {
@@ -102,7 +110,10 @@ function polScSvg(XY, maxV, ctx, data) {
   const all = polScRows(data);
   const bands = polScBands(all, ctx.step);
   const ok = polScAccepted(data, ctx);
-  const pts = polScFilter(all, ctx).filter((p) => ok.has(polScCellKey(p, ctx)));
+  // the pooled view draws a second once, like the pooled polar (overlapping race windows)
+  const pooled = polScPooledView(ctx);
+  const pts = polScFilter(all, ctx).filter((p) => (!pooled || p.pooled !== 0)
+    && ok.keys.has(polScCellKey(p, ctx, ok.recs)));
   let off = 0;
   const out = [];
   for (const p of pts) {

@@ -115,6 +115,29 @@ test("a dot whose cell failed the seconds gate is not drawn", () => {
   assert.equal(circles(c.polScSvg(XY, 12)).length, 1);
 });
 
+test("pooled view draws an overlapping second once; each race's view keeps its copy", () => {
+  const c = load();
+  // the same second from two overlapping windows: R1's copy counted in the pooled polar, R2's not
+  c.Pol.data = { ...DATA, scatter: { ...DATA.scatter, fields: [...DATA.scatter.fields, "pooled"],
+    rows: [[1, 10.0, 50, 6.0, "J1", R1, 10, 50, 1], [1, 10.0, 50, 6.0, "J1", R2, 10, 50, 0]] } };
+  assert.equal(circles(c.polScSvg(XY, 12)).length, 1);
+  c.Pol.race = R2;
+  assert.equal(circles(c.polScSvg(XY, 12)).length, 1);
+  c.Pol.race = "all"; c.Pol.split = "race";
+  assert.equal(circles(c.polScSvg(XY, 12)).length, 2);
+});
+
+test("a recording under 1 s off the cell's still finds its cell (same match as the race filter)", () => {
+  const c = load();
+  c.Pol.data = { ...DATA, race_cells: [{ tws: 10, twa: 50, config: "J1", recording: 100.49 }],
+    race_curves: [{ tws: 10, twa: 50, recording: 100.49 }],
+    scatter: { ...DATA.scatter, rows: [[1, 10.0, 50, 6.0, "J1", 100.51, 10, 50]] } };
+  c.Pol.race = 100.49;
+  assert.equal(circles(c.polScSvg(XY, 12)).length, 1);
+  c.Pol.race = "all"; c.Pol.split = "race";
+  assert.equal(circles(c.polScSvg(XY, 12)).length, 1);
+});
+
 test("no scatter block (an old build): nothing drawn, nothing thrown", () => {
   const c = load();
   c.Pol.data = { grid: {} };

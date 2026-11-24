@@ -225,9 +225,12 @@ def compute(min_seconds=MIN_SECONDS, boat_id=_ACTIVE):
             raw_secs[key] = raw_secs.get(key, 0) + got
             # the cell's own bins ride along, so the page files a dot under exactly the cell
             # this code put it in (Python rounds half to even; JS doesn't)
-            log_points.append({"t": f["t"], "tws": tws, "twa": twa, "stw": stw, "config": cfg,
-                               "recording": rec, "band": key[0], "twa_bin": key[1]})
             got = _cover(seen_pool, f["t"], stride)
+            # `pooled`: this second also counted in the all-races polar. Overlapping windows
+            # keep a fix for each race's own view, but the pooled view must draw it once.
+            log_points.append({"t": f["t"], "tws": tws, "twa": twa, "stw": stw, "config": cfg,
+                               "recording": rec, "band": key[0], "twa_bin": key[1],
+                               "pooled": 1 if got else 0})
             if not got:
                 already += 1
             else:

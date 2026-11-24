@@ -17,7 +17,9 @@ import math
 
 # `band` / `twa_bin` are the polar cell's own TWS and TWA bins (obspolar's rounding), so the page
 # never re-derives them: Python rounds 9 kn to the 8 kn cell, JS Math.round would say 10.
-FIELDS = ("t", "tws", "twa", "stw", "config", "recording", "band", "twa_bin")
+# `pooled` is 1 when the sample also counted in the all-races polar (overlapping windows give a
+# second to each race's own view but to the pooled view once).
+FIELDS = ("t", "tws", "twa", "stw", "config", "recording", "band", "twa_bin", "pooled")
 PER_GROUP = 250      # points kept per (TWS bucket, race); a bucket the boat sat in all day
 TOTAL = 6000         # ...and in all, so many races can't grow the page without bound
 
@@ -75,7 +77,8 @@ def pack(points, tws_step, per_group=PER_GROUP, total=TOTAL):
     every other gate on this tab)."""
     kept, n_in = decimate(points, tws_step, per_group, total)
     rows = [[round(p["t"], 1), round(p["tws"], 1), round(p["twa"], 1), round(p["stw"], 2),
-             p.get("config"), p.get("recording"), _band(p, tws_step), p.get("twa_bin")]
+             p.get("config"), p.get("recording"), _band(p, tws_step), p.get("twa_bin"),
+             p.get("pooled", 1)]
             for p in kept]
     return {"fields": list(FIELDS), "rows": rows, "kept": len(rows), "total": n_in,
             "per_group": per_group, "cap": total}

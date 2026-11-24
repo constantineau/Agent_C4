@@ -68,6 +68,32 @@ def test_rows_carry_the_cells_own_bins(monkeypatch):
     assert {(c["tws"], c["twa"]) for c in art["cells"]} == {(8.0, 80.0)}
 
 
+def test_overlapping_windows_count_a_second_once_in_the_pooled_view(monkeypatch):
+    # two sessions whose windows overlap by 50 s: each race's own view keeps the overlap, the
+    # pooled polar counts it once, and the points say which copy is the pooled one
+    B = A + 50
+
+    def fake(path, timeout=None):
+        if path.startswith("/racelog/sessions"):
+            return {"sessions": [
+                {"id": 1, "name": "A", "race_id": "r", "boat_id": "b1",
+                 "window": {"start_ts": A, "end_ts": A + 100, "hours": 0.03}},
+                {"id": 2, "name": "B", "race_id": "r", "boat_id": "b1",
+                 "window": {"start_ts": B, "end_ts": B + 100, "hours": 0.03}}]}
+        if path.startswith("/racelog/track"):
+            st = float(path.split("start=")[1].split("&")[0])
+            return {"fixes": [{"t": st + i, "tws": 10.0, "twa": 90.0, "stw": 6.0} for i in range(100)],
+                    "sail_log": []}
+        return {"danger": {}, "summary": {"line": "ok", "danger_s": 0}}
+    monkeypatch.setattr(monitor, "agent_json", fake)
+    art = OP.compute(min_seconds=30, boat_id="b1")
+    rows = [dict(zip(art["scatter"]["fields"], r)) for r in art["scatter"]["rows"]]
+    assert len(rows) == 200
+    pooled = [r for r in rows if r["pooled"]]
+    assert len(pooled) == 150 == art["cells"][0]["samples"]
+    assert len({r["t"] for r in pooled}) == 150
+
+
 def test_total_cap_holds_with_more_groups_than_points():
     pts = [{"t": 0.0, "tws": 10.0, "twa": 90.0, "stw": 6.0, "recording": i} for i in range(6001)]
     out = PS.pack(pts, 2.0)
