@@ -210,3 +210,58 @@ test("a failed load for recording A can't overwrite recording B's status", async
   await b.catch(() => {});
   assert.equal(S.msg, "No track.");
 });
+
+function harness2() {
+  const gets = [], posts = [];
+  const dom = fakeDom();
+  const c = { ...dom, requestAnimationFrame: () => 1, cancelAnimationFrame: () => {}, performance: { now: () => 0 },
+    esc: String, attr: String,
+    apiGet: () => new Promise((resolve) => gets.push({ resolve })),
+    apiPost: (url, body) => new Promise((resolve) => posts.push({ url, body, resolve })) };
+  vm.createContext(c);
+  vm.runInContext(src + "\nthis.R = Replay;", c);
+  const build = (tests) => ({ json: async () => ({ available: true, own: { t0: 0, t1: 1000, fixes: [[0, 1, 1], [1000, 1, 1]] },
+    fleet: { boats: [], note: "" }, marks: [], danger: [], tests, wind_grid: null }) });
+  const open = async (race, rec, tests) => {
+    const p = c.R.open(race, rec, null, race);
+    gets.shift().resolve(build(tests));
+    await p.catch(() => {});                     // buildMap needs Leaflet: not here
+    gets.length = 0;                             // the channel fetch is left pending
+  };
+  return { R: c.R, S: c.R._state, posts, open, dom };
+}
+
+test("a save still pending when another recording opens never lands on it (Codex on #397)", async () => {
+  const h = harness2();
+  await h.open("A", 1, []);
+  h.S.markers = [100, 250];
+  const saving = h.R.saveTest();
+  assert.equal(h.posts[0].body.race_id, "A"); assert.equal(h.posts[0].body.recording, 1);
+  await h.open("B", 2, []);
+  h.posts[0].resolve({ json: async () => ({ ok: true, test: { id: "t1", name: "", start: 100, end: 250 } }) });
+  await saving;
+  assert.equal(h.S.raceId, "B"); assert.equal(h.S.data.tests.length, 0);
+});
+
+test("delete goes to the recording whose list was clicked, and only changes that list", async () => {
+  const h = harness2();
+  await h.open("B", 2, [{ id: "t1", name: "x", start: 0, end: 150, seconds: 150, stats: {} }]);
+  const del = h.R.delTest("t1");
+  assert.equal(h.posts[0].body.race_id, "B"); assert.equal(h.posts[0].body.recording, 2);
+  await h.open("C", 3, [{ id: "t1", name: "same id elsewhere", start: 0, end: 150, seconds: 150, stats: {} }]);
+  h.posts[0].resolve({ json: async () => ({ ok: true }) });
+  await del;
+  assert.equal(h.S.data.tests.length, 1);       // C's list untouched
+});
+
+test("no instrument readout when the cursor is outside the loaded data", async () => {
+  const h = harness2();
+  await h.open("A", 1, []);
+  const samples = Array.from({ length: 201 }, (_, i) => ({ t: 100 + i, bsp: 6, tws: 10 }));
+  Object.assign(h.S, { ch: { available: true, channels: ["bsp", "tws"], samples, step_s: 1 }, view: [100, 300] });
+  const card = h.dom.made.find((e) => e.className === "card rp-card");
+  h.R.seek(150);
+  assert.match(card.querySelector(".rp-now").textContent, /BSP/);
+  h.R.seek(500);                                 // outside the zoom
+  assert.equal(card.querySelector(".rp-now").textContent, "");
+});

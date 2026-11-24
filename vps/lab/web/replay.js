@@ -372,9 +372,11 @@ const Replay = (function () {
 
   function updateNow() {
     const el = node && node.querySelector(".rp-now");
-    if (!el || !S.ch || !S.ch.samples) return;
+    if (!el) return;
+    // no readout from data that doesn't cover the cursor (outside a zoom, or before any loads)
+    if (!S.ch || !S.ch.samples || !S.view || S.t < S.view[0] || S.t > S.view[1]) { el.textContent = ""; return; }
     const i = C.idxAt(S.ch.samples, S.t, (s) => s.t);
-    const s = S.ch.samples[Math.max(0, i)];
+    const s = i >= 0 ? S.ch.samples[i] : null;
     if (!s) { el.textContent = ""; return; }
     el.textContent = ["bsp", "sog", "tws", "twa"].filter((c) => s[c] != null).map((c) => C.LABELS[c] + " " + fmtVal(c, s[c])).join(" · ");
   }
@@ -665,11 +667,17 @@ const Replay = (function () {
     const nm = (document.getElementById("rpTestName") || {}).value || "";
     if (!w.A) return;
     S.saveMsg = "Saving…"; paintStats();
+    // the test belongs to the recording open NOW; if another opens meanwhile, the answer is
+    // dropped (it is saved on the server under its own recording, and shows when that reopens)
+    const race = S.raceId, rec = S.recording;
+    const same = () => S.open && S.raceId === race && S.recording === rec && S.data;
+    let r;
     try {
-      const r = await (await apiPost("/api/debrief/replay/tests", { ...key(), recording: S.recording, name: nm, start: w.A[0], end: w.A[1], boat_id: S.boatId })).json();
-      if (r.ok) { S.data.tests = (S.data.tests || []).concat([r.test]); S.saveMsg = "Saved."; paintTests(); }
-      else S.saveMsg = r.note || r.detail || "Couldn't save.";
-    } catch (e) { S.saveMsg = "Couldn't save."; }
+      r = await (await apiPost("/api/debrief/replay/tests", { ...key(), recording: rec, name: nm, start: w.A[0], end: w.A[1], boat_id: S.boatId })).json();
+    } catch (e) { r = { ok: false, note: "Couldn't save." }; }
+    if (!same()) return;
+    if (r.ok) { S.data.tests = (S.data.tests || []).concat([r.test]); S.saveMsg = "Saved."; paintTests(); }
+    else S.saveMsg = r.note || r.detail || "Couldn't save.";
     paintStats();
   }
   function showTest(id) {
@@ -678,10 +686,14 @@ const Replay = (function () {
     S.markers = [x.start, x.end]; seek(x.start); markersChanged();
   }
   async function delTest(id) {
+    // delete from the recording whose list was clicked; apply only if it is still the one open
+    const race = S.raceId, rec = S.recording;
+    let ok = false;
     try {
-      const r = await (await apiPost("/api/debrief/replay/tests/delete", { ...key(), recording: S.recording, id })).json();
-      if (r.ok) S.data.tests = (S.data.tests || []).filter((y) => y.id !== id);
+      ok = (await (await apiPost("/api/debrief/replay/tests/delete", { race_id: race || "", recording: rec, id })).json()).ok;
     } catch (e) { /* the list stays as it was */ }
+    if (!(S.open && S.raceId === race && S.recording === rec && S.data)) return;
+    if (ok) S.data.tests = (S.data.tests || []).filter((y) => y.id !== id);
     paintTests();
   }
 
