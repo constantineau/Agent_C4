@@ -9,21 +9,38 @@
    lat, lon, loss_s, loss_m, counted. */
 "use strict";
 
-const ManData = { byKey: {}, pending: {} };
+const ManData = { byKey: {}, pending: {}, ids: new WeakMap(), nextId: 1 };
 
+// A new debrief report object (a run finished, a debrief opened) is a new version of the answer.
+function manReportId(r) {
+  if (!ManData.ids.has(r)) ManData.ids.set(r, ManData.nextId++);
+  return ManData.ids.get(r);
+}
+
+// The key is per recording AND per track version (see manTarget): a replaced track is a new key.
 function manKey(raceId, recording) { return (raceId == null ? "@norace" : raceId) + "|" + (recording == null ? "" : Math.round(recording)); }
 
 // Which stored track the card is about: the open debrief's recording, else a loaded GPX/tracker
-// track for the race. null = nothing to show.
+// track for the race. null = nothing to show. `sig` changes whenever the track or the debrief
+// behind it does (a GPX replaced, a track fetched or removed, a debrief re-run), so an answer is
+// never served for a track that has since changed (Codex on #396).
+function manTrackSig(t) {
+  return t && t.available ? [t.source, t.n, t.boat, t.matched_by, t.recording].join("~") : "none";
+}
 function manTarget(r, deb) {
+  const t = (deb || {}).track;
   if (r && r.available) {
     const rec = (r.recording || {}).start_ts;
-    if (r.no_race) return rec == null ? null : { raceId: null, recording: rec };
+    const rsig = "r" + manReportId(r);
+    if (r.no_race) return rec == null ? null : { raceId: null, recording: rec, sig: rsig };
     const rid = r.race_id || (deb || {}).raceId;
-    return rid ? { raceId: rid, recording: rec == null ? null : rec } : null;
+    // a debrief of the race's GPX/tracker track (no recording) reads the same stored file
+    return rid ? { raceId: rid, recording: rec == null ? null : rec,
+      sig: rsig + (rec == null ? "|" + manTrackSig(t) : "") } : null;
   }
-  const t = (deb || {}).track;
-  if (t && t.available && (deb || {}).raceId) return { raceId: deb.raceId, recording: t.recording == null ? null : t.recording };
+  if (t && t.available && (deb || {}).raceId) {
+    return { raceId: deb.raceId, recording: t.recording == null ? null : t.recording, sig: manTrackSig(t) };
+  }
   return null;
 }
 
@@ -35,7 +52,7 @@ function manUrl(tg) {
 function manCard(r, deb) {
   const tg = manTarget(r, deb);
   if (!tg) return "";
-  const key = manKey(tg.raceId, tg.recording);
+  const key = manKey(tg.raceId, tg.recording) + "|" + (tg.sig || "");
   const have = ManData.byKey[key];
   if (!have && !ManData.pending[key]) manLoad(tg, key);
   return `<div class="card" id="manCard" data-key="${esc(key)}">${have ? manBody(have) : manShell('<div class="loading">Looking for tacks and gybes…</div>')}</div>`;
@@ -43,11 +60,18 @@ function manCard(r, deb) {
 
 async function manLoad(tg, key) {
   ManData.pending[key] = true;
-  let d;
-  try { d = await (await apiGet(manUrl(tg))).json(); }
-  catch (e) { d = { available: false, note: "Could not load tacks and gybes.", maneuvers: [] }; }
+  let d, failed = false;
+  try {
+    const res = await apiGet(manUrl(tg));
+    if (res.ok === false) throw new Error("HTTP " + res.status);
+    d = await res.json();
+  } catch (e) {
+    failed = true;
+    d = { available: false, note: "Could not load tacks and gybes.", maneuvers: [] };
+  }
   delete ManData.pending[key];
-  ManData.byKey[key] = d;
+  // a failure is shown but not kept, so the next paint asks again
+  if (!failed) ManData.byKey[key] = d;
   try {
     document.dispatchEvent(new CustomEvent("c4:maneuvers",
       { detail: { key, race_id: tg.raceId, recording: tg.recording, data: d } }));
@@ -73,7 +97,7 @@ function manBody(d) {
   if (!d || !d.available) return manShell(`<div class="placeholder">${esc((d && d.note) || "No track for this recording.")}</div>`);
   const ms = d.maneuvers || [];
   const s = d.summary || {};
-  const warn = d.basis === "gps" || d.basis === "mixed"
+  const warn = d.basis === "gps" || d.basis === "mixed" || (d.trust_checked === false && d.basis !== "none")
     ? `<div class="banner warn" style="font-size:12px;margin-bottom:6px">${esc(d.note || "Wind guessed from the track. Losses are rough.")}</div>`
     : (d.note ? `<div class="muted" style="font-size:12px;margin-bottom:6px">${esc(d.note)}</div>` : "");
   if (!ms.length) return manShell(warn || `<div class="placeholder">No tacks or gybes found.</div>`);

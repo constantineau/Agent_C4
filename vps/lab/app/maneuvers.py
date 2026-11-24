@@ -310,19 +310,31 @@ def _gps_twd(tr, hint=None):
 
 # ---- detection ------------------------------------------------------------------------------
 def _sides(tr, twa):
-    """Runs of fixes on one side: [(side, i_first, i_last)], noise flickers dropped."""
+    """Runs of fixes on one side: [(side, i_first, i_last)], noise flickers dropped.
+
+    A run's held time counts only the time between CONSECUTIVE valid readings on that side, and a
+    dropout (no wind angle at all for longer than a few fixes) splits the run. Otherwise a few
+    scattered readings across long dropouts would add up to a "held" side and make turns out of
+    nothing (Codex on #396)."""
     dt = tr.dt or 1.0
+    drop_s = max(15.0, 3.0 * dt)
     runs = []                        # [side, i0, i1, held_s]
+    prev = None                      # the last fix with any wind angle (neutral or not)
     for i in range(tr.n):
         a = twa[i]
-        if a is None or abs(a) < NEUTRAL_DEG or abs(a) > 180.0 - NEUTRAL_DEG:
+        if a is None:
+            continue
+        dropout = prev is not None and tr.t[i] - tr.t[prev] > drop_s
+        last_valid, prev = prev, i
+        if abs(a) < NEUTRAL_DEG or abs(a) > 180.0 - NEUTRAL_DEG:
             continue
         s = 1 if a > 0 else -1
-        if runs and runs[-1][0] == s and tr.t[i] - tr.t[runs[-1][2]] <= NEUTRAL_BREAK_S:
+        if runs and runs[-1][0] == s and not dropout and tr.t[i] - tr.t[runs[-1][2]] <= NEUTRAL_BREAK_S:
+            if runs[-1][2] == last_valid:          # straight on from the previous reading
+                runs[-1][3] += tr.t[i] - tr.t[last_valid]
             runs[-1][2] = i
-            runs[-1][3] += min(dt, tr.t[i] - tr.t[runs[-1][2] - 1] if runs[-1][2] > 0 else dt)
         else:
-            runs.append([s, i, i, dt])
+            runs.append([s, i, i, min(dt, drop_s)])
     for _ in range(3):               # drop flickers, merge what they split, repeat
         runs = [r for r in runs if r[3] >= MIN_RUN_S]
         merged = []
@@ -411,6 +423,10 @@ def _mean(xs):
     return sum(xs) / len(xs) if xs else None
 
 
+def _trust_ran(trust):
+    return isinstance(trust, dict) and trust.get("available") is True
+
+
 def _in_danger(trust, t0, t1):
     dz = ((trust or {}).get("danger") or {})
     hit = []
@@ -484,8 +500,12 @@ def analyze(fixes, sail_log=None, trust=None, twd_hint=None):
         notes.append(gps_note or "No wind direction, so no tacks or gybes.")
     if not out and basis != "none":
         notes.append("No tacks or gybes found.")
+    if any("instruments not checked" in m["flags"] for m in out):
+        notes.append("The instrument check didn't run on this track, so turns read off the "
+                     "wind instruments aren't in the averages.")
     return {"available": True, "version": VERSION, "basis": basis, "confidence": confidence,
             "note": " ".join(notes) or None, "fix_interval_s": _r(tr.dt, 1),
+            "trust_checked": _trust_ran(trust),
             "maneuvers": out, "summary": summarize(out)}
 
 
@@ -551,7 +571,12 @@ def _measure(tr, twa, twd, basis_i, m, k, prev_end, next_start, sail_log, trust)
     upwind_a = tw_a is not None and tw_a < 90.0
     trusted = True
     bad = _in_danger(trust, b0[0], b1[1])
-    if bad:
+    if basis == "instruments" and not _trust_ran(trust):
+        # No instrument check over this track: its wind-based numbers are unverified, so they
+        # stay out of the averages (same rule as a danger window, but said differently).
+        trusted = False
+        flags.append("instruments not checked")
+    elif bad:
         trusted = False
         flags.append("instrument fault here (" + ", ".join(bad) + ")")
     max_gap = max(15.0, 3.0 * (tr.dt or 1.0))

@@ -27,6 +27,7 @@ function load() {
   vm.createContext(ctx);
   vm.runInContext(src.replace("const ManData =", "var ManData =")
     + "\nthis.manCard = manCard; this.manTarget = manTarget; this.manBody = manBody; this.ManData = ManData;", ctx);
+  ctx.keyOf = (html) => /data-key="([^"]*)"/.exec(html)[1];
   return { ctx, calls, events, el };
 }
 
@@ -41,11 +42,12 @@ const ANSWER = { available: true, basis: "instruments", confidence: "high", note
 
 test("asks for the open debrief's recording, a practice sail's, or the loaded GPX track", () => {
   const { ctx } = load();
-  assert.deepEqual({ ...ctx.manTarget({ available: true, race_id: "r1", recording: { start_ts: 1790000000 } }, {}) },
+  const pick = (tg) => ({ raceId: tg.raceId, recording: tg.recording });
+  assert.deepEqual(pick(ctx.manTarget({ available: true, race_id: "r1", recording: { start_ts: 1790000000 } }, {})),
     { raceId: "r1", recording: 1790000000 });
-  assert.deepEqual({ ...ctx.manTarget({ available: true, no_race: true, recording: { start_ts: 5 } }, {}) },
+  assert.deepEqual(pick(ctx.manTarget({ available: true, no_race: true, recording: { start_ts: 5 } }, {})),
     { raceId: null, recording: 5 });
-  assert.deepEqual({ ...ctx.manTarget(null, { raceId: "r1", track: { available: true } }) },
+  assert.deepEqual(pick(ctx.manTarget(null, { raceId: "r1", track: { available: true } })),
     { raceId: "r1", recording: null });
   assert.equal(ctx.manTarget(null, { raceId: "r1", track: { available: false } }), null);
 });
@@ -53,10 +55,11 @@ test("asks for the open debrief's recording, a practice sail's, or the loaded GP
 test("loads once, fills the card, and announces the answer for other views", async () => {
   const { ctx, calls, events, el } = load();
   ctx.answer = ANSWER;
-  const html = ctx.manCard({ available: true, race_id: "r 1", recording: { start_ts: 1790000000 } }, {});
+  const rep = { available: true, race_id: "r 1", recording: { start_ts: 1790000000 } };
+  const html = ctx.manCard(rep, {});
   assert.match(html, /Looking for tacks/);
-  el.dataset.key = "r 1|1790000000";
-  ctx.manCard({ available: true, race_id: "r 1", recording: { start_ts: 1790000000 } }, {});
+  el.dataset.key = ctx.keyOf(html);
+  ctx.manCard(rep, {});
   await new Promise((r) => setTimeout(r, 0));
   assert.equal(calls.length, 1);
   assert.equal(calls[0], "/api/debrief/maneuvers?race_id=r%201&recording=1790000000");
@@ -78,4 +81,34 @@ test("GPS-only answers carry the warning; empty and failed answers say so", () =
   assert.match(gps, /guessed from the track/);
   assert.match(ctx.manBody({ available: true, maneuvers: [], summary: {} }), /No tacks or gybes found/);
   assert.match(ctx.manBody({ available: false, note: "Fixes are 120 s apart." }), /120 s apart/);
+});
+
+test("a replaced track or a new debrief asks again; a failure is not kept", async () => {
+  const { ctx, calls } = load();
+  ctx.answer = ANSWER;
+  const deb = { raceId: "r1", track: { available: true, source: "gpx", n: 100 } };
+  ctx.manCard(null, deb);
+  await new Promise((r) => setTimeout(r, 0));
+  ctx.manCard(null, deb);                                  // same track: cached
+  assert.equal(calls.length, 1);
+  deb.track = { available: true, source: "gpx", n: 250 };  // a new GPX uploaded
+  ctx.manCard(null, deb);
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(calls.length, 2);
+  deb.track = { available: false };                        // removed: nothing to show
+  assert.equal(ctx.manCard(null, deb), "");
+  const rec = { start_ts: 1790000000 };
+  ctx.manCard({ available: true, race_id: "r1", recording: rec }, deb);
+  await new Promise((r) => setTimeout(r, 0));
+  ctx.manCard({ available: true, race_id: "r1", recording: rec }, deb);   // the debrief re-run
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(calls.length, 4);
+  // a failed load shows a message and is retried on the next paint
+  ctx.apiGet = async (url) => { calls.push(url); throw new Error("down"); };
+  const rep = { available: true, race_id: "r2", recording: rec };
+  ctx.manCard(rep, deb);
+  await new Promise((r) => setTimeout(r, 0));
+  assert.match(ctx.manCard(rep, deb), /Looking for tacks/);
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(calls.length, 6);
 });

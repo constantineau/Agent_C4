@@ -112,6 +112,16 @@ def sail(plan, twd=0.0, v=6.5, twa=42.0, dt=1.0, turn_s=8.0, vmin_frac=0.55, rec
     return fixes, truth
 
 
+CLEAN = {"available": True, "danger": {"heading": [], "attitude": []},
+         "summary": {"danger_s": 0, "line": "no danger windows"}}
+
+
+def analyze(fixes, **kw):
+    """The module with a clean instrument check, unless the test passes its own."""
+    kw.setdefault("trust", CLEAN)
+    return M.analyze(fixes, **kw)
+
+
 def strip_wind(fixes):
     return [{**f, "tws": None, "twa": None, "stw": None} for f in fixes]
 
@@ -127,7 +137,7 @@ def counted(res):
 # ---- the basics -------------------------------------------------------------------------------
 def test_clean_tacks_found_typed_and_loss_close_to_truth():
     fixes, truth = sail([(300, "tack"), (600, "tack"), (900, "tack")])
-    res = M.analyze(fixes)
+    res = analyze(fixes)
     assert res["available"] is True
     assert res["basis"] == "instruments"
     ms = res["maneuvers"]
@@ -143,7 +153,7 @@ def test_clean_tacks_found_typed_and_loss_close_to_truth():
 
 def test_entry_min_exit_speed_and_recovery_time():
     fixes, _ = sail([(300, "tack")], v=6.5, vmin_frac=0.5, turn_s=8, rec_s=30)
-    m = M.analyze(fixes)["maneuvers"][0]
+    m = analyze(fixes)["maneuvers"][0]
     assert m["entry_kn"] == pytest.approx(6.5, abs=0.3)
     assert m["min_kn"] == pytest.approx(3.25, abs=0.3)
     assert m["exit_kn"] < 4.5                       # still slow when the turn is over
@@ -156,7 +166,7 @@ def test_entry_min_exit_speed_and_recovery_time():
 def test_gybes_downwind():
     fixes, truth = sail([(300, "gybe"), (600, "gybe")], twa=150.0, v=8.0, vmin_frac=0.75,
                         turn_s=10, rec_s=15)
-    res = M.analyze(fixes)
+    res = analyze(fixes)
     ms = res["maneuvers"]
     assert [m["type"] for m in ms] == ["gybe", "gybe"]
     for m, tr in zip(ms, truth):
@@ -167,8 +177,8 @@ def test_gybes_downwind():
 def test_bigger_loss_reads_bigger():
     small, _ = sail([(300, "tack")], vmin_frac=0.8, rec_s=10)
     big, _ = sail([(300, "tack")], vmin_frac=0.4, rec_s=40)
-    a = M.analyze(small)["maneuvers"][0]["loss_m"]
-    b = M.analyze(big)["maneuvers"][0]["loss_m"]
+    a = analyze(small)["maneuvers"][0]["loss_m"]
+    b = analyze(big)["maneuvers"][0]["loss_m"]
     assert b > a * 2
 
 
@@ -176,8 +186,8 @@ def test_current_cancels_out_of_the_loss():
     """A steady current moves the baseline and the turn alike — the loss stays the same."""
     still, truth = sail([(300, "tack")])
     tide, _ = sail([(300, "tack")], current=(0.4, -0.3))
-    a = M.analyze(still)["maneuvers"][0]["loss_m"]
-    b = M.analyze(tide)["maneuvers"][0]["loss_m"]
+    a = analyze(still)["maneuvers"][0]["loss_m"]
+    b = analyze(tide)["maneuvers"][0]["loss_m"]
     assert b == pytest.approx(a, abs=4)
     assert a == pytest.approx(truth[0]["loss_m"], rel=0.12, abs=3)
 
@@ -186,7 +196,7 @@ def test_current_cancels_out_of_the_loss():
 def test_noisy_instruments_still_find_every_tack_and_nothing_else():
     fixes, truth = sail([(300, "tack"), (600, "tack"), (900, "tack"), (1200, "tack")], seed=7,
                         noise={"cog": 4, "twa": 5, "spd": 0.25, "pos_m": 1.5})
-    res = M.analyze(fixes)
+    res = analyze(fixes)
     assert [m["type"] for m in res["maneuvers"]] == ["tack"] * 4
     for m, tr in zip(res["maneuvers"], truth):
         assert m["loss_m"] == pytest.approx(tr["loss_m"], rel=0.15, abs=4)
@@ -200,14 +210,14 @@ def test_dead_run_flicker_is_not_a_gybe():
     for f in fixes:
         f["twa"] = round((180.0 + rng.gauss(0, 6)) % 360.0, 1)
         f["cog"] = round((180.0 + rng.gauss(0, 4)) % 360.0, 1)
-    res = M.analyze(fixes)
+    res = analyze(fixes)
     assert res["maneuvers"] == []
 
 
 def test_sparse_boat_log_three_second_fixes():
     """The boat log is thinned to a few thousand points — about 3 s apart on a long race."""
     fixes, truth = sail([(300, "tack"), (600, "tack")])
-    res = M.analyze(thin(fixes, 3))
+    res = analyze(thin(fixes, 3))
     assert [m["type"] for m in res["maneuvers"]] == ["tack", "tack"]
     for m, tr in zip(res["maneuvers"], truth):
         assert m["loss_m"] == pytest.approx(tr["loss_m"], rel=0.2, abs=5)
@@ -215,7 +225,7 @@ def test_sparse_boat_log_three_second_fixes():
 
 def test_tracker_fixes_too_far_apart_say_so():
     fixes, _ = sail([(300, "tack"), (600, "tack")])
-    res = M.analyze(thin(fixes, 120))           # a YB-style fix every 2 min
+    res = analyze(thin(fixes, 120))           # a YB-style fix every 2 min
     assert res["available"] is False
     assert "apart" in res["note"]
 
@@ -224,7 +234,7 @@ def test_gap_in_the_log_keeps_the_turn_but_not_its_loss():
     fixes, truth = sail([(300, "tack"), (600, "tack")])
     t_hole = (T0 + 600 + 5, T0 + 600 + 35)
     holed = [f for f in fixes if not (t_hole[0] <= f["t"] <= t_hole[1])]
-    res = M.analyze(holed)
+    res = analyze(holed)
     ms = res["maneuvers"]
     assert len(ms) == 2
     assert ms[0]["loss_m"] is not None and ms[0]["counted"]
@@ -235,12 +245,47 @@ def test_gap_in_the_log_keeps_the_turn_but_not_its_loss():
 def test_instrument_fault_window_is_flagged_and_left_out_of_averages():
     fixes, _ = sail([(300, "tack"), (600, "tack")])
     trust = {"available": True, "danger": {"heading": [(T0 + 580, T0 + 640)], "attitude": []}}
-    res = M.analyze(fixes, trust=trust)
+    res = analyze(fixes, trust=trust)
     a, b = res["maneuvers"]
     assert a["counted"] and a["trusted"]
     assert not b["trusted"] and not b["counted"]
     assert any("instrument" in fl for fl in b["flags"])
     assert res["summary"]["tack"]["n"] == 1
+
+
+def test_no_instrument_check_keeps_instrument_turns_out_of_the_averages():
+    fixes, _ = sail([(300, "tack"), (600, "tack")])
+    for trust in (None, {"available": False, "note": "check didn't run"}):
+        res = M.analyze(fixes, trust=trust)
+        assert res["trust_checked"] is False
+        assert len(res["maneuvers"]) == 2
+        for m in res["maneuvers"]:
+            assert m["loss_m"] is not None          # still measured and shown...
+            assert not m["trusted"] and not m["counted"]   # ...but not averaged
+            assert "instruments not checked" in m["flags"]
+        assert res["summary"]["tack"]["n"] == 0
+        assert "check didn't run" in res["note"]
+    # a GPS-only track has no instruments to check: its turns still count
+    res = M.analyze(strip_wind(fixes), trust=None)
+    assert all(m["counted"] for m in res["maneuvers"])
+
+
+def test_scattered_readings_across_dropouts_are_not_a_held_side():
+    """One wind reading every 40 s, sides alternating every few readings: no stretch is ever
+    held, so no turn — however many readings pile up on one side."""
+    class Tr:
+        pass
+    tr = Tr()
+    tr.t = [T0 + i for i in range(1200)]
+    tr.n = len(tr.t)
+    tr.dt = 1.0
+    twa = [None] * tr.n
+    for k, i in enumerate(range(0, tr.n, 40)):
+        twa[i] = 45.0 if (k // 15) % 2 == 0 else -45.0
+    assert M._sides(tr, twa) == []
+    # the same readings at 1 Hz with no dropouts are real held sides
+    twa = [45.0 if i < 600 else -45.0 for i in range(tr.n)]
+    assert [r[0] for r in M._sides(tr, twa)] == [1, -1]
 
 
 def test_missing_channels_on_some_fixes():
@@ -250,7 +295,7 @@ def test_missing_channels_on_some_fixes():
     for f in fixes:
         if T0 + 500 <= f["t"] <= T0 + 700:
             f["twa"] = f["tws"] = f["stw"] = None
-    res = M.analyze(fixes)
+    res = analyze(fixes)
     assert [m["type"] for m in res["maneuvers"]] == ["tack", "tack"]
     assert res["maneuvers"][1]["loss_m"] == pytest.approx(truth[1]["loss_m"], rel=0.15, abs=4)
     assert res["maneuvers"][1]["speed_source"] == "sog"
@@ -258,7 +303,7 @@ def test_missing_channels_on_some_fixes():
 
 def test_turns_too_close_together_have_no_loss():
     fixes, _ = sail([(300, "tack"), (330, "tack"), (700, "tack")])
-    res = M.analyze(fixes)
+    res = analyze(fixes)
     ms = res["maneuvers"]
     assert len(ms) == 3
     assert ms[2]["counted"]
@@ -279,7 +324,7 @@ def test_tack_into_bear_away_is_a_rounding_not_a_loss():
         f["t"] = last["t"] + 1 + i
         f["lat"] += dx_lat
         f["lon"] += dx_lon
-    res = M.analyze(up + down)
+    res = analyze(up + down)
     assert len(res["maneuvers"]) == 1
     m = res["maneuvers"][0]
     assert m["loss_m"] is None and not m["counted"]
@@ -289,7 +334,7 @@ def test_tack_into_bear_away_is_a_rounding_not_a_loss():
 # ---- GPS only (GPX / YB) ----------------------------------------------------------------------
 def test_gps_only_finds_tacks_with_low_confidence():
     fixes, truth = sail([(300, "tack"), (600, "tack"), (900, "tack"), (1200, "tack")])
-    res = M.analyze(strip_wind(fixes))
+    res = analyze(strip_wind(fixes))
     assert res["basis"] == "gps"
     assert res["confidence"] == "low"
     assert res["note"]
@@ -304,13 +349,13 @@ def test_gps_only_finds_tacks_with_low_confidence():
 def test_gps_only_with_a_wind_hint_types_gybes():
     fixes, _ = sail([(300, "gybe"), (600, "gybe"), (900, "gybe")], twa=150.0, v=8.0,
                     vmin_frac=0.75, turn_s=10, rec_s=15)
-    res = M.analyze(strip_wind(fixes), twd_hint=10.0)
+    res = analyze(strip_wind(fixes), twd_hint=10.0)
     assert [m["type"] for m in res["maneuvers"]] == ["gybe"] * 3
 
 
 def test_gps_only_follows_a_slow_wind_shift():
     fixes, _ = sail([(t, "tack") for t in range(300, 3900, 300)], twd_drift_deg_per_h=30.0)
-    res = M.analyze(strip_wind(fixes))
+    res = analyze(strip_wind(fixes))
     assert len(res["maneuvers"]) == 12
     assert all(m["type"] == "tack" for m in res["maneuvers"])
 
@@ -319,7 +364,7 @@ def test_gps_only_follows_a_slow_wind_shift():
 def test_summary_by_side_and_sail_setup():
     fixes, _ = sail([(300, "tack"), (600, "tack"), (900, "tack"), (1200, "tack")])
     sail_log = [{"t": T0, "flying": ["M", "J1"]}, {"t": T0 + 750, "flying": ["M", "J2"]}]
-    res = M.analyze(fixes, sail_log=sail_log)
+    res = analyze(fixes, sail_log=sail_log)
     assert [m["config"] for m in res["maneuvers"]] == ["J1+M", "J1+M", "J2+M", "J2+M"]
     s = res["summary"]
     assert s["tack"]["n"] == 4
@@ -332,16 +377,16 @@ def test_summary_by_side_and_sail_setup():
 
 
 def test_too_little_data():
-    res = M.analyze([])
+    res = analyze([])
     assert res["available"] is False
-    res = M.analyze([{"t": T0, "lat": LAT0, "lon": LON0}])
+    res = analyze([{"t": T0, "lat": LAT0, "lon": LON0}])
     assert res["available"] is False
 
 
 def test_shape_is_json_clean():
     import json
     fixes, _ = sail([(300, "tack")])
-    res = M.analyze(fixes)
+    res = analyze(fixes)
     json.dumps(res, allow_nan=False)
     m = res["maneuvers"][0]
     for k in ("id", "type", "t", "t_start", "t_end", "window", "lat", "lon", "from_side",
@@ -358,7 +403,7 @@ def test_endpoint_reads_the_stored_track(tmp_path, monkeypatch):
     monkeypatch.setattr(track, "TRACK_DIR", str(tmp_path))
     fixes, _ = sail([(300, "tack"), (600, "tack")])
     win = {"start_ts": T0, "end_ts": T0 + 900}
-    track.save_track("t-race", {"source": "boatlog", "fixes": fixes, "window": win,
+    track.save_track("t-race", {"source": "boatlog", "fixes": fixes, "window": win, "trust": CLEAN,
                                 "sail_log": [{"t": T0, "flying": ["M", "J1"]}]})
     client = TestClient(main.app)
     hdr = {"Authorization": "Bearer " + auth.issue_token()}
@@ -366,6 +411,7 @@ def test_endpoint_reads_the_stored_track(tmp_path, monkeypatch):
     assert r["available"] and r["recording"] == T0 and r["source"] == "boatlog"
     assert [m["type"] for m in r["maneuvers"]] == ["tack", "tack"]
     assert r["maneuvers"][0]["config"] == "J1+M"
+    assert r["trust_checked"] and all(m["counted"] for m in r["maneuvers"])
     r = client.get("/api/debrief/maneuvers?race_id=nothing", headers=hdr).json()
     assert r["available"] is False
     assert client.get("/api/debrief/maneuvers", headers=hdr).status_code == 422
