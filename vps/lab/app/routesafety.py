@@ -35,6 +35,7 @@ CHECKS = (("land", "Land"), ("depth", "Depth"), ("zones", "Race zones"),
           ("marks", "Marks and sides"), ("chart", "Chart covers route"))
 _RANK = {CHECKED: 0, NOT_CHECKED: 1, FAILED: 2}
 NOT_RUN = "Not checked."
+LAND_SOME_LEGS = "Land not checked on every leg."
 # which optimizer problem code (optimizer.route_safety) belongs to which check, and how it reads
 _PROBLEM_CHECK = {"land": ("land", NOT_CHECKED), "depth": ("depth", NOT_CHECKED),
                   "box": ("chart", FAILED), "blocked": ("marks", FAILED),
@@ -46,15 +47,19 @@ def _check(cid, state, texts=()):
     return {"id": cid, "label": label, "state": state, "texts": [t for t in texts if t]}
 
 
-def route_checks(problems, notes, has_fields):
+def route_checks(problems, notes, has_fields, land_everywhere=True):
     """[{id, label, state, texts}] for one routed course, from the optimizer's own problems and
     notes. `has_fields`: was any obstacle map built at all (no map: nothing but marks was checked).
     A leg through water no chart gives a depth for makes depth "not checked" (it is a note, never a
-    refusal); a depth grid that is not a chart still counts as checked, with its note."""
+    refusal); a depth grid that is not a chart still counts as checked, with its note.
+    `land_everywhere`: did every leg's map have land on it? One leg without is land not checked
+    (the refusal only fires when none has it, unchanged)."""
     got = {cid: [CHECKED, []] for cid, _l in CHECKS}
     if not has_fields:
         for cid in ("land", "depth", "zones", "chart"):
             got[cid][0] = NOT_CHECKED
+    elif not land_everywhere:
+        got["land"] = [NOT_CHECKED, [LAND_SOME_LEGS]]
     for p in problems or []:
         cid, state = _PROBLEM_CHECK.get(p.get("code"), (None, None))
         if cid is None:

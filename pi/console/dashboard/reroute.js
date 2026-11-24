@@ -41,14 +41,15 @@
   const CHECK_WORD = { checked: "checked", not_checked: "not checked", failed: "failed" };
 
   /* one route → its checks [{id, label, state, word, text}]. A route that doesn't list them (the
-     Pi's own route, an Orin from before #405) never reads as checked: land from what it says
-     about the shore, the rest not checked. */
+     Pi's own route, an Orin from before #405) never reads as checked: land only when it says
+     `chart.land === true` and no shore warning, the rest not checked. */
   function checksOf(r, orin, shore) {
     const got = {};
     if (Array.isArray(r.checks)) {
       r.checks.forEach((c) => { if (c && c.id) got[c.id] = c; });
     } else {
-      got.land = { state: shore ? "not_checked" : "checked",
+      // land counts only when the result says outright that the chart was used
+      got.land = { state: !shore && orin && r.chart && r.chart.land === true ? "checked" : "not_checked",
         texts: [orin ? "" : "Pi route: no shore check."] };
     }
     return CHECKS.map(([id, label]) => {

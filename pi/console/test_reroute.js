@@ -356,6 +356,9 @@ test("#405 routes that don't list checks never read as checked", () => {
   const old = v({ rr: done(Object.assign({}, CLEAN, { checks: undefined })) });
   assert.ok(!old.last.landUnchecked && !old.last.allChecked);
   assert.equal(old.last.checks[1].text, "Not reported.");
+  // an older result that says nothing about the chart: land not checked, never assumed
+  assert.equal(v({ rr: done(Object.assign({}, CLEAN, { checks: undefined, chart: undefined })) }).landBanner,
+    "Land not checked");
   // the same without the chart, and the Pi's own route: land not checked, red line up
   assert.equal(v({ rr: done(Object.assign({}, ORIN_ROUTE)) }).landBanner, "Land not checked");
   const pi = Object.assign({}, IDLE, { latest: "pi", pi: { state: "done", result: { available: true,

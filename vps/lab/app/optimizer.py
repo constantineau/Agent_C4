@@ -1952,7 +1952,9 @@ def route_safety(definition, course_id, marks, full_path, leg_end_idx, incomplet
               for lb, legs in sorted(grid_legs.items())]
     from . import routesafety           # #405: each check's own state, for the Lab and the iPad
     return {"ok": not problems, "problems": problems, "notes": notes, "overrides": overrides,
-            "checks": routesafety.route_checks(problems, notes, bool(fields))}
+            "checks": routesafety.route_checks(
+                problems, notes, bool(fields),
+                land_everywhere=all(getattr(f, "land", "off") == "ok" for f in fields))}
 
 
 # #51: the shoreline didn't load. Shown first on the route; the route is marked degraded.

@@ -643,6 +643,16 @@ sb = O.route_safety(course("port"), "c", [(0, "Start", LAT0, LON0), (1, "Finish"
                     Field(), None, False)
 check("off the chart's box: chart coverage failed", states(sb)["chart"] == "failed"
       and O.SAFE_BOX in sb["checks"][4]["texts"], sb["checks"])
+class NoLand(Field):
+    land = "off"
+
+
+sm = O.route_safety(course("port"), "c", [(0, "Start", LAT0, LON0), (1, "Finish", LAT0, LON0)],
+                    [{"lat": LAT0, "lon": LON0}, {"lat": LAT0, "lon": LON0}], [1], None,
+                    Field(), [NoLand()], False)
+check("one leg's map without land: land not checked (not refused: another map has it)",
+      states(sm)["land"] == "not_checked" and RS.LAND_SOME_LEGS in sm["checks"][0]["texts"]
+      and not any(p["code"] == "land" for p in sm["problems"]), sm["checks"][0])
 gd = RS.route_checks([], [{"code": "grid_depth:Lake grid", "text": "Depths from Lake grid.",
                            "legs": ["A → B"]}], True)
 check("depths from a grid that isn't a chart: checked, with its note",

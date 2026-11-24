@@ -466,6 +466,8 @@ def run(req, now=None, on_progress=None, on_phase=None, is_online=None):
                   for i in range(leg_count(d, cid))]
     field, chart_note = leg_fields[0] if leg_fields else \
         load_obstacles(d, cid, full, full_cid, boat, **chart_kw)
+    # #405: land is checked only if every leg's mask had it (the warning stays the first leg's)
+    land_note = chart_note or next((n for _f, n in leg_fields if n), None)
     leg_fields = [f for f, _n in leg_fields]
 
     # weather: the box the cache already holds, if one covers what's left of the course
@@ -575,7 +577,7 @@ def run(req, now=None, on_progress=None, on_phase=None, is_online=None):
             "chart": {"land": chart_note is None,
                       "source": (res.get("obstacles") or {}).get("source")},
             # #405: land, depth, zones, marks and chart coverage, each checked / not / failed
-            "checks": safety_checks(res.get("safety"), chart_note, bool(full)),
+            "checks": safety_checks(res.get("safety"), land_note, bool(full)),
         })
     out["run_s"] = round(time.time() - t_wall, 1)
     out["peak_rss_mb"] = _peak_rss_mb()
