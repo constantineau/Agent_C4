@@ -10,7 +10,8 @@
 # gets an area line here, or a reasoned entry in EXCLUDED.
 #
 # A file fails when it exits non-zero, or when it exits 0 but printed a "[FAIL]" check line.
-# Tests report skips as "[SKIP] reason" and accepted known failures as "[KNOWN-FAIL] reason (#issue)";
+# Tests report skips as "[SKIP] reason" and accepted known failures as "[KNOWN-FAIL] reason (#issue)"
+# (or a pytest xfail, whose reason names the issue);
 # both are listed in the summary at the end, so nothing is skipped silently.
 set -uo pipefail
 shopt -s globstar nullglob
@@ -53,6 +54,9 @@ run() {
     < <(grep -E '\[ *(SKIP|skip) *\]' <<<"$log")
   while IFS= read -r line; do known+=("$f: ${line#*] }"); done \
     < <(grep -E '\[KNOWN-FAIL\]' <<<"$log")
+  # pytest's expected failures (xfail, printed by -rx as "XFAIL <test> - reason") count too
+  while IFS= read -r line; do known+=("$f: ${line#XFAIL }"); done \
+    < <(grep -E '^XFAIL ' <<<"$log")
   if [[ $rc -eq 0 ]] && grep -qE '\[ *FAIL *\]' <<<"$log"; then
     rc=99; log+=$'\n'"(exited 0 but printed a [FAIL] check: the file does not exit non-zero on failure)"
   fi
@@ -66,7 +70,7 @@ area() {
   local svc=$1 wd=$2 pp=$3 f; shift 3
   for f in "$@"; do
     if grep -qE '^(import|from) pytest' "$f"; then
-      run "$svc" "$wd" "$pp" "$f" python3 -m pytest -q -p no:cacheprovider "/repo/$f"
+      run "$svc" "$wd" "$pp" "$f" python3 -m pytest -q -rx -p no:cacheprovider "/repo/$f"
     else run "$svc" "$wd" "$pp" "$f"; fi
   done
 }
