@@ -13,8 +13,10 @@ simulator. Synthetic wind, made-up boats, open water, no network.
   other boats     a keelboat, a heavy displacement cruiser, a multihull and a planing sportboat,
                   through the same cases (testdata/polars/)
 
-A case that shows a real optimizer bug is marked xfail(strict) with the reason; fixing the bug turns
-it into an XPASS, which fails, so the mark gets removed with the fix. Run with -s to see the numbers.
+A case that shows a real optimizer bug runs every other check as usual (the route completes, the
+tack count, the router never beats the polar); only the one assertion the bug breaks becomes an
+expected failure, via `_known_bug`. Once the bug is fixed that assertion passes and the test FAILS,
+so the entry gets removed with the fix. Run with -s to see the numbers.
 """
 import math
 
@@ -33,16 +35,28 @@ ETA_FAST = 0.01         # ...and never more than 1% faster (it can't beat the po
 CONVERGE_TOL = 0.025    # auto / fine / finer ETAs agree within 2.5%
 LEG_NM = 6.0
 
-# --- the bugs this suite found (left unfixed here, #407) -------------------------------------
+# --- the bugs this suite found (left unfixed here, #407; filed as #410 and #411) ----------------
 HOT_RUN = ("hot downwind angles: on a boat whose best run VMG is well above dead downwind "
            "(multihull, planing sportboat on the plane) a short run sails too deep and gybes "
            "late: 5-10% slow on 6 nm, 1-4% on 24 nm, and finer steps don't fix it. Turning off "
-           "the tack prune penalty (TACK_PRUNE_S) or the DMG prune brings it back (#407)")
+           "the tack prune penalty (TACK_PRUNE_S) or the DMG prune brings it back (#410)")
 OSC_PLAY = ("oscillating shifts: the 300 s tack prune penalty (TACK_PRUNE_S) stops the router "
             "tacking on headers; a simple tack-on-every-header sailor beats it by ~4%, and finer "
-            "steps make it worse. With TACK_PRUNE_S=30 it matches (#407)")
+            "steps make it worse. With TACK_PRUNE_S=30 it matches (#410)")
 REACH_STEP = ("fast reach: on the multihull the ETA jumps by up to 9% between resolutions "
-              "(the reach is quantized to the heading fan; a finer fan is not always closer) (#407)")
+              "(the reach is quantized to the heading fan; a finer fan is not always closer) (#411)")
+
+
+def _known_bug(why, ok, detail):
+    """The one assertion a known bug breaks. No bug listed: a plain assert. Bug listed and the
+    assertion fails: xfail (only reached after every other check passed). Bug listed and it
+    passes: fail, so the stale entry gets removed with the fix (a strict xfail)."""
+    if not why:
+        assert ok, detail
+    elif ok:
+        pytest.fail(f"known bug no longer shows, remove its entry: {why} ({detail})")
+    else:
+        pytest.xfail(f"{why} ({detail})")
 
 
 def _xy_path(leg):
@@ -75,9 +89,7 @@ def _steady_cases():
     for boat in F.BOATS:
         for tws in (6, 10, 14, 20):
             for kind in LEGS:
-                why = STEADY_XFAIL.get((boat, tws, kind))
-                marks = [pytest.mark.xfail(reason=why, strict=True)] if why else []
-                yield pytest.param(boat, tws, kind, marks=marks, id=f"{boat}-{tws}kn-{kind}")
+                yield pytest.param(boat, tws, kind, id=f"{boat}-{tws}kn-{kind}")
 
 
 @pytest.mark.parametrize("boat,tws,kind", list(_steady_cases()))
@@ -89,12 +101,22 @@ def test_steady_wind_time_and_tacks_match_the_polar(boat, tws, kind):
     eta = leg["eta"] / 3600.0
     print(f"{boat} {tws} kn {kind}: {eta:.3f} h vs {ref_h:.3f} h ({100 * _err(eta, ref_h):+.1f}%),"
           f" tacks {leg['tacks']} vs {ref_tacks}")
-    assert -ETA_FAST <= _err(eta, ref_h) <= ETA_TOL, (eta, ref_h, ha, hb)
+    assert _err(eta, ref_h) >= -ETA_FAST, (eta, ref_h, ha, hb)
     if kind in ("beat", "run"):
         # dead up/downwind: one tack/gybe is the answer; a second one only to tidy the layline
         assert 1 <= leg["tacks"] <= 2, leg["tacks"]
     else:
         assert leg["tacks"] <= 1, leg["tacks"]
+    _known_bug(STEADY_XFAIL.get((boat, tws, kind)), _err(eta, ref_h) <= ETA_TOL,
+               f"{eta:.3f} h vs {ref_h:.3f} h")
+
+
+def _seg_dist(p, a, b):
+    """Distance (nm) from point p to the segment a-b."""
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    L2 = dx * dx + dy * dy
+    u = 0.0 if L2 == 0 else max(0.0, min(1.0, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / L2))
+    return math.hypot(a[0] + u * dx - p[0], a[1] + u * dy - p[1])
 
 
 def _run_twa(leg, twd=0.0):
@@ -169,7 +191,6 @@ def test_oscillating_shift_tacks_more_than_a_persistent_one(amp, period):
 
 
 @pytest.mark.parametrize("amp,period", OSC)
-@pytest.mark.xfail(reason=OSC_PLAY, strict=True)
 def test_oscillating_shift_as_fast_as_tacking_on_headers(amp, period):
     P = F.polar("keelboat")
     mark = F.advance(F.LAT0, F.LON0, 0.0, 12.0)
@@ -179,7 +200,9 @@ def test_oscillating_shift_as_fast_as_tacking_on_headers(amp, period):
     eta = leg["eta"] / 3600.0
     print(f"osc +-{amp:.0f}/{period:.0f} min: router {eta:.3f} h ({leg['tacks']} tacks),"
           f" tack-on-headers {ref_h:.3f} h ({ref_tacks} tacks)")
-    assert eta <= ref_h * 1.01
+    assert ref_h is not None and eta >= ref_h * 0.9      # sanity: nowhere near beating it
+    assert leg["tacks"] >= 2, leg["tacks"]               # it does play some shifts
+    _known_bug(OSC_PLAY, eta <= ref_h * 1.01, f"{eta:.3f} h vs {ref_h:.3f} h")
 
 
 # --- known answers: tidal gate ------------------------------------------------------------------
@@ -241,7 +264,7 @@ def test_island_passed_on_the_short_side(brg, off):
     print(f"island brg {brg:.0f} off {off:+.1f}: router {eta:.3f} h side {took:+d},"
           f" short side {short:+d} {times[short]:.3f} h, long {times[-short]:.3f} h")
     assert took == short
-    clear = min(math.hypot(x - cxy[0], y - cxy[1]) for x, y in xy)
+    clear = min(_seg_dist(cxy, a, b) for a, b in zip(xy, xy[1:]))
     assert clear >= r - 0.1, clear
     assert -ETA_FAST <= _err(eta, times[short]) <= ETA_TOL
 
@@ -281,16 +304,15 @@ def _conv_cases():
         ("sportboat run 14", sb, lambda: F.steady(14, 0.0), 180.0, 6.0, HOT_RUN),
     ]
     for name, boat, wf, brg, dist, why in cases:
-        marks = [pytest.mark.xfail(reason=why, strict=True)] if why else []
-        yield pytest.param(boat, wf, brg, dist, marks=marks, id=name)
+        yield pytest.param(boat, wf, brg, dist, why, id=name)
 
 
-@pytest.mark.parametrize("boat,wf,brg,dist", list(_conv_cases()))
-def test_finer_steps_barely_move_the_eta(boat, wf, brg, dist):
+@pytest.mark.parametrize("boat,wf,brg,dist,why", list(_conv_cases()))
+def test_finer_steps_barely_move_the_eta(boat, wf, brg, dist, why):
     P = F.polar(boat)
     etas = {name: _leg(wf(), P, brg, dist=dist, res=res)["eta"] / 3600.0
             for name, res in (("auto", AUTO), ("fine", FINE), ("finer", FINER))}
     spread = max(etas.values()) / min(etas.values()) - 1.0
     print(f"{boat} brg {brg:.0f}: " + ", ".join(f"{k} {v:.3f} h" for k, v in etas.items())
           + f"; spread {100 * spread:.1f}%")
-    assert spread <= CONVERGE_TOL, etas
+    _known_bug(why, spread <= CONVERGE_TOL, f"spread {100 * spread:.1f}%")
