@@ -89,6 +89,42 @@ def test_no_wind_refuses():
     assert RT.sail_path(north(4), Calm(), P, T0) is None
 
 
+def _brute_smg(tws, twa, step=0.5):
+    """Best speed made good along `twa` over EVERY heading and every pair of headings (one
+    each side of the bearing), by brute force: the polar's convex hull along that bearing."""
+    def vec(a):
+        v = JD.optimizer._polar_speed(P, tws, abs(a))
+        return (v * math.cos(math.radians(a)), v * math.sin(math.radians(a)))
+    u = (math.cos(math.radians(twa)), math.sin(math.radians(twa)))
+    heads = [vec(-180 + i * step) for i in range(int(360 / step) + 1)]
+    heads = [h for h in heads if h != (0.0, 0.0)]
+    best = JD.optimizer._polar_speed(P, tws, twa)
+    for pa in heads:
+        if pa[0] * u[1] - pa[1] * u[0] < 0:          # keep pa on the bearing's left...
+            continue
+        for pb in heads:
+            if pb[0] * u[1] - pb[1] * u[0] > 0:      # ...and pb on its right
+                continue
+            dx, dy = pb[0] - pa[0], pb[1] - pa[1]
+            den = u[0] * dy - u[1] * dx
+            if abs(den) > 1e-9:
+                sp = (pa[0] * dy - pa[1] * dx) / den
+                best = max(best, sp)
+    return best
+
+
+@pytest.mark.parametrize("tws", [8, 12, 18])
+def test_two_boards_at_vmg_are_the_best_inside_the_angles(tws):
+    """Codex on #412 asked whether V(beat)cos(beat)/cos(twa) undersells a bearing just inside the
+    beat angle. It doesn't: it matches a brute-force search over every pair of headings."""
+    beat = JD.optimizer._vmg_twa_cached(P, tws, "beat")
+    run = JD.optimizer._vmg_twa_cached(P, tws, "run")
+    for twa in (0, beat / 2, beat - 5, beat - 1, run + 1, (run + 180) / 2, 180):
+        got, _ = RT._along_speed(P, tws, twa)
+        brute = _brute_smg(tws, twa)
+        assert got == pytest.approx(brute, rel=0.01), (tws, twa, got, brute)
+
+
 def test_held_wind_past_the_field_counts_missing():
     class Ends(WF):                       # real wind for the first 20 min only, then held
         def detail_at(self, lat, lon, t):
@@ -156,6 +192,50 @@ def test_no_saved_route_falls_back_and_says_so(tactics):
     assert reg["kind"] == "vs_forecast" and reg["minutes"] == 15
     assert reg["forecast_error_minutes"] is None
     assert "forecast error" in reg["split_note"] and "forecast error" in tac["caveat"]
+
+
+class Window(WF):
+    """Hourly analyses from the gun to `hours` past it."""
+    def __init__(self, hours):
+        super().__init__()
+        self.series = {("hrrr", "det"): [Frame(T0 + h * 3600) for h in range(0, int(hours) + 1)]}
+        self.meta = [{"model": "hrrr", "cycle": AR.ANALYSIS_CYCLE, "frames": int(hours) + 1}]
+
+
+def test_window_reaches_the_recorded_finish_and_the_routed_finish(monkeypatch):
+    asked = []
+
+    def oracle_wind(bbox, start, t_end, *a, **k):
+        asked.append((t_end - start) / 3600)
+        return Window((t_end - start) / 3600), "analyses"
+    monkeypatch.setattr(JD, "_oracle_windfield", oracle_wind)
+    monkeypatch.setattr(JD.optimizer, "estimate_hours", lambda *a, **k: 4.0)
+    routed = {"n": 0}
+
+    def opt(*a, **k):
+        routed["n"] += 1
+        return {**ORACLE, "total_hours": 9.0}          # the best route takes longer than both
+    monkeypatch.setattr(JD.optimizer, "optimize_course", opt)
+    monkeypatch.setattr(CURMOD, "build_currentfield", lambda *a, **k: CURMOD.ConstantCurrent(0, 0))
+    monkeypatch.setattr(WAVEMOD, "build_wavefield", lambda *a, **k: WAVEMOD.ConstantWave(0.0))
+    tac = JD._tactics(NS, "r", _pb(PATH), None, lambda *_: None, boat={"boat_id": "c4"},
+                      finish_hint=T0 + 6 * 3600)
+    assert asked[0] == pytest.approx(7.0)               # the recording's end + 1 h, not 4 h
+    assert asked[1] == pytest.approx(10.0) and routed["n"] == 2   # widened to the routed finish
+    assert tac["weather"]["hours"] >= 10 and tac["weather"]["hours_uncovered"] == 0
+
+
+def test_a_recording_far_past_the_gun_doesnt_size_the_window(monkeypatch):
+    asked = []
+    monkeypatch.setattr(JD, "_oracle_windfield",
+                        lambda b, s, e, *a, **k: asked.append((e - s) / 3600) or (WF(), "archive"))
+    monkeypatch.setattr(JD.optimizer, "estimate_hours", lambda *a, **k: 4.0)
+    monkeypatch.setattr(JD.optimizer, "optimize_course", lambda *a, **k: dict(ORACLE))
+    monkeypatch.setattr(CURMOD, "build_currentfield", lambda *a, **k: CURMOD.ConstantCurrent(0, 0))
+    monkeypatch.setattr(WAVEMOD, "build_wavefield", lambda *a, **k: WAVEMOD.ConstantWave(0.0))
+    JD._tactics(NS, "r", _pb(PATH), None, lambda *_: None, boat={"boat_id": "c4"},
+                finish_hint=T0 + 30 * 86400)
+    assert asked == [4.0]
 
 
 def test_report_carries_the_weather(tactics):

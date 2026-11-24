@@ -210,7 +210,10 @@ def run_judge(race_id, playbook_id=None, models=None, on_progress=None, recordin
         return {"available": False, "playbooks": pbs,
                 "note": "Nothing to debrief yet. Upload a GPX above, or load the boat's log for "
                         "a race." if not no_race else "No track for this sail on the boat log."}
-    tac = _tactics(d, race_id, pb, models, log, boat=boat) if pb else {
+    # the recorded finish sizes the oracle's wind window (#404): a slow race outlasts the estimate
+    _span = _track_span(t, float((pb or {}).get("start_epoch") or 0)) if (pb and t) else None
+    tac = _tactics(d, race_id, pb, models, log, boat=boat,
+                   finish_hint=_span[1] if _span else None) if pb else {
         "available": False,
         "note": NO_RACE_NOTE if no_race else
                 "No frozen playbook for this race, so this checks speed only. Freeze a playbook "
@@ -409,7 +412,10 @@ def _oracle_boat_kwargs(boat, pb):
     return kw, boat_from
 
 
-def _tactics(d, race_id, pb, models, log, boat=None):
+MAX_RACE_S = 7 * 86400       # a recording longer than this past the gun isn't the race window
+
+
+def _tactics(d, race_id, pb, models, log, boat=None, finish_hint=None):
     """The tactics half: the hindsight-optimal route on the wind that actually blew, vs the frozen
     plan. Every refusal names itself and carries `start_epoch` where it knows it, so the caller can
     still score the boat's own speed.
@@ -419,7 +425,10 @@ def _tactics(d, race_id, pb, models, log, boat=None):
     was routed on, so sea-state and helm losses are not blamed on route choice. The plan's predicted
     hours were routed by the playbook WITH its forecast current and waves and that boat model, so
     both sides of the gap are on the same speed basis. Helm and sea-state losses get their own
-    lines once the actual track is scored."""
+    lines once the actual track is scored.
+
+    `finish_hint`: when the recording ended (epoch). The wind window runs at least that far, and
+    once routed it must reach the routed finish (#404, Codex on #412)."""
     if boat is None:
         boat = boats.active_boat() or {}
     course_id = pb.get("course_id")
@@ -431,6 +440,8 @@ def _tactics(d, race_id, pb, models, log, boat=None):
         return {"available": False, "start_epoch": start, "note": "course has no geocoded marks"}
     hours = optimizer.estimate_hours(d, course_id)
     t_end = start + hours * 3600
+    if finish_hint and start < finish_hint <= start + MAX_RACE_S:
+        t_end = max(t_end, float(finish_hint) + 3600)
     pv_models = (pb.get("provenance") or {}).get("models") or None
     wf, wind_basis = _oracle_windfield(bbox, start, t_end, models or pv_models, race_id, log)
     # The actual-current and sea-state fields come BEFORE any refusal below: every return from here
@@ -465,6 +476,21 @@ def _tactics(d, race_id, pb, models, log, boat=None):
         oracle_wv = ZeroWave()     # the boat's own speed is still scored on `wv`
     oracle = optimizer.optimize_course(d, course_id, start, wf, avoid=True, cur=cur,
                                        waves=oracle_wv, **boat_kw)
+    # The analyses must reach the ROUTED finish (the best route's, or the plan's if later), not
+    # just the estimate: past their last frame the field holds stale wind (Codex on #412). Widen
+    # the window once and route again; `describe` below reports any hours still uncovered.
+    routed_end = start + max(oracle.get("total_hours") or 0, _plan_route(pb)[0] or 0) * 3600
+    if wind_basis == "analyses" and routed_end + 3600 > t_end \
+            and not _enough_analyses(wf, start, routed_end):
+        log("the best route runs past the hourly analyses — widening the window and routing again…")
+        t_end = routed_end + 3600
+        wf2, basis2 = _oracle_windfield(bbox, start, t_end, models or pv_models, race_id, log)
+        if wf2.loaded:
+            wf, wind_basis = wf2, basis2
+            oracle = optimizer.optimize_course(d, course_id, start, wf, avoid=True, cur=cur,
+                                               waves=oracle_wv, **boat_kw)
+            routed_end = start + max(oracle.get("total_hours") or 0,
+                                     _plan_route(pb)[0] or 0) * 3600
     plan_polar = ((pb.get("routing") or {}).get("polar") or {}).get("version")
     now_polar = (boat_kw.get("boat_polar") or {}).get("version")
     basis = _regret_basis(cur, wv, boat_from, plan_waves,
@@ -509,7 +535,8 @@ def _tactics(d, race_id, pb, models, log, boat=None):
         fc_err_h = (plan_on_h - predicted) if predicted else None
     else:
         regret_h, regret_kind, fc_err_h = vs_forecast_h, "vs_forecast", None
-    weather = oraclewind.describe(wf, wind_basis, start, t_end)
+    weather = oraclewind.describe(wf, wind_basis, start,
+                                  max(t_end, routed_end, start + (plan_on_h or 0) * 3600))
     rec_side = pb.get("recommended")
     variants = [{"side": v.get("id") or v.get("side"), "total_hours": v.get("total_hours"),
                  "share": v.get("share")} for v in (pb.get("variants") or [])]

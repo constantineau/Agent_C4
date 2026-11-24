@@ -36,7 +36,15 @@ def boat_table(boat_polar, polar_adjustments=None):
 
 def _along_speed(P, tws, twa):
     """Speed made good along a bearing `twa` off the wind: the polar where the boat can point
-    there, else beating or gybing at the best VMG angle."""
+    there, else two boards at the best VMG angle (beating or gybing).
+
+    Two boards at the VMG angle are the best possible inside it, not an approximation: in
+    velocity space the boat can make any mix of two headings, and the upwind edge of that
+    hull is the straight segment between the two VMG-angle points, both at the same upwind
+    component V(beat)·cos(beat). Along a bearing `twa` inside it that gives
+    V(beat)·cos(beat)/cos(twa); pinching straight at `twa` can't beat it, or `beat` wouldn't be
+    the VMG angle. Same downwind. `test_debrief_weather_basis` checks this against a brute-force
+    search over every pair of headings (Codex on #412 asked)."""
     beat = OPT._vmg_twa_cached(P, tws, "beat")
     run = OPT._vmg_twa_cached(P, tws, "run")
     if beat is not None and twa < beat:
