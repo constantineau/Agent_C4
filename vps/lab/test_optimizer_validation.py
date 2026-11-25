@@ -228,6 +228,22 @@ def test_arrival_prune_keeps_a_boat_the_wind_fills_in_for(band):
     assert plain["eta"] / 3600 <= FILL_MAX_H[band]
 
 
+@pytest.mark.parametrize("boat,tws,brg", [("planing_sportboat", 20, 180.0),
+                                           ("planing_sportboat", 14, 170.0),
+                                           ("multihull", 14, 180.0), ("multihull", 20, 180.0)])
+def test_short_run_stops_for_the_layline_gybe(boat, tws, brg):
+    # a 0.8 nm run, shorter than one step: the first lay found (straight down) arrives late, but
+    # the gybe on the layline, ending at the mark part way through the step, gets there sooner.
+    # The search must not stop on the first lay as if every next move took a whole step
+    # (#419 review: 20-43% slow).
+    P = F.polar(boat)
+    ref_h = F.two_board_time_h(P, tws, 0.0, 0.8, brg, O.tack_cost_s())[0]
+    leg = _leg(F.steady(tws, 0.0), P, brg, dist=0.8, res=AUTO)
+    eta = leg["eta"] / 3600.0
+    print(f"{boat} {tws} kn short run: {eta * 3600:.0f} s vs {ref_h * 3600:.0f} s")
+    assert -ETA_FAST <= _err(eta, ref_h) <= ETA_TOL, (eta, ref_h)
+
+
 # --- known answers: tidal gate ------------------------------------------------------------------
 def test_tidal_gate_go_when_the_stream_is_beatable():
     # 2 kn foul for an hour, then fair: going now beats waiting, and the router goes

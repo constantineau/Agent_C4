@@ -1063,17 +1063,19 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, deadline=None,
                            "pl": node.get("pl", 0) + (1 if is_peel else 0),
                            "board_filled": board_borrowed(node["lat"], node["lon"], node["t"],
                                                           dlat, dlon, t_arr)}
-        # Stop once the next generation can't arrive sooner. Its nodes are at least a step later, but
-        # near the mark the step shrinks (ENDGAME_DT), so a node one short step on can still close
-        # first; stopping at the first lay missed it (#410).
-        if reached and (not local or
-                        reached["t"] <= min(n[0]["t"] for n in local) + gen_dt * 3600.0):
-            break
-        if reached and v_top:
-            # only nodes that could still beat it sail on: even straight at the mark at the boat's
-            # top speed anywhere on its polar (any wind; helm above 1 included) the rest can't get
-            # there sooner. Keeps the extra steps cheap. No bound in a current: all sail on.
-            local = [n for n in local if n[0]["t"] + n[3] / v_top * 3600.0 < reached["t"]]
+        # Once a lay is found, only nodes that could still beat it sail on, and the search stops when
+        # none can (#410). A node can't get there sooner than straight at the mark at the boat's top
+        # speed anywhere on its polars (any wind; helm above 1 included). No step-length floor: the
+        # endgame shrinks the step, and a layline tack ends early when its second board reaches the
+        # mark (#419 review). In a current there is no speed bound here: every node not yet past
+        # the arrival sails on.
+        if reached:
+            if v_top:
+                local = [n for n in local if n[0]["t"] + n[3] / v_top * 3600.0 < reached["t"]]
+            else:
+                local = [n for n in local if n[0]["t"] < reached["t"]]
+            if not local:
+                break
         for node, tws, twd, dmark, bmark in local:
             # CONE GATE: only fan headings within a wide cone of the bearing-to-mark (drops the
             # truly-backward third), plus the VMG-optimal angles (always kept). If the whole cone is
