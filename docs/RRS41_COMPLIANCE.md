@@ -344,7 +344,7 @@ the race log's session lock, so a session can't start in between. A refusal is
 
 | Endpoint | Sender | While racing | Why |
 |---|---|---|---|
-| POST /course/load | Lab Deploy | **Refused** | Shore homework. A course shortened mid-race: the crew uses the practice course (POST /course/practice), or taps Race over first. |
+| POST /course/load | Lab Deploy | **Refused** | Shore homework. A course shortened mid-race: the crew changes it aboard (POST /course/edit), or taps Race over first. |
 | POST /fleet/load | Lab Deploy | **Refused** | Shore homework (roster, scoring, own rating). |
 | POST /playbook/load | Lab Deploy | **Refused** | Shore-computed strategy: the core of the rule. When taken, the engine forwards the bundle to the Orin copilot (COPILOT_URL, over the cable) while it still holds the session lock, and reports the Orin's answer under `copilot`. |
 | POST /checklist/load | Lab Deploy | **Refused** | Shore homework. |
@@ -358,6 +358,7 @@ the race log's session lock, so a session can't start in between. A refusal is
 | POST /session/start, /session/end | iPad | Taken | The race log itself. |
 | POST /course/practice | iPad | Taken | Built onboard from live position + wind. |
 | POST /navigator/start, /navigator/undo, /navigator/mark | iPad | Taken | The crew's own navigation: a new run, undo a mark, pick the next mark. |
+| POST /course/edit | iPad | Taken | The crew's own change to the course aboard (#406): skip to a mark, finish at a mark, change a side, undo. Built from the Lab's course already aboard; nothing comes from shore. |
 | POST /gps/show, /gps/clear | iPad | Taken | Sends what's aboard to the plotter; computes nothing ashore. |
 | POST /reoptimize/run, /reroute/run | iPad | Taken | Onboard re-routes (Pi / Orin) on public data. |
 

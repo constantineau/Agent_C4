@@ -837,6 +837,53 @@ for w_ in (job.NOT_DEPLOYED_BOAT, job.BAD_BOAT, job.OTHER_BOAT, job.NO_POLAR,
            job.NOT_DEPLOYED_POLAR):
     check(f"short: {w_!r}", len(w_.split()) <= 12)
 
+print("3e6b) a course changed aboard (#406): revisions, and the chart built for the Lab's course")
+from shared import courseedit  # noqa: E402
+
+SIDE = courseedit.apply_edits(DEF, "c", [{"op": "rounding", "pos": 0, "name": "North",
+                                          "side": "starboard"}])
+SHORT = courseedit.apply_edits(DEF, "c", [{"op": "finish_at", "pos": 2, "name": "Gate"}])
+
+
+def lo_edit(defn, base, chart=None):
+    d_, c_, _n = job.remaining_definition(defn, "c", 2, 44.2, -82.2)
+    return job.load_obstacles(d_, c_, defn, "c", REPO_BOAT, chart=chart or good,
+                              base_definition=base)
+
+
+check("a changed rounding side, no base sent → the chart is out of date, as before",
+      lo_carried(SIDE, good)[1] == job.OLD_CHART)
+check("a changed rounding side over the Lab's course → the Lab's chart still checks the shore",
+      lo_edit(SIDE, DEF)[1] is None)
+f_sh, n_sh = lo_edit(SHORT, DEF)
+check("a shortened finish over the Lab's course → the chart still checks the shore",
+      n_sh is None and f_sh.blocked(43.95, -82.95))
+NEWZONE = dict(SIDE, zones=[ZONE])
+f_nz, n_nz = lo_edit(NEWZONE, DEF)
+check("a new zone across the route (new water) → land not checked, said plainly",
+      n_nz == job.CHANGED_ABOARD and len(job.CHANGED_ABOARD.split()) <= 12)
+check("…and the new zone is still avoided", f_nz.blocked(44.55, ZLON))
+check("a base the chart wasn't built for → out of date", lo_edit(SIDE, DEF2)[1] == job.OLD_CHART)
+MOVED = json.loads(json.dumps(SIDE))
+MOVED["courses"][0]["marks"][0]["lat"] = 44.05
+check("a moved mark over the Lab's course → land not checked", lo_edit(MOVED, DEF)[1]
+      == job.CHANGED_ABOARD)
+REV = {"number": 3, "at": NOW - 60, "origin": "boat", "base": 1}
+out_sh = job.run(dict(REQ, definition=SHORT, base_definition=DEF, revision=REV, assets=CARRY),
+                 now=NOW, is_online=lambda: False)
+check("the run on a shortened course names its revision",
+      out_sh["course_revision"] == {"number": 3, "at": NOW - 60, "origin": "boat"})
+check("…finishes at the shortened finish", out_sh["complete"] and out_sh["marks"] == ["Finish"]
+      and abs(out_sh["points"][-1]["lat"] - 44.9) < 0.05)
+check("…land checked with the Lab's chart, and says which revision it was built for",
+      out_sh["chart"]["land"] is True and out_sh["chart"].get("built_for_revision") == 1
+      and job.CHANGED_ABOARD not in out_sh["warnings"])
+check("a request with no revision (an older Pi) → none named", out["course_revision"] is None)
+LABREV = dict(DEF, course_revision={"number": 4, "at": NOW - 9, "origin": "lab", "edits": []})
+check("…else the one stamped in the definition", job.run(
+    dict(REQ, definition=LABREV), now=NOW, is_online=lambda: False)["course_revision"]
+      == {"number": 4, "at": NOW - 9, "origin": "lab"})
+
 print("3e7) the deployed boat's polar (#304)")
 from shared import boat_polar  # noqa: E402
 

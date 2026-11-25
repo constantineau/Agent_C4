@@ -141,9 +141,13 @@
     if (shore) labels.push("Route doesn't check the shore");
     const other = warns.filter((x) => x.indexOf("check the shore") < 0 &&
       !(r.complete === false && x === "Route incomplete.")).slice(0, 2);
+    // which course revision the route sailed (#406): a course changed aboard says so
+    const cr = r.course_revision || null;
+    const rev = cr && cr.number ? "Course rev " + cr.number +
+      (cr.origin === "boat" ? " · changed aboard" : cr.origin === "lab" ? " · from the Lab" : "") : "";
     const checks = checksOf(r, orin, shore);
     const landCheck = checks[0];
-    return { source: src.source, engine: orin ? "Orin" : "Pi", head: head, wx: wx, who: who,
+    return { source: src.source, engine: orin ? "Orin" : "Pi", head: head, wx: wx, who: who, rev: rev,
       shape: bits.join(" · "), labels: labels, warnings: other,
       checks: checks, allChecked: checks.every((c) => c.state === "checked"),
       landUnchecked: landCheck.state !== "checked",

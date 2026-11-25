@@ -73,13 +73,41 @@ def _definition_path():
     return os.path.join(_dir(), "course-definition.json")
 
 
+def _revision_path():
+    return os.path.join(_dir(), "course-revision.json")
+
+
+def next_revision(stated=None):
+    """The next course revision number (#406): one more than any this Pi has given, and never
+    below a number the incoming definition already carries. Kept in its own file, so a dropped
+    definition never resets the count. Raises OSError when it can't be written."""
+    from shared import courseedit
+    with _LOCK:
+        last = (_read(_revision_path()) or {}).get("number")
+        last = last if isinstance(last, int) and not isinstance(last, bool) else 0
+        want = (courseedit.summary(stated) or {}).get("number") or 0
+        n = max(last + 1, want)
+        _write(_revision_path(), json.dumps({"number": n}))
+    return n
+
+
 def _write(path, text):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), suffix=".part")
     try:
         with os.fdopen(fd, "w") as f:
             f.write(text)
+            f.flush()
+            os.fsync(f.fileno())          # on disk before the rename: the Pi loses power on boats
         os.replace(tmp, path)
+        try:
+            dfd = os.open(os.path.dirname(path), os.O_RDONLY)
+            try:
+                os.fsync(dfd)             # and the rename itself
+            finally:
+                os.close(dfd)
+        except OSError:
+            pass
     finally:
         if os.path.exists(tmp):
             os.remove(tmp)
@@ -194,9 +222,14 @@ def prepare_definition(definition, course_id, route, load_id=None):
     keep = {"race_id": d.get("race_id"), "name": d.get("name"), "timezone": d.get("timezone"),
             "courses": [course], "zones": d.get("zones") or []}
     flat, _skip, _cid = course_to_marks(keep, course.get("id"))
+    # every Deploy load is a new course revision from the Lab (#406); edits aboard start over
+    rev_n = next_revision(d.get("course_revision"))
+    revision = {"number": rev_n, "at": int(time.time()), "origin": "lab", "base": rev_n}
+    keep["course_revision"] = dict(revision, edits=[])
     rec = {"route": route, "course_id": course.get("id"), "saved_at": int(time.time()),
            "load_id": load_id,
-           "marks_hash": _marks_hash([(n, a, o) for _s, n, a, o in flat]), "definition": keep}
+           "marks_hash": _marks_hash([(n, a, o) for _s, n, a, o in flat]), "definition": keep,
+           "revision": revision, "edits": [], "base_definition": None}
     path = _definition_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), suffix=".part")
@@ -249,21 +282,136 @@ def save_definition(definition, course_id, route):
 def _definition_for(route, marks):
     """The stored definition, if it's the course the navigator holds: same route and the same marks
     (names AND positions, by the hash stored with it)."""
+    rec = record_for(route, marks)
+    if rec is None:
+        return None, None
+    return rec["definition"], rec.get("course_id")
+
+
+def record_for(route, marks):
+    """The whole stored course record (definition, revision, edits aboard, the Lab's base), if it
+    is the course the navigator holds, else None. See `_definition_for`. A course edit cut off half
+    way (power lost) is finished or undone first (`recover`)."""
+    if recover_if_needed():
+        marks = NAV._marks(route) or marks          # recovery may have put other marks back
     rec = _read(_definition_path())
     if not rec or rec.get("route") != route or not rec.get("marks_hash"):
-        return None, None
+        return None
     # the same LOAD as the marks aboard (a definition from another load of the same marks may carry
     # other zones)
     cur = _read(_load_id_path()) or {}
     if not rec.get("load_id") or cur.get("load_id") != rec["load_id"] or cur.get("route") != route:
-        return None, None
+        return None
     try:
         have = _marks_hash([(m.get("name"), m.get("lat"), m.get("lon")) for m in marks])
     except (TypeError, ValueError):
-        return None, None
-    if have != rec["marks_hash"]:
-        return None, None
-    return rec["definition"], rec.get("course_id")
+        return None
+    if have != rec["marks_hash"] or not isinstance(rec.get("definition"), dict):
+        return None
+    return rec
+
+
+def base_definition(rec):
+    """The Lab's deployed definition under the edits made aboard (#406), or None when there are
+    none (the definition aboard IS the Lab's)."""
+    b = (rec or {}).get("base_definition")
+    return b if isinstance(b, dict) and (rec or {}).get("edits") else None
+
+
+def _journal_path():
+    return os.path.join(_dir(), "course-edit-journal.json")
+
+
+def begin_edit(route, old_rec, new_rec, nav_index=None, progress=None):
+    """A course edit aboard (#406) changes three stores one after the other: the navigator's marks,
+    the load id, the course record. Before the first, both records go to a journal (on disk), so a
+    power cut part way is put right on the next read (`recover`). With them: the navigator's run
+    before the edit (`progress`, put back if the cut lost it between the marks and the run) and
+    the next mark the edit sets (`nav_index`: a skip, or its undo). Caller holds COURSE_LOCK."""
+    with _LOCK:
+        _write(_journal_path(), json.dumps({"route": route, "old": old_rec, "new": new_rec,
+                                            "nav_index": nav_index, "progress": progress},
+                                           separators=(",", ":")))
+
+
+def end_edit():
+    try:
+        with _LOCK:
+            os.remove(_journal_path())
+    except FileNotFoundError:
+        pass
+
+
+# set while recover() runs (its own pick_mark must not start it again) or while a course edit
+# writes its stores (courserev.edit: a navigator call inside it must not "recover" the edit
+# half way). Only ever set by the thread holding COURSE_LOCK, so other threads just wait.
+_RECOVERING = []
+
+
+def recover_if_needed():
+    """Run `recover` when a journal is on disk (a cheap check; called before every course record
+    read and every navigator read or move, and at engine start)."""
+    if not os.path.exists(_journal_path()):
+        return False                  # (a run in progress holds COURSE_LOCK: recover() waits)
+    return recover()
+
+
+def recover():
+    """Finish or undo a course edit that a power cut stopped part way. The marks aboard decide:
+    the new course's marks (or the new load id, for an edit that kept the marks) → finish it (load
+    id + record); the old course's marks → back to the old record and load id. Neither → leave
+    the stores as they are (the record then doesn't pair, and is not used). Returns True when it
+    changed anything. Never raises."""
+    try:
+        with COURSE_LOCK:
+            if _RECOVERING:
+                return False
+            _RECOVERING.append(1)
+            try:
+                return _recover()
+            finally:
+                _RECOVERING.clear()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[course/edit] recovery failed: {type(exc).__name__}: {exc}", flush=True)
+        return False
+
+
+def _recover():
+    """The work of `recover`; caller holds COURSE_LOCK with _RECOVERING set."""
+    j = _read(_journal_path())
+    if not isinstance(j, dict) or not isinstance(j.get("new"), dict) \
+            or not isinstance(j.get("old"), dict):
+        end_edit()
+        return False
+    route, old, new = j.get("route"), j["old"], j["new"]
+    have = _marks_hash([(m.get("name"), m.get("lat"), m.get("lon"))
+                        for m in NAV._marks(route) or []])
+    load = (_read(_load_id_path()) or {}).get("load_id")
+    if have == new.get("marks_hash") and (load == new.get("load_id")
+                                          or have != old.get("marks_hash")):
+        keep = new
+    elif have == old.get("marks_hash"):
+        keep = old
+    else:
+        end_edit()
+        return False
+    set_load_id(route, keep.get("load_id"))
+    write_record(keep)
+    # the run, if the cut came between the marks and the run; then the edit's next mark
+    NAV.restore_progress(route, j.get("progress"))
+    nav = j.get("nav_index")
+    if keep is new and isinstance(nav, int) and not isinstance(nav, bool):
+        NAV.pick_mark(nav, route)
+    end_edit()
+    print(f"[course/edit] recovered after a cut: kept the {'new' if keep is new else 'old'}"
+          " course", flush=True)
+    return True
+
+
+def write_record(rec):
+    """Replace the stored course record (a course edit aboard, #406). Caller holds COURSE_LOCK."""
+    with _LOCK:
+        _write(_definition_path(), json.dumps(rec, separators=(",", ":")))
 
 
 def _plan_track():
@@ -328,16 +476,27 @@ def _build_request(device):
     if s.get("lat") is None or s.get("lon") is None:
         return None, NO_POSITION
     nxt = _next_course_index(nav, marks)
-    definition, cid = _definition_for(nav["route"], marks)
+    rec = record_for(nav["route"], marks)
+    definition, cid = (rec["definition"], rec.get("course_id")) if rec else (None, None)
+    base = base_definition(rec)
+    from shared import courseedit
+    revision = courseedit.summary((rec or {}).get("revision"))
     req = {"device": _device(device), "asked_at": int(time.time()),
            "position": {"lat": s["lat"], "lon": s["lon"], "t": int(time.time())},
            "route": nav["route"], "next_index": nxt,
            "marks": [{"seq": m.get("seq"), "name": m.get("name"), "lat": m.get("lat"),
                       "lon": m.get("lon")} for m in marks],
            "definition": definition, "course_id": cid, "plan": _plan_track(),
-           # the Lab's signed chart overrides: the only marks the Orin opens a pocket at (#242)
-           "overrides": _overrides(definition, cid),
-           "course_hash": course_hash(nav["route"], marks)}
+           # the Lab's signed chart overrides: the only marks the Orin opens a pocket at (#242).
+           # Signed on the Lab's course: checked against it (edits aboard move no mark, #406)
+           "overrides": _overrides(base or definition, cid),
+           "course_hash": course_hash(nav["route"], marks),
+           # which course revision this is (#406); every route names the one it used
+           "revision": dict(revision, base=(rec.get("revision") or {}).get("base")) if revision
+           else None}
+    if base is not None:
+        # the Lab's course under the edits aboard: the Orin checks the land chart against it
+        req["base_definition"] = base
     assets = orinassets.for_run(definition, cid)     # the chart + boat profile from Deploy
     if assets is not None:
         req["assets"] = assets
@@ -401,6 +560,7 @@ def _start(call, req, dev):
                                   "course_hash": req.get("course_hash"),
                                   "route": req["route"], "next_index": req["next_index"],
                                   "definition": req.get("definition") is not None,
+                                  "revision": req.get("revision"),
                                   "marks": [m.get("name") for m in req["marks"]]}
                 keep = sorted(pend.items(), key=lambda kv: kv[1].get("asked_at") or 0)[-PENDING_KEEP:]
                 _write(_pending_path(), json.dumps(dict(keep), separators=(",", ":")))
@@ -479,6 +639,10 @@ def _store(result, received_at=None):
     if pend and pend.get("course_hash"):
         # the course this route answers; unknown (None) counts as an old course
         result["course_hash"] = pend["course_hash"]
+    if pend and not result.get("course_revision") and pend.get("revision"):
+        # an Orin from before #406 doesn't name it: the revision the Pi asked on
+        from shared import courseedit
+        result["course_revision"] = courseedit.summary(pend["revision"])
     if pend and pend.get("definition") is False:
         # routed on the marks alone: say so, whatever the Orin's own wording
         warns = [w for w in (result.get("warnings") or []) if w != "Course without islands or rounding sides."]
@@ -497,7 +661,8 @@ def _store(result, received_at=None):
                       gain_min=vs.get("gain_min") if vs.get("available") else None,
                       finish_eta=result.get("finish_eta"), complete=result.get("complete"),
                       boat=result.get("boat"), marks=result.get("marks"),
-                      warnings=(result.get("warnings") or [])[:4], no_zones=result.get("no_zones"))
+                      warnings=(result.get("warnings") or [])[:4], no_zones=result.get("no_zones"),
+                      course_revision=result.get("course_revision"))
 
 
 def _heal():

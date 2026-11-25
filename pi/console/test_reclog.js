@@ -132,7 +132,7 @@ test("index.html: boat button in the pick row, the boat name on LOG; dashboard s
 });
 test("console cache-bust tags bumped for this change", () => {
   assert.match(html, /reclog\.js\?v=bp1110a/);
-  assert.match(html, /dashboard\.js\?v=bp1110a/);
+  assert.match(html, /dashboard\.js\?v=(bp1110a|ce1124a)/);   // ce1124a: #406
 });
 
 console.log(failed ? "FAILED" : "ALL OK");
