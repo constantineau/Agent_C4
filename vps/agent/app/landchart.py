@@ -118,6 +118,16 @@ class ChartUnreadable(Exception):
     the same as "no chart": callers fail closed on it."""
 
 
+def _fits_base(chart, nav_route, marks, defn, cid, depth):
+    """A course edited aboard (#406) with a chart built for the Lab's course under it: the chart
+    still fits when the edits cover no new water (shared/courseedit.same_geography), exactly as
+    the Orin decides (pi/orin/reroute/job.chart_fits)."""
+    from shared import courseedit
+    base = orinroute.base_definition(orinroute.record_for(nav_route, marks))
+    return bool(base) and chart.get("fingerprint") == course_fingerprint(base, cid, depth) \
+        and courseedit.same_geography(base, defn, cid)
+
+
 def for_course(nav_route, marks, boat=None):
     """The land mask for the course aboard, pockets opened at its marks and the boat, or None
     (no chart pushed, or not this course's chart: the caller says the shore isn't checked).
@@ -146,7 +156,8 @@ def for_course(nav_route, marks, boat=None):
         depth = chartid.safety_depth_m(boat_p)
     except (TypeError, ValueError) as exc:
         raise ChartUnreadable(f"boat profile: {exc}") from exc
-    if chart.get("fingerprint") != course_fingerprint(defn, cid, depth):
+    if chart.get("fingerprint") != course_fingerprint(defn, cid, depth) and \
+            not _fits_base(chart, nav_route, marks, defn, cid, depth):
         return None                                       # a re-deployed course: an old chart
     try:
         land = LandMask(chart)

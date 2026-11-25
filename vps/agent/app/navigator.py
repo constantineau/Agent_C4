@@ -324,6 +324,7 @@ def _set_progress(route, change):
     """Run `change(rec, marks) -> (ok, note)` on `route`'s progress under the lock and save it.
     Returns the result dict the crew's controls show."""
     from . import orinroute
+    _recover_course_edit()
     ds = _store()
     if ds is None:
         return {"ok": False, "no_store": True, "note": "Marks can't be changed here."}
@@ -400,6 +401,68 @@ def pick_mark(index, route=None):
         rec["hold"] = k
         return True, None
     return _set_progress(route, change)
+
+
+def progress_snapshot(route):
+    """The run as it stands ({i, hist, hold, run}) for a course edit's journal (#406), or None."""
+    ds = _store()
+    if ds is None:
+        return None
+    try:
+        with _PROGRESS_LOCK:
+            rec = _load_progress(ds, route, _marks(route) or [])
+    except Exception:  # noqa: BLE001
+        return None
+    return {k: rec.get(k) for k in ("i", "hist", "hold", "run")}
+
+
+def restore_progress(route, snap, force=False):
+    """After a power cut during a course edit (#406): put the run back when the stored one no
+    longer belongs to the marks aboard (the cut came between writing the marks and the run).
+    A run that does belong to them is left alone, unless `force` (a failed edit puts the run
+    back exactly as it was). Returns True when it put one back."""
+    ds = _store()
+    if ds is None or not isinstance(snap, dict):
+        return False
+    with _PROGRESS_LOCK:
+        marks = _marks(route) or []
+        if not marks or (not force and
+                         (ds.get_nav_progress(route) or {}).get("fp") == _course_fp(marks)):
+            return False
+        try:
+            clamp = lambda v: max(0, min(int(v), len(marks) - 1))          # noqa: E731
+            rec = {"fp": _course_fp(marks), "i": clamp(snap.get("i") or 0), "run": snap.get("run"),
+                   "hist": [clamp(v) for v in snap.get("hist") or []][-HIST_MAX:],
+                   "hold": None if snap.get("hold") is None else clamp(snap["hold"])}
+        except (TypeError, ValueError):
+            return False
+        _pending.pop(route, None)
+        return _save_progress(ds, route, rec)
+
+
+def replace_marks(route, marks):
+    """A course edit aboard that changes the marks (a shortened course, #406): write the new
+    [(seq, name, lat, lon)] marks and keep the run where it is (the next mark, Undo, a hold),
+    instead of the fresh run a new course gets. Edits only drop marks from the end, so the
+    places of the marks still ahead don't change. Returns True when the run was kept, False when
+    only the marks were written (no progress store, or it couldn't be saved: the navigator then
+    starts from the first mark and the crew picks it again). Caller holds orinroute.COURSE_LOCK.
+    Raises when the run can't be read or the marks can't be written: nothing changed."""
+    ds = _store()
+    with _PROGRESS_LOCK:
+        rec = _load_progress(ds, route, _marks(route) or []) if ds is not None else None
+        datasource.active().save_course(route, marks)
+        if rec is None:
+            return False
+        new = _marks(route) or []
+        if not new:
+            return False
+        clamp = lambda v: max(0, min(int(v), len(new) - 1))          # noqa: E731
+        _pending.pop(route, None)
+        return _save_progress(ds, route, {
+            "fp": _course_fp(new), "i": clamp(rec["i"]), "run": rec.get("run"),
+            "hist": [clamp(v) for v in rec["hist"]][-HIST_MAX:],
+            "hold": None if rec.get("hold") is None else clamp(rec["hold"])})
 
 
 # --- live state -------------------------------------------------------------
@@ -705,8 +768,16 @@ def get_course(route: str = None):
     return {"available": bool(marks), "route": route, "marks": marks, "legs": legs}
 
 
+def _recover_course_edit():
+    """A course edit cut off by a power loss (#406) is finished or undone before the navigator
+    reads or moves its run, so an old next mark is never served or advanced first."""
+    from . import orinroute
+    orinroute.recover_if_needed()
+
+
 def get_navigator(route: str = None):
     """Next mark, ETA, leg type, and laylines from live position + wind."""
+    _recover_course_edit()
     route = route or active_route()
     marks = _marks(route)
     s = _fresh(_latest())

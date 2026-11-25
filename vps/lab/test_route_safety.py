@@ -21,7 +21,10 @@ Pins:
  10) #242 the bundle verdict and the refusal text Freeze, Deploy and GPX use;
  11) #325 one-click override: Override is offered only where a chart override opens the mark
      (not a race zone, an island disk, off the chart, nor a mark the router just didn't reach),
-     and every refusal says what to click.
+     and every refusal says what to click;
+ 12) #405 every verdict lists land, depth, zones, marks and chart coverage as separate checks
+     (checked / not checked / failed); only a route where all of them ran reads as all checked,
+     and the refusals don't change.
 """
 import math
 import os
@@ -609,6 +612,74 @@ check("refusal on a zone block says move it", "Move W in Course & Marks" in why
       and "Override" not in why, why)
 why = RS.refusal(dict(b_bad, safety=vb)) or ""
 check("any other refusal says build again", why.endswith(RS.FIX_REBUILD), why)
+
+print("12) #405 separate checks, each with its own state")
+
+
+def states(s):
+    return {c["id"]: c["state"] for c in (s or {}).get("checks") or []}
+
+
+check("every verdict lists the five checks in order",
+      [c["id"] for c in rf["safety"]["checks"]] == ["land", "depth", "zones", "marks", "chart"],
+      rf["safety"].get("checks"))
+check("charted all the way: every check passed", RS.all_checked(rf["safety"]["checks"])
+      and set(states(rf["safety"]).values()) == {"checked"}, states(rf["safety"]))
+sh_st = states(rh["safety"])
+check("half off the depth chart: passes, but depth not checked, the legs named",
+      rh["safety"]["ok"] and sh_st["depth"] == "not_checked" and sh_st["land"] == "checked"
+      and not RS.all_checked(rh["safety"]["checks"])
+      and "Start → W" in " ".join(rh["safety"]["checks"][1]["texts"]), rh["safety"]["checks"])
+sz = states(rz["safety"])
+check("mark in a zone, no shoreline: land + depth not checked, marks failed, zones checked",
+      sz == {"land": "not_checked", "depth": "not_checked", "zones": "checked",
+             "marks": "failed", "chart": "checked"}, sz)
+so = states(ro["safety"])
+check("avoid off: only marks checked",
+      so == {"land": "not_checked", "depth": "not_checked", "zones": "not_checked",
+             "marks": "checked", "chart": "not_checked"}, so)
+sb = O.route_safety(course("port"), "c", [(0, "Start", LAT0, LON0), (1, "Finish", LAT0, LON0)],
+                    [{"lat": LAT0 + 2, "lon": LON0}, {"lat": LAT0, "lon": LON0}], [1], None,
+                    Field(), None, False)
+check("off the chart's box: chart coverage failed", states(sb)["chart"] == "failed"
+      and O.SAFE_BOX in sb["checks"][4]["texts"], sb["checks"])
+check("...and land, depth and zones not checked out there, never shown as checked",
+      states(sb)["land"] == "not_checked" and RS.LAND_OFF_CHART in sb["checks"][0]["texts"]
+      and states(sb)["depth"] == "not_checked" and states(sb)["zones"] == "not_checked"
+      and RS.ZONES_OFF_CHART in sb["checks"][2]["texts"], sb["checks"])
+class NoLand(Field):
+    land = "off"
+
+
+sm = O.route_safety(course("port"), "c", [(0, "Start", LAT0, LON0), (1, "Finish", LAT0, LON0)],
+                    [{"lat": LAT0, "lon": LON0}, {"lat": LAT0, "lon": LON0}], [1], None,
+                    Field(), [NoLand()], False)
+check("one leg's map without land: land not checked (not refused: another map has it)",
+      states(sm)["land"] == "not_checked" and RS.LAND_SOME_LEGS in sm["checks"][0]["texts"]
+      and not any(p["code"] == "land" for p in sm["problems"]), sm["checks"][0])
+gd = RS.route_checks([], [{"code": "grid_depth:Lake grid", "text": "Depths from Lake grid.",
+                           "legs": ["A → B"]}], True)
+check("depths from a grid that isn't a chart: checked, with its note",
+      gd[1]["state"] == "checked" and gd[1]["texts"] == ["Depths from Lake grid."], gd[1])
+
+ck_all = RS.route_checks([], [], True)
+ck_nd = RS.route_checks([], [{"code": "no_depth", "text": O.SAFE_NO_DEPTH, "legs": ["A → B"]}], True)
+b_ck = {"consensus": {"safety": dict(good, checks=ck_all)},
+        "variants": [{"id": "left", "route": {"path": []}, "safety": dict(good, checks=ck_nd)}]}
+vk = RS.bundle_verdict(b_ck)
+check("bundle: each check takes its worst route", states(vk)["depth"] == "not_checked"
+      and states(vk)["land"] == "checked" and not RS.all_checked(vk["checks"]), vk["checks"])
+check("...and still isn't refused (depth notes never refuse, #242)",
+      RS.refusal(dict(b_ck, safety=vk)) is None)
+vk_old = RS.bundle_verdict(b_ok)
+check("bundle of verdicts from before #405: nothing reads as checked",
+      set(states(vk_old).values()) == {"not_checked"} and RS.refusal(dict(b_ok, safety=vk_old)) is None)
+check("all_checked: a missing check is not a pass", not RS.all_checked(ck_all[:4]))
+vp = RS.bundle_verdict({"consensus": {"safety": dict(good, checks=ck_all[:4])},
+                        "variants": [{"id": "x", "route": {"path": []}, "safety": dict(good, checks=[])}]})
+check("bundle: a check a route's list leaves out is not checked, not passed",
+      set(states(vp).values()) == {"not_checked"} and RS.NOT_RUN in vp["checks"][4]["texts"],
+      vp["checks"])
 
 print("ALL OK" if ok else "SOME FAILED")
 raise SystemExit(0 if ok else 1)

@@ -1628,7 +1628,7 @@ async function renderGameplan() {
             <select id="optRace" onchange="optPickRace(this.value)">
               ${Opt.races.map((r) => `<option value="${esc(r.race_id)}" ${r.race_id === Opt.raceId ? "selected" : ""}>${esc(r.name)}</option>`).join("")}
             </select></label>
-          <label>Course <select id="optCourse" onchange="Opt.courseId=this.value">${optCourseOpts()}</select></label>
+          <label>Course <select id="optCourse" onchange="Opt.courseId=this.value; if (typeof Study !== 'undefined') Study.mount('studyCard')">${optCourseOpts()}</select></label>
           <label>Start (<span id="optStartTz">${esc(optStartZone())}</span>) <input type="datetime-local" id="optStart"
             value="${esc(Opt.start || "")}" oninput="optStartInput(this.value)"></label>
           <span id="optStartNote" class="opt-start-note">${esc(optStartNote())}</span>
@@ -1667,6 +1667,7 @@ async function renderGameplan() {
         ${qhelp("Downloads forecasts from NOAA and ECMWF and sails them on the boat's own polar. Later runs reuse the download. Prep only: nothing changes after the start (rule 41).")}</div>
     </div>
     <div id="optOut"></div>
+    <div id="studyCard"></div>
     <div class="card">
       <h3>Playbook <span class="muted" style="font-weight:400">— which side, and when to switch</span></h3>
       <div class="muted" style="font-size:12px;margin-bottom:8px">Routes many forecasts. Says which side to start and what would change it.
@@ -1684,6 +1685,7 @@ async function renderGameplan() {
   updateEnsembleControl();
   updateResHint();
   if (Opt.result) showResult(renderOptResult, Opt.result, "optOut");
+  if (typeof Study !== "undefined") Study.mount("studyCard");      // #378 study batch
   if (Pb.result) showResult(renderPbResult, Pb.result, "pbOut");
 }
 
@@ -1739,6 +1741,7 @@ function updateResHint() {
   const sel = document.getElementById("optRes"), hint = document.getElementById("optResHint");
   if (!sel || !hint) return;
   hint.textContent = RES_HINTS[sel.value] || "";
+  if (typeof Study !== "undefined") Study.repaint();   // #378 time estimate follows Detail
 }
 
 function updateEnsembleControl() {
@@ -1762,6 +1765,7 @@ function updateEnsembleControl() {
       ? `${n} extra forecast${n > 1 ? "s" : ""} to download. 10–20 is plenty.`
       : "";
   }
+  if (typeof Study !== "undefined") Study.repaint();   // #378 run count follows models + ensemble
 }
 
 /* Boat profile ([B]): active boat + editable draft + chart source. Draft sets the ENC depth no-go,
@@ -2766,6 +2770,8 @@ function pbCtx(b) {
 // Not for a mark the router just didn't reach, nor one in a race zone, by an island or off the chart.
 function safetyPanel(s, what, ctx) {
   if (!s) return "";
+  // #405: each check's own state (safetychecks.js), ahead of the verdict
+  const checks = typeof safetyChecksHtml === "function" ? safetyChecksHtml(s.checks) : "";
   const at = `data-race="${esc((ctx && ctx.race) || "")}" data-course="${esc((ctx && ctx.course) || "")}" data-what="${esc(what)}"`;
   const click = (remove) => `onclick="chartOverride(this.dataset.mark, ${remove}, this.dataset.race, this.dataset.course, this.dataset.what, this)"`;
   const done = new Set((s.overrides || []).map((o) => o.mark));
@@ -2774,14 +2780,14 @@ function safetyPanel(s, what, ctx) {
   // Cole on #242: no ENC depths (Canada) never fails a route; those legs are named here
   const notes = (s.notes || []).map((n) => `<div class="pill warn" style="display:block;margin-top:6px;text-align:left">
     ${esc(n.text || "No depth data: check the paper chart.")}${(n.legs || []).length ? `<br><span style="font-weight:400">${(n.legs || []).map(esc).join(", ")}</span>` : ""}</div>`).join("");
-  if (s.ok) return (ov ? `<div class="muted" style="font-size:12px;margin-top:6px">Route checks passed.<ul style="margin:2px 0 0 16px;padding:0">${ov}</ul></div>` : "") + notes;
+  if (s.ok) return checks + (ov ? `<div class="muted" style="font-size:12px;margin-top:6px">Route checks passed.<ul style="margin:2px 0 0 16px;padding:0">${ov}</ul></div>` : "") + notes;
   const canOverride = (p) => p.mark && p.code === "blocked" && p.override !== false && !done.has(p.mark);
   const items = (s.problems || []).map((p) => `<li>${p.route ? esc(p.route) + ": " : ""}${esc(p.text || p.code)}${p.fix ? " " + esc(p.fix) : ""}
       ${canOverride(p) ? `<button class="mini" data-mark="${esc(p.mark)}" ${at} ${click(false)}>Override</button>` : ""}</li>`).join("");
   return `<div class="pill bad" style="display:block;margin-top:8px;text-align:left">
     <b>⛔ Route checks failed. No freeze, Deploy or GPX${what === "route" ? " from this route" : ""}.</b>
     <ul style="margin:4px 0 0 16px;padding:0">${items}</ul>
-    ${ov ? `<div style="font-weight:400;margin-top:4px">Chart overrides:<ul style="margin:2px 0 0 16px;padding:0">${ov}</ul></div>` : ""}</div>${notes}`;
+    ${ov ? `<div style="font-weight:400;margin-top:4px">Chart overrides:<ul style="margin:2px 0 0 16px;padding:0">${ov}</ul></div>` : ""}</div>${checks}${notes}`;
 }
 
 // One click (#325): save (or remove) the override, then route again. `what` = which result the button
@@ -4953,6 +4959,7 @@ function debTacticsCard(r) {
   const reg = r.regret, o = r.oracle, pb = r.playbook;
   const pill = reg.side_matched ? '<span class="pill ok">side matched</span>' : '<span class="pill warn">side missed</span>';
   const regMin = reg.minutes != null ? (reg.minutes >= 0 ? reg.minutes + " min slower than the best route" : Math.abs(reg.minutes) + " min faster (plan beat the best route)") : "—";
+  const lostRow = `<div class="dep-row"><b style="min-width:130px;display:inline-block">Time lost</b> ${esc(regMin)}${reg.basis && reg.basis.note ? ` <span class="muted">· ${esc(reg.basis.note)}</span>` : ""}</div>`;
   const vrows = (pb.variants || []).map((v) => `<tr class="${v.side === reg.side_paid ? "winrow" : ""}">
       <td>${esc(v.side || "?")}${v.side === pb.recommended ? " ★" : ""}</td>
       <td>${v.total_hours != null ? v.total_hours.toFixed(1) + " h" : ""}</td>
@@ -4963,7 +4970,7 @@ function debTacticsCard(r) {
       <div class="dep-grid">
         <div class="dep-row"><b style="min-width:130px;display:inline-block">Side that paid</b> <b>${esc(reg.side_paid)}</b> · recommended <b>${esc(reg.recommended_side || "—")}</b> ${reg.side_matched ? "(matched)" : "(missed)"}</div>
         <div class="dep-row"><b style="min-width:130px;display:inline-block">Best route</b> ${o.total_hours != null ? o.total_hours.toFixed(1) + " h" : "—"} · plan predicted ${pb.predicted_hours != null ? pb.predicted_hours.toFixed(1) + " h" : "—"}</div>
-        <div class="dep-row"><b style="min-width:130px;display:inline-block">Time lost</b> ${esc(regMin)}${reg.basis && reg.basis.note ? ` <span class="muted">· ${esc(reg.basis.note)}</span>` : ""}</div>
+        ${typeof debBasisRows === "function" ? debBasisRows(r, lostRow) : lostRow}
       </div>
       <table class="fleet-tbl" style="margin-top:8px"><thead><tr><th>Option</th><th>Predicted</th><th>Forecasts</th><th>Outcome</th></tr></thead><tbody>${vrows}</tbody></table>
       <div class="muted" style="font-size:11px;margin-top:6px">★ = recommended · highlighted = the side that paid. ${esc(r.caveat || "")}</div>

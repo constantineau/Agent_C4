@@ -34,6 +34,33 @@
   const INCOMPLETE = "Route incomplete.";
   const NO_ZONES = "No zones or rounding sides aboard. Redeploy the course.";
 
+  const LAND_NOT_CHECKED = "Land not checked";
+  // #405: the route's safety checks, in the order the Lab lists them (vps/lab/app/routesafety.py)
+  const CHECKS = [["land", "Land"], ["depth", "Depth"], ["zones", "Race zones"],
+    ["marks", "Marks and sides"], ["chart", "Chart covers route"]];
+  const CHECK_WORD = { checked: "checked", not_checked: "not checked", failed: "failed" };
+
+  /* one route → its checks [{id, label, state, word, text}]. A route that doesn't list them (the
+     Pi's own route, an Orin from before #405) never reads as checked: land only when it says
+     `chart.land === true` and no shore warning, the rest not checked. */
+  function checksOf(r, orin, shore) {
+    const got = {};
+    if (Array.isArray(r.checks)) {
+      r.checks.forEach((c) => { if (c && c.id) got[c.id] = c; });
+    } else {
+      // land counts only when the result says outright that the chart was used
+      got.land = { state: !shore && orin && r.chart && r.chart.land === true ? "checked" : "not_checked",
+        texts: [orin ? "" : "Pi route: no shore check."] };
+    }
+    return CHECKS.map(([id, label]) => {
+      const c = got[id] || {};
+      const state = CHECK_WORD[c.state] ? c.state : "not_checked";
+      const texts = (c.texts || []).filter((x) => typeof x === "string" && x);
+      return { id: id, label: c.label || label, state: state, word: CHECK_WORD[state],
+        text: texts.join(" ") || (c.state ? "" : "Not reported.") };
+    });
+  }
+
   const plural = (n, w) => n + " " + w + (n === 1 ? "" : "s");
   function hhmm(epochS) {
     const d = new Date(epochS * 1000);
@@ -114,8 +141,16 @@
     if (shore) labels.push("Route doesn't check the shore");
     const other = warns.filter((x) => x.indexOf("check the shore") < 0 &&
       !(r.complete === false && x === "Route incomplete.")).slice(0, 2);
-    return { source: src.source, engine: orin ? "Orin" : "Pi", head: head, wx: wx, who: who,
+    // which course revision the route sailed (#406): a course changed aboard says so
+    const cr = r.course_revision || null;
+    const rev = cr && cr.number ? "Course rev " + cr.number +
+      (cr.origin === "boat" ? " · changed aboard" : cr.origin === "lab" ? " · from the Lab" : "") : "";
+    const checks = checksOf(r, orin, shore);
+    const landCheck = checks[0];
+    return { source: src.source, engine: orin ? "Orin" : "Pi", head: head, wx: wx, who: who, rev: rev,
       shape: bits.join(" · "), labels: labels, warnings: other,
+      checks: checks, allChecked: checks.every((c) => c.state === "checked"),
+      landUnchecked: landCheck.state !== "checked",
       age: fin ? agoTxt(nowS - fin) : "", finished_at: fin, old: !!r.old_course,
       incomplete: r.complete === false,
       noZones: !!r.no_zones || warns.indexOf(NO_ZONES) >= 0 };
@@ -225,6 +260,9 @@
       running: running, progress: progress, button: button, fallback: fallback,
       note: note, suggest: suggest, last: last, say: say, sayKind: sayKind,
       canShowOnGps: !!(last && !last.old && !last.incomplete && !running),
+      // #405: stays up, red, whenever the current route didn't check land. Such a route may still
+      // be shown on the GPS (a decision for Cole on the PR): the line goes with it.
+      landBanner: last && !last.old && last.landUnchecked ? LAND_NOT_CHECKED : null,
     };
   }
 
@@ -242,7 +280,7 @@
 
   const api = { view: view, pollEvery: pollEvery, RUN_POLL_MS: RUN_POLL_MS,
     IDLE_POLL_MS: IDLE_POLL_MS, STARTING_MS: STARTING_MS, afterPress: afterPress, describe: describe, lastRoute: lastRoute,
-    agoTxt: agoTxt, ARM_MS: ARM_MS, FALLBACK_MS: FALLBACK_MS, STALE_MS: STALE_MS,
+    agoTxt: agoTxt, checksOf: checksOf, LAND_NOT_CHECKED: LAND_NOT_CHECKED, ARM_MS: ARM_MS, FALLBACK_MS: FALLBACK_MS, STALE_MS: STALE_MS,
     RUN_TRUST_MS: RUN_TRUST_MS };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.C4Reroute = api;

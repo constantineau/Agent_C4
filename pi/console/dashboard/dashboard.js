@@ -71,6 +71,7 @@
      raises a status (a suggestion is quiet text, not an alarm). */
   const CELLS = ["wind", "playbook", "forecast", "sail", ["eta", "route"], "ais", "charge", PAIR];
   const RT = window.C4Reroute;
+  const CE = window.C4CourseEdit;   // course changes aboard (#406), coursedit.js
   const SHED = window.C4Shed;     // the Orin's load shed (#295): one plain line while it sheds
   // the re-route status poll: ~every 10 s, every 3 s while one runs (RT.pollEvery)
   const boatName = (r) => { const n = r.boat || r.name || ("MMSI " + (r.mmsi || "?")); return n.length > 14 ? n.slice(0, 13) + "…" : n; };
@@ -646,6 +647,13 @@
     const sel = e.target.closest && e.target.closest(".nav-pick");
     if (sel) navAction("mark", parseInt(sel.value, 10));
   });
+  if (CE) CE.attach({ post: postJSON, get: fetchJSON, device: () => deviceLabel(),
+    redraw: () => { if (App.openTile === "eta") populateDetail("eta", false); },
+    after: async () => {             // a changed course: the map and the next mark read again
+      await fetchCourse();
+      const nav = await fetchJSON("/navigator", 8000);
+      if (nav) App.nav = nav;
+    } });
   /* best available race history: the engine archive (authoritative) + the live tail not yet archived;
      falls back to the client buffer when the archive is empty (e.g. on the bench). */
   function raceData() {
@@ -1935,6 +1943,7 @@
       '<div class="t-head"><span class="t-name">' + NAME.route + "</span>" + age +
       '<span class="t-chip"><span class="t-word">' + v.chip + "</span></span></div>" +
       '<div class="rt-say rt-' + v.sayKind + '">' + esc2(v.say) + "</div>" + bar +
+      (v.landBanner ? '<div class="rt-land">' + esc2(v.landBanner) + "</div>" : "") +   // #405
       (v.sub ? '<div class="rt-last">' + esc2(v.sub) + "</div>" : "") +
       rerouteBtnHtml(v);
     el.addEventListener("click", () => openDetail("route"));
@@ -1956,6 +1965,7 @@
   function routeDetailHtml() {
     const v = rerouteView();
     let h = '<div class="rt-detail">';
+    if (v.landBanner) h += '<p class="rt-land">' + esc2(v.landBanner) + "</p>";   // #405: first
     if (v.progress) {
       h += '<p class="rt-line"><b>' + esc2(v.progress.text) + "</b>" +
         (v.progress.who ? " · asked by " + esc2(v.progress.who) : "") + "</p>" +
@@ -1977,7 +1987,12 @@
         (L.shape ? '<p class="rt-line">' + esc2(L.shape) + "</p>" : "") +
         '<p class="rt-line">' + esc2(L.wx) + "</p>" +
         '<p class="rt-line">' + esc2(L.who) + "</p>" +
-        L.warnings.map((w) => '<p class="rt-line rt-warn">' + esc2(w) + "</p>").join("");
+        (L.rev ? '<p class="rt-line">' + esc2(L.rev) + "</p>" : "") +
+        L.warnings.map((w) => '<p class="rt-line rt-warn">' + esc2(w) + "</p>").join("") +
+        // #405: which safety checks this route passed, each on its own line
+        '<ul class="rt-checks">' + L.checks.map((c) => '<li class="rt-ck rt-ck-' + c.state + '">' +
+          esc2(c.label) + ": " + esc2(c.word) + (c.state !== "checked" && c.text ? " · " + esc2(c.text) : "") +
+          "</li>").join("") + "</ul>";
     } else {
       h += '<p class="rt-line" style="margin-top:10px">No new route yet.</p>';
     }
@@ -2580,6 +2595,7 @@
       App.navNote = null;
       fetchCourse().then(() => { if (App.openTile === "eta") populateDetail("eta", false); });
       fetchTrack().then(() => { if (App.openTile === "eta") populateDetail("eta", false); });
+      if (CE && CE.refresh) CE.refresh();                                  // course changes aboard (#406)
     }
     // the gauge scrolls with the text now (#77): a fresh tile opens at its top
     document.querySelector("#detail .det-body").scrollTop = 0;
@@ -2974,6 +2990,7 @@
     }
     if (key === "eta") {
       g.insertAdjacentHTML("beforeend", navControlsHtml());
+      if (CE && App.src === "live") g.insertAdjacentHTML("beforeend", CE.html(Date.now()));   // #406
       g.insertAdjacentHTML("beforeend", '<button class="cw-btn cw-inline" ' +
         'onclick="openCoachBrief(\'mark\')">Mark pre-brief ↻</button>');
     }

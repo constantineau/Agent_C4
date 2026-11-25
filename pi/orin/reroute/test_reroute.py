@@ -306,6 +306,29 @@ check("gain vs the plan, in minutes", v["available"] and isinstance(v["gain_min"
 check("no chart aboard → it says so, short", out["warnings"][0] == "No chart aboard. Route doesn't check the shore."
       and out["chart"]["land"] is False)
 check("phases in order", phases[:3] == ["chart", "weather", "routing"] and phases[-1] == "saving")
+ck = {c["id"]: c["state"] for c in out.get("checks") or []}
+check("#405 no chart: land + chart coverage not checked, the rest listed too",
+      [c["id"] for c in out.get("checks") or []] == ["land", "depth", "zones", "marks", "chart"]
+      and ck["land"] == "not_checked" and ck["chart"] == "not_checked" and ck["zones"] == "checked"
+      and job.NO_CHART in out["checks"][0]["texts"])
+nc = {c["id"]: c for c in job.safety_checks({"checks": job.routesafety.route_checks([], [], True)},
+                                           None, False)}
+check("#405 no course aboard: zones and sides not checked, said why",
+      nc["zones"]["state"] == "not_checked" and nc["marks"]["state"] == "not_checked"
+      and nc["zones"]["texts"] == [job.NO_ZONES] and nc["land"]["state"] == "checked"
+      and nc["depth"]["state"] == "not_checked" and nc["depth"]["texts"] == [job.NO_DEPTH])
+pc = {c["id"]: c["state"] for c in job.safety_checks(
+    {"checks": job.routesafety.route_checks([], [], True)[:3]}, None, True)}
+check("#405 a check the optimizer left out: not checked, not passed by the boat's list",
+      pc["marks"] == "not_checked" and pc["chart"] == "not_checked" and pc["land"] == "checked")
+off = job.routesafety.route_checks([{"code": "land", "text": "Land not checked."},
+                                    {"code": "box", "text": "Route leaves the chart area."}], [], True)
+oc = {c["id"]: c["state"] for c in job.safety_checks({"checks": off}, None, True)}
+check("#405 chart aboard, but the route leaves its box: land not checked, coverage failed",
+      oc["land"] == "not_checked" and oc["chart"] == "failed")
+check("#405 an optimizer with no checks: nothing reads as checked",
+      {c["state"] for c in job.safety_checks({"ok": True, "problems": []}, None, True)}
+      == {"not_checked"})
 
 os.makedirs(job.CHART_DIR, exist_ok=True)
 DEPTH = job.boats.safety_depth_m(job._get_boat())
@@ -335,6 +358,9 @@ write_chart(DEF)
 out2 = job.run(REQ, now=NOW, is_online=lambda: False)
 check("with a matching chart aboard: used, no warning", out2["chart"]["land"] is True
       and job.NO_CHART not in out2["warnings"] and job.OLD_CHART not in out2["warnings"])
+ck2 = {c["id"]: c["state"] for c in out2.get("checks") or []}
+check("#405 ...land checked; depth never checked aboard",
+      ck2["land"] == "checked" and ck2["depth"] == "not_checked")
 
 print("3b) a chart built for an older version of the course is refused")
 
@@ -616,6 +642,9 @@ for f in windfield._fhrs_for_cycle(GFS, CYCLE, NOW, NOW + 30 * 3600):
 W.remember_box(job.STATE_DIR, need3)
 out5 = job.run(dict(far, definition=DEF3), now=NOW, is_online=lambda: False)
 check("the run doesn't claim land", out5["chart"]["land"] is False and out5["warnings"][0] == job.NO_COVER)
+ck5 = {c["id"]: c["state"] for c in out5.get("checks") or []}
+check("#405 ...land not checked, chart coverage failed", ck5["land"] == "not_checked"
+      and ck5["chart"] == "failed")
 write_chart(DEF)
 
 print("3e) online, but the downloads fail: the forecasts aboard are used")
@@ -807,6 +836,53 @@ check("the push carried no profile → the Orin's own, warned", info["source"] =
 for w_ in (job.NOT_DEPLOYED_BOAT, job.BAD_BOAT, job.OTHER_BOAT, job.NO_POLAR,
            job.NOT_DEPLOYED_POLAR):
     check(f"short: {w_!r}", len(w_.split()) <= 12)
+
+print("3e6b) a course changed aboard (#406): revisions, and the chart built for the Lab's course")
+from shared import courseedit  # noqa: E402
+
+SIDE = courseedit.apply_edits(DEF, "c", [{"op": "rounding", "pos": 0, "name": "North",
+                                          "side": "starboard"}])
+SHORT = courseedit.apply_edits(DEF, "c", [{"op": "finish_at", "pos": 2, "name": "Gate"}])
+
+
+def lo_edit(defn, base, chart=None):
+    d_, c_, _n = job.remaining_definition(defn, "c", 2, 44.2, -82.2)
+    return job.load_obstacles(d_, c_, defn, "c", REPO_BOAT, chart=chart or good,
+                              base_definition=base)
+
+
+check("a changed rounding side, no base sent → the chart is out of date, as before",
+      lo_carried(SIDE, good)[1] == job.OLD_CHART)
+check("a changed rounding side over the Lab's course → the Lab's chart still checks the shore",
+      lo_edit(SIDE, DEF)[1] is None)
+f_sh, n_sh = lo_edit(SHORT, DEF)
+check("a shortened finish over the Lab's course → the chart still checks the shore",
+      n_sh is None and f_sh.blocked(43.95, -82.95))
+NEWZONE = dict(SIDE, zones=[ZONE])
+f_nz, n_nz = lo_edit(NEWZONE, DEF)
+check("a new zone across the route (new water) → land not checked, said plainly",
+      n_nz == job.CHANGED_ABOARD and len(job.CHANGED_ABOARD.split()) <= 12)
+check("…and the new zone is still avoided", f_nz.blocked(44.55, ZLON))
+check("a base the chart wasn't built for → out of date", lo_edit(SIDE, DEF2)[1] == job.OLD_CHART)
+MOVED = json.loads(json.dumps(SIDE))
+MOVED["courses"][0]["marks"][0]["lat"] = 44.05
+check("a moved mark over the Lab's course → land not checked", lo_edit(MOVED, DEF)[1]
+      == job.CHANGED_ABOARD)
+REV = {"number": 3, "at": NOW - 60, "origin": "boat", "base": 1}
+out_sh = job.run(dict(REQ, definition=SHORT, base_definition=DEF, revision=REV, assets=CARRY),
+                 now=NOW, is_online=lambda: False)
+check("the run on a shortened course names its revision",
+      out_sh["course_revision"] == {"number": 3, "at": NOW - 60, "origin": "boat"})
+check("…finishes at the shortened finish", out_sh["complete"] and out_sh["marks"] == ["Finish"]
+      and abs(out_sh["points"][-1]["lat"] - 44.9) < 0.05)
+check("…land checked with the Lab's chart, and says which revision it was built for",
+      out_sh["chart"]["land"] is True and out_sh["chart"].get("built_for_revision") == 1
+      and job.CHANGED_ABOARD not in out_sh["warnings"])
+check("a request with no revision (an older Pi) → none named", out["course_revision"] is None)
+LABREV = dict(DEF, course_revision={"number": 4, "at": NOW - 9, "origin": "lab", "edits": []})
+check("…else the one stamped in the definition", job.run(
+    dict(REQ, definition=LABREV), now=NOW, is_online=lambda: False)["course_revision"]
+      == {"number": 4, "at": NOW - 9, "origin": "lab"})
 
 print("3e7) the deployed boat's polar (#304)")
 from shared import boat_polar  # noqa: E402

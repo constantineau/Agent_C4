@@ -222,6 +222,10 @@ class RaceDefinition:
     schema_version: str = SCHEMA_VERSION
     venue_country: str = ""        # start venue's country, World Sailing 3-letter code (e.g. "GBR");
                                    # seeds the ORC country list when the scoring block names none
+    # Which revision of the course this is (#406): {number, at, origin: "lab"|"boat", base, edits}.
+    # The Pi stamps it on every Deploy load (origin lab) and every course edit aboard (origin
+    # boat, the edits over the Lab's base). Every re-route result names it. See shared/courseedit.py.
+    course_revision: dict = field(default_factory=dict)
 
 
 # --- (de)serialize + validate -------------------------------------------------
@@ -312,6 +316,8 @@ def validate(d: dict) -> tuple[list, list]:
                             f"trigger — when should it surface?")
     rp = d.get("rules_profile", {})
     warnings += rating_warnings(d)
+    from shared import courseedit
+    errors += courseedit.revision_errors(d.get("course_revision"))
     if rp.get("tracker_permitted") is None:
         warnings.append("rules_profile.tracker_permitted unset — confirm per-race (SI)")
     tr = d.get("tracker", {})

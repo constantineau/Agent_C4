@@ -36,8 +36,9 @@ import orin_weather as W  # noqa: E402
 
 from app import boats, optimizer, routerun  # noqa: E402  (vps/lab on PYTHONPATH)
 from app import plume as lab_plume  # noqa: E402
+from app import routesafety  # noqa: E402  (#405: the per-check states, same as the Lab's)
 from app.geo import obstacles as geo  # noqa: E402
-from shared import boat_polar, boat_profile, race_def  # noqa: E402
+from shared import boat_polar, boat_profile, courseedit, race_def  # noqa: E402
 from shared import boat_id as boat_id_setting  # noqa: E402
 
 SCHEMA = "c4.reroute/v1"
@@ -59,6 +60,7 @@ NO_CHART = "No chart aboard. Route doesn't check the shore."
 OLD_CHART = "Chart is out of date. Route doesn't check the shore."
 NO_COVER = "Chart doesn't cover the boat. Route doesn't check the shore."
 NO_LAND = "Chart has no land in it. Route doesn't check the shore."
+CHANGED_ABOARD = "Course changed aboard. Route doesn't check the shore."
 SHORT_FORECAST = "Forecast ends before the finish. Later legs use its last hour."
 NO_BOAT = "Boat profile missing."
 NOT_DEPLOYED_BOAT = "Boat profile not from Deploy."
@@ -70,6 +72,7 @@ BOAT_IN_ZONE = "Boat is inside an exclusion zone. Re-route not run."
 BOAT_IN_ISLAND = "Boat is inside an island's keep-out. Re-route not run."
 INCOMPLETE = "Route incomplete."
 NO_ZONES = "No zones or rounding sides aboard. Redeploy the course."
+NO_DEPTH = "Depths not checked aboard. Check the paper chart."     # #405
 PLAN_NEAR_NM = 20.0          # compare with the plan only while the boat is this close to it
 
 
@@ -232,8 +235,31 @@ def override_names(req):
                      if isinstance(o, dict) and o.get("mark"))
 
 
+def chart_fits(chart, full_definition, full_course_id, depth, base_definition=None):
+    """Was this land mask built for the course aboard? → (True, "course" | "base") or
+    (False, the crew-facing note).
+
+    "course": its fingerprint is the course's own (marks, islands, sides, zones, depth).
+    "base" (#406): the course was edited aboard and the mask is the one built for the Lab's course
+    under the edits, which cover no new water (`courseedit.same_geography`: no point moved, no
+    zone or island changed, only which marks are sailed and on which side). The mask is land
+    only, so it still holds for that water; the race layer is rebuilt from the edited course as
+    always, and the mask must still cover what's left of the course (checked by the caller)."""
+    if not isinstance(chart, dict) or chart.get("kind") != CHART_KIND:
+        return False, OLD_CHART
+    fp = chart.get("fingerprint")
+    if fp == geo.course_fingerprint(full_definition, full_course_id, depth):
+        return True, "course"
+    if isinstance(base_definition, dict) and \
+            fp == geo.course_fingerprint(base_definition, full_course_id, depth):
+        if courseedit.same_geography(base_definition, full_definition, full_course_id):
+            return True, "base"
+        return False, CHANGED_ABOARD          # the edits aboard cover water the mask wasn't built for
+    return False, OLD_CHART
+
+
 def load_obstacles(definition, course_id, full_definition, full_course_id, boat, leg=None,
-                   chart=_ON_DISK, overrides=frozenset()):
+                   chart=_ON_DISK, overrides=frozenset(), base_definition=None):
     """The obstacle mask for the remaining course `definition` → (ObstacleField, chart note or
     None). Land: the Lab's land-only mask for the course, when it was built from this course and
     covers what's left of it, boat included. `chart` is the one the Lab's Deploy push carried (the
@@ -243,7 +269,10 @@ def load_obstacles(definition, course_id, full_definition, full_course_id, boat,
     and the result warns that land isn't checked.
 
     Pockets (#242): the boat always gets one (it is where it is). A mark gets one only when it is
-    in `overrides`, the Lab's signed chart overrides: the Orin never opens land at a mark itself."""
+    in `overrides`, the Lab's signed chart overrides: the Orin never opens land at a mark itself.
+
+    `base_definition` (#406): the Lab's course under edits made aboard, sent by the Pi; a mask
+    built for it is used when the edits cover no new water (see chart_fits)."""
     depth = boats.safety_depth_m(boat)
     need = optimizer.course_bbox(definition, course_id)      # the boat + the marks left, padded
     note = NO_CHART
@@ -251,11 +280,12 @@ def load_obstacles(definition, course_id, full_definition, full_course_id, boat,
         if chart is _ON_DISK:
             chart = _disk_chart(full_definition, full_course_id)
         if isinstance(chart, dict):
-            # a land-only mask built from this exact course, zones and depth? A re-deployed course
-            # (a new zone, a moved mark) or an older full-race mask must never be used.
-            if chart.get("kind") != CHART_KIND or chart.get("fingerprint") != \
-                    geo.course_fingerprint(full_definition, full_course_id, depth):
-                note = OLD_CHART
+            # a land-only mask built from this exact course, zones and depth (or from the Lab's
+            # course under edits aboard that add no water, #406)? A re-deployed course (a new
+            # zone, a moved mark) or an older full-race mask must never be used.
+            fits, why = chart_fits(chart, full_definition, full_course_id, depth, base_definition)
+            if not fits:
+                note = why
             else:
                 try:
                     land = geo.field_from_dict(chart)
@@ -454,6 +484,12 @@ def run(req, now=None, on_progress=None, on_phase=None, is_online=None):
         raise RunError(NO_POLAR)
     chart_kw = {"chart": carried.get("chart")} if carried is not None else {}
     chart_kw["overrides"] = override_names(req)      # the Lab's signed chart overrides (#242)
+    base = req.get("base_definition") if full and isinstance(req.get("base_definition"), dict) \
+        else None
+    if base is not None:
+        chart_kw["base_definition"] = base           # the Lab's course under edits aboard (#406)
+    revision = courseedit.summary(req.get("revision")) or \
+        courseedit.summary((full or {}).get("course_revision"))
     why_not = boat_in_no_go(d, cid, lat, lon)
     if why_not:
         raise RunError(why_not)
@@ -464,6 +500,8 @@ def run(req, now=None, on_progress=None, on_phase=None, is_online=None):
                   for i in range(leg_count(d, cid))]
     field, chart_note = leg_fields[0] if leg_fields else \
         load_obstacles(d, cid, full, full_cid, boat, **chart_kw)
+    # #405: land is checked only if every leg's mask had it (the warning stays the first leg's)
+    land_note = chart_note or next((n for _f, n in leg_fields if n), None)
     leg_fields = [f for f, _n in leg_fields]
 
     # weather: the box the cache already holds, if one covers what's left of the course
@@ -507,6 +545,8 @@ def run(req, now=None, on_progress=None, on_phase=None, is_online=None):
            "asked_at": req.get("asked_at"), "computed_from": int(now),
            "from": {"lat": round(lat, 5), "lon": round(lon, 5)},
            "marks": names, "weather": weather, "boat": boat_info,
+           # which course revision this route sailed (#406): number, time, lab or boat
+           "course_revision": revision,
            # #308: the current and wave sources this route used, or "none: why", in words
            "data": res.get("data") or _sea_none(online),
            # which polar this route sailed on: the deployed boat's, or the profile's own here
@@ -528,8 +568,8 @@ def run(req, now=None, on_progress=None, on_phase=None, is_online=None):
         # first); a layer turned off in the settings is only in `data`
         warnings += [n for n in (out["data"].get("notes") or [])
                      if n not in warnings and not n.endswith(": turned off.")]
-        if chart_note:
-            warnings.insert(0, chart_note)
+        if land_note:                   # any leg's, so it matches `chart.land` and the checks
+            warnings.insert(0, land_note)
         if not full:
             warnings.insert(0, NO_ZONES)
         if boat_note == NO_BOAT:
@@ -576,13 +616,56 @@ def run(req, now=None, on_progress=None, on_phase=None, is_online=None):
             "vs_plan": (vs_plan(req.get("plan"), lat, lon, now, res.get("finish_epoch"))
                         if complete and res.get("finish_epoch") else
                         {"available": False, "note": INCOMPLETE}),
-            "chart": {"land": chart_note is None,
+            "chart": {"land": land_note is None,
                       "source": (res.get("obstacles") or {}).get("source")},
+            # #405: land, depth, zones, marks and chart coverage, each checked / not / failed
+            "checks": safety_checks(res.get("safety"), land_note, bool(full)),
         })
+        if chart_note is None and base is not None and carried is not None:
+            # the land mask was built for the Lab's course under the edits aboard: say which
+            fits, basis = chart_fits(carried.get("chart"), full, full_cid,
+                                     boats.safety_depth_m(boat), base)
+            if fits and basis == "base":
+                out["chart"]["built_for_revision"] = (req.get("revision") or {}).get("base")
     out["run_s"] = round(time.time() - t_wall, 1)
     out["peak_rss_mb"] = _peak_rss_mb()
     out["finished_at"] = int(time.time())
     return out
+
+
+# ---- the safety checks (#405) ------------------------------------------------------------------
+def safety_checks(safety, chart_note, has_course):
+    """[{id, label, state, texts}]: the route's own checks (optimizer.route_safety) with what the
+    boat knows on top. Land is the chart's: no chart note means the Lab's land mask was used (a
+    carried mask doesn't carry its own land/depth status, so the optimizer alone would call it
+    unchecked); a chart note means land wasn't checked, and a chart that doesn't cover the boat is a
+    coverage failure. Depth is never checked aboard: the carried mask doesn't say which water a
+    chart gave depths for. No course aboard: no zones and no rounding sides. A route with no
+    `checks` (an optimizer from before #405) counts as every check not run. Reporting only: a
+    re-route is never refused for these (degrading is right at sea); the iPad says which didn't run."""
+    own = (safety or {}).get("checks") if isinstance(safety, dict) else None
+    # the chart covers the route only if the optimizer's own coverage check passed too: a route
+    # that wanders off the mask's box has no land checked out there
+    covered = isinstance(own, list) and any(
+        isinstance(c, dict) and c.get("id") == "chart" and c.get("state") == routesafety.CHECKED
+        for c in own)
+    if isinstance(own, list) and not chart_note and covered:
+        own = [dict(c, state=routesafety.CHECKED, texts=[]) if c.get("id") == "land" else c
+               for c in own if isinstance(c, dict)]
+    if isinstance(own, list):
+        own = [dict(c, state=routesafety.NOT_CHECKED, texts=[NO_DEPTH])
+               if c.get("id") == "depth" and c.get("state") != routesafety.FAILED else c
+               for c in own]
+    # what the boat adds, as a full list (merge_checks reads a check left out as not run)
+    boat = [{"id": cid, "state": routesafety.CHECKED, "texts": []} for cid, _l in routesafety.CHECKS]
+    if chart_note:
+        boat.append({"id": "land", "state": routesafety.NOT_CHECKED, "texts": [chart_note]})
+        boat.append({"id": "chart", "state": (routesafety.FAILED if chart_note == NO_COVER
+                                              else routesafety.NOT_CHECKED), "texts": [chart_note]})
+    if not has_course:
+        for cid in ("zones", "marks"):
+            boat.append({"id": cid, "state": routesafety.NOT_CHECKED, "texts": [NO_ZONES]})
+    return routesafety.merge_checks(own, boat)
 
 
 # ---- process entry ----------------------------------------------------------------------------
