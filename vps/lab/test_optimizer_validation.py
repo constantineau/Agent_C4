@@ -35,16 +35,8 @@ ETA_FAST = 0.01         # ...and never more than 1% faster (it can't beat the po
 CONVERGE_TOL = 0.025    # auto / fine / finer ETAs agree within 2.5%
 LEG_NM = 6.0
 
-# --- the bugs this suite found (left unfixed here, #407; filed as #410 and #411) ----------------
-HOT_RUN = ("hot downwind angles: on a boat whose best run VMG is well above dead downwind "
-           "(multihull, planing sportboat on the plane) a short run sails too deep and gybes "
-           "late: 5-10% slow on 6 nm, 1-4% on 24 nm, and finer steps don't fix it. Turning off "
-           "the tack prune penalty (TACK_PRUNE_S) or the DMG prune brings it back (#410)")
-OSC_PLAY = ("oscillating shifts: the 300 s tack prune penalty (TACK_PRUNE_S) stops the router "
-            "tacking on headers; a simple tack-on-every-header sailor beats it by ~4%, and finer "
-            "steps make it worse. With TACK_PRUNE_S=30 it matches (#410)")
-REACH_STEP = ("fast reach: on the multihull the ETA jumps by up to 9% between resolutions "
-              "(the reach is quantized to the heading fan; a finer fan is not always closer) (#411)")
+# --- bugs this suite found, now fixed: #410 (hot downwind angles, oscillating shifts) and #411
+# (fast reach between resolutions). A new one goes in as (reason, cap) through `_known_bug`.
 
 
 def _known_bug(bug, value, tol, detail):
@@ -82,14 +74,8 @@ def _leg(wf, P, brg, dist=LEG_NM, res=FINE, **kw):
 # --- known answers: steady wind -----------------------------------------------------------------
 # the wind is from 000; the mark sits at `brg` from the start
 LEGS = {"beat": 0.0, "tight": 60.0, "reach": 90.0, "broad": 135.0, "run": 180.0}
-# (reason, cap): today's error at Fine is 4.7-6.6% on these runs and 9.3% on that reach
-RUN_BUG, REACH_BUG = (HOT_RUN, 0.09), (REACH_STEP, 0.12)
-STEADY_XFAIL = {
-    ("multihull", 6, "run"): RUN_BUG, ("multihull", 10, "run"): RUN_BUG,
-    ("multihull", 14, "run"): RUN_BUG, ("multihull", 20, "run"): RUN_BUG,
-    ("planing_sportboat", 14, "run"): RUN_BUG, ("planing_sportboat", 20, "run"): RUN_BUG,
-    ("multihull", 20, "reach"): REACH_BUG,
-}
+# known bugs as {(boat, tws, kind): (reason, cap)}; none today (#410 and #411 fixed)
+STEADY_XFAIL = {}
 
 
 def _steady_cases():
@@ -209,8 +195,53 @@ def test_oscillating_shift_as_fast_as_tacking_on_headers(amp, period):
           f" tack-on-headers {ref_h:.3f} h ({ref_tacks} tacks)")
     assert ref_h is not None and eta >= ref_h * 0.9      # sanity: nowhere near beating it
     assert leg["tacks"] >= 2, leg["tacks"]               # it does play some shifts
-    # today 3.5-3.6% behind; up to 6% is the known bug
-    _known_bug((OSC_PLAY, 0.06), _err(eta, ref_h), 0.01, f"{eta:.3f} h vs {ref_h:.3f} h")
+    _known_bug(None, _err(eta, ref_h), 0.01, f"{eta:.3f} h vs {ref_h:.3f} h")
+
+
+# --- the arrival stop rule -----------------------------------------------------------------------
+class _StillWater:
+    """A current that never runs: the same water as none, but the router can't bound speed with it."""
+    loaded = True
+
+    def current_at(self, lat, lon, t):
+        return (0.0, 0.0)
+
+
+# band (nm) -> the most the route may take (h). A prune on each node's own light-air speed took
+# 7.220 and 7.275 h; kept, the boat in the new breeze gets there in 7.172 and 7.257 h.
+FILL_MAX_H = {2.0: 7.19, 3.0: 7.265}
+
+
+@pytest.mark.parametrize("band", sorted(FILL_MAX_H))
+def test_arrival_prune_keeps_a_boat_the_wind_fills_in_for(band):
+    # 6 kn on a 40 nm reach; at 6.3 h it fills to 20 kn, but only `band` nm or more off the line.
+    # A boat first lays the mark in the light air near the line. A boat farther off, in the new
+    # breeze one step later, gets there sooner and must not be dropped as "can't beat it" on the
+    # light-air speed it has now (#419 review). With a current the router can't bound speed and
+    # drops nobody, so the same water with a still current is the unpruned answer.
+    P = F.polar("keelboat")
+    wf = lambda: F.Field(lambda t, x, y: (20.0 if t >= 6.3 * 3600 and abs(y) >= band else 6.0, 0.0))  # noqa: E731
+    plain = _leg(wf(), P, 90.0, dist=40.0, res=AUTO)
+    full = _leg(wf(), P, 90.0, dist=40.0, res=AUTO, cur=_StillWater())
+    print(f"wind fills {band:.0f} nm off: {plain['eta'] / 3600:.3f} h, unpruned {full['eta'] / 3600:.3f} h")
+    assert plain["eta"] <= full["eta"] + 1.0
+    assert plain["eta"] / 3600 <= FILL_MAX_H[band]
+
+
+@pytest.mark.parametrize("boat,tws,brg", [("planing_sportboat", 20, 180.0),
+                                           ("planing_sportboat", 14, 170.0),
+                                           ("multihull", 14, 180.0), ("multihull", 20, 180.0)])
+def test_short_run_stops_for_the_layline_gybe(boat, tws, brg):
+    # a 0.8 nm run, shorter than one step: the first lay found (straight down) arrives late, but
+    # the gybe on the layline, ending at the mark part way through the step, gets there sooner.
+    # The search must not stop on the first lay as if every next move took a whole step
+    # (#419 review: 20-43% slow).
+    P = F.polar(boat)
+    ref_h = F.two_board_time_h(P, tws, 0.0, 0.8, brg, O.tack_cost_s())[0]
+    leg = _leg(F.steady(tws, 0.0), P, brg, dist=0.8, res=AUTO)
+    eta = leg["eta"] / 3600.0
+    print(f"{boat} {tws} kn short run: {eta * 3600:.0f} s vs {ref_h * 3600:.0f} s")
+    assert -ETA_FAST <= _err(eta, ref_h) <= ETA_TOL, (eta, ref_h)
 
 
 # --- known answers: tidal gate ------------------------------------------------------------------
@@ -298,19 +329,18 @@ def test_windward_leeward_course_finishes_on_every_boat(boat):
 # --- convergence --------------------------------------------------------------------------------
 def _conv_cases():
     kb, mh, sb = "keelboat", "multihull", "planing_sportboat"
-    # known bugs as (reason, cap on the spread); today: 3.1%, 7.2%, 8.8%, 4.6%, 7.4%
+    # last field: a known bug as (reason, cap on the spread), else None
     cases = [
         ("keelboat beat 10", kb, lambda: F.steady(10, 0.0), 0.0, 6.0, None),
         ("keelboat run 10", kb, lambda: F.steady(10, 0.0), 180.0, 6.0, None),
         ("keelboat reach 10", kb, lambda: F.steady(10, 0.0), 90.0, 6.0, None),
         ("cruiser beat 14", "displacement_cruiser", lambda: F.steady(14, 0.0), 0.0, 6.0, None),
         ("keelboat persistent shift", kb, lambda: F.persistent(10, 0.0, 12.0), 0.0, 6.0, None),
-        ("keelboat oscillating shift", kb, lambda: F.oscillating(10, 0.0, 10.0, 30.0), 0.0, 12.0,
-         (OSC_PLAY, 0.06)),
-        ("multihull reach 10", mh, lambda: F.steady(10, 0.0), 90.0, 6.0, (REACH_STEP, 0.12)),
-        ("multihull reach 20", mh, lambda: F.steady(20, 0.0), 90.0, 6.0, (REACH_STEP, 0.12)),
-        ("multihull run 10", mh, lambda: F.steady(10, 0.0), 180.0, 6.0, (HOT_RUN, 0.08)),
-        ("sportboat run 14", sb, lambda: F.steady(14, 0.0), 180.0, 6.0, (HOT_RUN, 0.10)),
+        ("keelboat oscillating shift", kb, lambda: F.oscillating(10, 0.0, 10.0, 30.0), 0.0, 12.0, None),
+        ("multihull reach 10", mh, lambda: F.steady(10, 0.0), 90.0, 6.0, None),
+        ("multihull reach 20", mh, lambda: F.steady(20, 0.0), 90.0, 6.0, None),
+        ("multihull run 10", mh, lambda: F.steady(10, 0.0), 180.0, 6.0, None),
+        ("sportboat run 14", sb, lambda: F.steady(14, 0.0), 180.0, 6.0, None),
     ]
     for name, boat, wf, brg, dist, why in cases:
         yield pytest.param(boat, wf, brg, dist, why, id=name)
