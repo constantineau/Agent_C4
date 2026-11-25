@@ -19,7 +19,7 @@ import time
 
 from shared import race_def
 
-from . import atomicio, store, pbstore, optimizer, track, learning, boats
+from . import atomicio, store, pbstore, optimizer, track, learning, boats, oraclewind, retime
 
 API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 
@@ -67,19 +67,31 @@ def _first_beat_side(path, start, first_mark, band_nm=0.4):
     return "right" if ext > 0 else "left"
 
 
-def _playbook_predicted_hours(pb):
-    """The hours the carried plan expected — the recommended variant's, else the consensus/min."""
+def _plan_route(pb):
+    """(hours, path) of the route the carried plan expected — the recommended variant's, else the
+    consensus, else the quickest variant. `path` is None when the bundle saved no route."""
     variants = pb.get("variants") or []
     rec = pb.get("recommended")
+
+    def _path(x):
+        return ((x or {}).get("route") or {}).get("path") or (x or {}).get("path") or None
     for v in variants:
         if v.get("id") == rec or v.get("side") == rec:
             if v.get("total_hours"):
-                return v["total_hours"]
-    cons = (pb.get("consensus") or {}).get("total_hours")
-    if cons:
-        return cons
-    hrs = [v["total_hours"] for v in variants if v.get("total_hours")]
-    return min(hrs) if hrs else None
+                return v["total_hours"], _path(v)
+    cons = pb.get("consensus") or {}
+    if cons.get("total_hours"):
+        return cons["total_hours"], _path(cons)
+    timed = [v for v in variants if v.get("total_hours")]
+    if not timed:
+        return None, None
+    best = min(timed, key=lambda v: v["total_hours"])
+    return best["total_hours"], _path(best)
+
+
+def _playbook_predicted_hours(pb):
+    """The hours the carried plan expected — the recommended variant's, else the consensus/min."""
+    return _plan_route(pb)[0]
 
 
 # The live NOMADS sources keep about ten days of cycles. A debrief is by nature about a race that
@@ -91,6 +103,26 @@ def _playbook_predicted_hours(pb):
 # window, so a race older than the live horizon goes straight to the archive, and a recent one
 # falls back to it if the live sources come up empty.
 LIVE_WINDOW_DAYS = float(os.environ.get("JUDGE_LIVE_WINDOW_DAYS", "9"))
+# #404: once a race is over, the best route sails each hour's own analysis where the archive has
+# them (HRRR, US waters) — not a forecast. Off with JUDGE_ORACLE_ANALYSES=0.
+ORACLE_ANALYSES = os.environ.get("JUDGE_ORACLE_ANALYSES", "1") != "0"
+ANALYSIS_LAG_S = 2 * 3600      # the last hour's analysis is posted about this long after it
+
+
+ANALYSIS_MAX_GAP_S = 3 * 3600  # longest stretch between analyses the field may interpolate across
+
+
+def _enough_analyses(wf, start, t_end):
+    """Do the hourly analyses cover the WHOLE race window: a frame within an hour of each end and
+    no gap longer than ANALYSIS_MAX_GAP_S? A count alone isn't enough (Codex on #412): frames all
+    in the first half would leave the field holding its last one for the rest of the race."""
+    if not wf.loaded:
+        return False
+    ts = sorted(f.valid_time for frames in (getattr(wf, "series", None) or {}).values()
+                for f in frames or [] if getattr(f, "valid_time", None) is not None)
+    if not ts or ts[0] > start + 3600 or ts[-1] < t_end - 3600:
+        return False
+    return all(b - a <= ANALYSIS_MAX_GAP_S for a, b in zip(ts, ts[1:]))
 
 
 def wind_basis_for(start_epoch, now=None):
@@ -101,8 +133,20 @@ def wind_basis_for(start_epoch, now=None):
 
 def _oracle_windfield(bbox, start, t_end, models, race_id, log):
     """The wind the oracle routes through → (WindField, basis). Pure routing of the decision above;
-    `build_windfield` is unchanged (archive sources are ModelSource instances and pass through)."""
+    `build_windfield` is unchanged (archive sources are ModelSource instances and pass through).
+    basis: "analyses" (each hour's analysis, a race that is over) | "live" | "archive"."""
     from .wind import build_windfield
+    if ORACLE_ANALYSES and t_end + ANALYSIS_LAG_S < time.time():
+        from .wind.archive import analysis_field
+        log("building the oracle wind from each hour's analysis…")
+        try:
+            wf = analysis_field(bbox, start, t_end, context=f"debrief:{race_id}", on_progress=log)
+        except Exception as e:                 # the forecasts below still serve the debrief
+            log(f"hourly analyses failed ({type(e).__name__}) — using the forecasts")
+            wf = None
+        if wf is not None and _enough_analyses(wf, start, t_end):
+            return wf, "analyses"
+        log("not enough hourly analyses for this race — using the forecasts")
     if wind_basis_for(start) == "live":
         log("building the actual-wind field (oracle)…")
         wf = (build_windfield(bbox, start, t_end, models=models, on_progress=log) if models
@@ -166,7 +210,10 @@ def run_judge(race_id, playbook_id=None, models=None, on_progress=None, recordin
         return {"available": False, "playbooks": pbs,
                 "note": "Nothing to debrief yet. Upload a GPX above, or load the boat's log for "
                         "a race." if not no_race else "No track for this sail on the boat log."}
-    tac = _tactics(d, race_id, pb, models, log, boat=boat) if pb else {
+    # the recorded finish sizes the oracle's wind window (#404): a slow race outlasts the estimate
+    _span = _track_span(t, float((pb or {}).get("start_epoch") or 0)) if (pb and t) else None
+    tac = _tactics(d, race_id, pb, models, log, boat=boat,
+                   finish_hint=_span[1] if _span else None) if pb else {
         "available": False,
         "note": NO_RACE_NOTE if no_race else
                 "No frozen playbook for this race, so this checks speed only. Freeze a playbook "
@@ -196,6 +243,7 @@ def run_judge(race_id, playbook_id=None, models=None, on_progress=None, recordin
         "playbook": tac.get("playbook") or {},
         "regret": tac.get("regret") or {},
         "windfield": tac.get("windfield") or {},
+        "oracle_weather": tac.get("weather") or {},
         "actual_track": scored,
         "caveat": tac.get("caveat") or "",
         "data": _sea_data(cur, wv, d, tac.get("course_id") or (pb or {}).get("course_id"), t),
@@ -364,7 +412,10 @@ def _oracle_boat_kwargs(boat, pb):
     return kw, boat_from
 
 
-def _tactics(d, race_id, pb, models, log, boat=None):
+MAX_RACE_S = 7 * 86400       # a recording longer than this past the gun isn't the race window
+
+
+def _tactics(d, race_id, pb, models, log, boat=None, finish_hint=None):
     """The tactics half: the hindsight-optimal route on the wind that actually blew, vs the frozen
     plan. Every refusal names itself and carries `start_epoch` where it knows it, so the caller can
     still score the boat's own speed.
@@ -374,7 +425,10 @@ def _tactics(d, race_id, pb, models, log, boat=None):
     was routed on, so sea-state and helm losses are not blamed on route choice. The plan's predicted
     hours were routed by the playbook WITH its forecast current and waves and that boat model, so
     both sides of the gap are on the same speed basis. Helm and sea-state losses get their own
-    lines once the actual track is scored."""
+    lines once the actual track is scored.
+
+    `finish_hint`: when the recording ended (epoch). The wind window runs at least that far, and
+    once routed it must reach the routed finish (#404, Codex on #412)."""
     if boat is None:
         boat = boats.active_boat() or {}
     course_id = pb.get("course_id")
@@ -386,6 +440,8 @@ def _tactics(d, race_id, pb, models, log, boat=None):
         return {"available": False, "start_epoch": start, "note": "course has no geocoded marks"}
     hours = optimizer.estimate_hours(d, course_id)
     t_end = start + hours * 3600
+    if finish_hint and start < finish_hint <= start + MAX_RACE_S:
+        t_end = max(t_end, float(finish_hint) + 3600)
     pv_models = (pb.get("provenance") or {}).get("models") or None
     wf, wind_basis = _oracle_windfield(bbox, start, t_end, models or pv_models, race_id, log)
     # The actual-current and sea-state fields come BEFORE any refusal below: every return from here
@@ -420,6 +476,21 @@ def _tactics(d, race_id, pb, models, log, boat=None):
         oracle_wv = ZeroWave()     # the boat's own speed is still scored on `wv`
     oracle = optimizer.optimize_course(d, course_id, start, wf, avoid=True, cur=cur,
                                        waves=oracle_wv, **boat_kw)
+    # The analyses must reach the ROUTED finish (the best route's, or the plan's if later), not
+    # just the estimate: past their last frame the field holds stale wind (Codex on #412). Widen
+    # the window once and route again; `describe` below reports any hours still uncovered.
+    routed_end = start + max(oracle.get("total_hours") or 0, _plan_route(pb)[0] or 0) * 3600
+    if wind_basis == "analyses" and routed_end + 3600 > t_end \
+            and not _enough_analyses(wf, start, routed_end):
+        log("the best route runs past the hourly analyses — widening the window and routing again…")
+        t_end = routed_end + 3600
+        wf2, basis2 = _oracle_windfield(bbox, start, t_end, models or pv_models, race_id, log)
+        if wf2.loaded:
+            wf, wind_basis = wf2, basis2
+            oracle = optimizer.optimize_course(d, course_id, start, wf, avoid=True, cur=cur,
+                                               waves=oracle_wv, **boat_kw)
+            routed_end = start + max(oracle.get("total_hours") or 0,
+                                     _plan_route(pb)[0] or 0) * 3600
     plan_polar = ((pb.get("routing") or {}).get("polar") or {}).get("version")
     now_polar = (boat_kw.get("boat_polar") or {}).get("version")
     basis = _regret_basis(cur, wv, boat_from, plan_waves,
@@ -445,9 +516,27 @@ def _tactics(d, race_id, pb, models, log, boat=None):
     oracle_path = oracle.get("path") or []
     side_paid = _first_beat_side(oracle_path, start_pt, first_mark)
 
-    predicted = _playbook_predicted_hours(pb)
+    predicted, plan_path = _plan_route(pb)
     oracle_hours = oracle.get("total_hours")
-    regret_h = (predicted - oracle_hours) if (predicted and oracle_hours) else None
+    vs_forecast_h = (predicted - oracle_hours) if (predicted and oracle_hours) else None
+    # #404: split that gap. The plan's own route re-timed on the oracle wind (same boat, current,
+    # waves) → route call = it minus the best route; forecast error = it minus the plan's ETA.
+    log("re-timing the plan's route on the same wind…")
+    try:
+        plan_on_h, split_why = retime.calibrated_hours(
+            plan_path, oracle_path, oracle_hours, wf,
+            retime.boat_table(boat_kw.get("boat_polar"), boat_kw.get("polar_adjustments")), start,
+            helm_factor=boat_kw.get("helm_factor") or 1.0, cur=cur, waves=oracle_wv,
+            wave_coeffs=boat_kw.get("wave_coeffs"))
+    except Exception as e:                     # never lose the debrief over the split
+        plan_on_h, split_why = None, f"re-timing failed: {type(e).__name__}"
+    if plan_on_h is not None:
+        regret_h, regret_kind = plan_on_h - oracle_hours, "same_wind"
+        fc_err_h = (plan_on_h - predicted) if predicted else None
+    else:
+        regret_h, regret_kind, fc_err_h = vs_forecast_h, "vs_forecast", None
+    weather = oraclewind.describe(wf, wind_basis, start,
+                                  max(t_end, routed_end, start + (plan_on_h or 0) * 3600))
     rec_side = pb.get("recommended")
     variants = [{"side": v.get("id") or v.get("side"), "total_hours": v.get("total_hours"),
                  "share": v.get("share")} for v in (pb.get("variants") or [])]
@@ -464,14 +553,44 @@ def _tactics(d, race_id, pb, models, log, boat=None):
                    "minutes": (round(regret_h * 60) if regret_h is not None else None),
                    "side_paid": side_paid, "recommended_side": rec_side,
                    "side_matched": (rec_side == side_paid), "winning_variant": winning,
-                   "basis": basis},
+                   "basis": basis,
+                   # #404: `minutes` is the route call alone when kind is "same_wind"
+                   "kind": regret_kind,
+                   "plan_on_actual_hours": (round(plan_on_h, 3) if plan_on_h is not None else None),
+                   "forecast_error_minutes": (round(fc_err_h * 60) if fc_err_h is not None
+                                              else None),
+                   "vs_forecast_minutes": (round(vs_forecast_h * 60) if vs_forecast_h is not None
+                                           else None),
+                   # only hourly analyses are the wind that blew; on a forecast this "error"
+                   # is the difference between two forecasts (Codex on #412)
+                   "forecast_check": "real" if wind_basis == "analyses" else "two_forecasts",
+                   "split_note": None if plan_on_h is not None else (
+                       f"Time lost includes {_fc_words(wind_basis)}: {split_why}.")},
         "windfield": {**wf.status(), "basis": wind_basis},
-        "caveat": ("The best route uses the forecast from the start, not the wind that really "
-                   "blew. Speed scores use the boat's own instruments."
-                   if wind_basis == "archive" else
-                   "The best route uses the best forecast available, not the wind that really "
-                   "blew.") + (" " + basis["note"] if basis["note"] else ""),
+        "weather": weather,
+        "caveat": _caveat(wind_basis, basis, plan_on_h is None and split_why),
     }
+
+
+def _fc_words(wind_basis):
+    """What the ETA gap measures: forecast error only against the hourly analyses."""
+    return ("forecast error" if wind_basis == "analyses"
+            else "the difference between two forecasts")
+
+
+def _caveat(wind_basis, basis, split_why=None):
+    """The tactics caveat: what weather the best route used, then what time lost leaves out."""
+    if wind_basis == "analyses":
+        text = ("The best route uses each hour's analysis, the closest to the wind that really "
+                "blew.")
+    elif wind_basis == "archive":
+        text = ("The best route uses the forecast from the start, not the wind that really "
+                "blew. Speed scores use the boat's own instruments.")
+    else:
+        text = "The best route uses the best forecast available, not the wind that really blew."
+    if split_why:
+        text += f" Time lost includes {_fc_words(wind_basis)}: {split_why}."
+    return text + (" " + basis["note"] if basis["note"] else "")
 
 
 def _score_actual_track(t, oracle, marks, start_epoch, wf=None, cur=None, wave=None,
@@ -559,17 +678,34 @@ def _deterministic_critique(r):
     matched = reg["side_matched"]
     side_paid, rec = reg["side_paid"], reg["recommended_side"]
     mins = reg["minutes"]
+    same_wind = reg.get("kind") == "same_wind"
+    fc = reg.get("forecast_error_minutes") if same_wind else None
+    fc_real = reg.get("forecast_check", "real") == "real"
     if matched:
         assess = (f"The plan's recommended side ({rec}) is the side the wind ended up favoring. "
                   "The pre-race read held up.")
         lesson = f"Recommended {rec} and {rec} paid — the high-agreement call was right; keep that read."
     else:
         assess = (f"The plan recommended {rec} but the wind favored {side_paid}. The pre-race forecast "
-                  "pointed the other way" + (f" — about {abs(mins)} min of regret vs perfect foresight." if mins is not None else "."))
+                  "pointed the other way" + (
+                      "." if mins is None else
+                      f" — on the same wind its route was about the same as the best." if
+                      same_wind and abs(mins) < 1 else
+                      f" — on the same wind its route was about {abs(mins)} min "
+                      + ("slower" if mins > 0 else "faster") + " than the best."
+                      if same_wind else
+                      f" — about {abs(mins)} min of regret vs perfect foresight."))
         if mins is not None and (reg.get("basis") or {}).get("note"):
             assess += " " + reg["basis"]["note"]
         lesson = (f"{side_paid} paid, not the recommended {rec}. Watch the first-beat trigger more "
                   "aggressively next time; the branch to {side_paid} should have fired.")
+    if fc is not None and abs(fc) >= 1:
+        if fc_real:
+            assess += (f" The forecast was off too: the plan's route took {abs(fc)} min "
+                       + ("longer" if fc > 0 else "less") + " on the real wind than forecast.")
+        else:
+            assess += (f" On a later forecast (not the real wind) the plan's route took {abs(fc)} "
+                       "min " + ("longer" if fc > 0 else "less") + " than on its own forecast.")
     _b = reg.get("basis")              # older reports carry no basis: say nothing about it
     _lacks = [n for n in ("current", "waves") if _b and not _b.get(n)]
     at = r.get("actual_track") or {}
@@ -595,7 +731,11 @@ def _deterministic_critique(r):
     return {"assessment": assess, "key_lesson": lesson,
             "proposed_learnings": f"[{r['race_name']}] First beat: {side_paid} paid"
                                   + (f" (recommended {rec})" if not matched else "")
-                                  + (f"; regret ~{mins} min vs optimal" if mins is not None else "")
+                                  + ((f"; route cost ~{mins} min on the same wind" if same_wind
+                                      else f"; regret ~{mins} min vs optimal")
+                                     if mins is not None else "")
+                                  + ((f"; forecast off by {fc} min" if fc_real
+                                      else f"; {fc} min between two forecasts") if fc else "")
                                   + (f" (without {' and '.join(_lacks)})"
                                      if mins is not None and _lacks else "")
                                   + (" (today's boat settings)"
@@ -624,7 +764,9 @@ def _critique(r):
         facts.update({"playbook": r["playbook"],
                       "oracle": {"favored_side": r["oracle"]["favored_side"],
                                  "total_hours": r["oracle"]["total_hours"]},
-                      "regret": r["regret"], "caveat": r["caveat"]})
+                      "regret": r["regret"], "caveat": r["caveat"],
+                      "oracle_weather": {k: (r.get("oracle_weather") or {}).get(k)
+                                         for k in ("kind", "summary", "note")}})
     else:
         facts["no_playbook"] = r.get("tactics_note")
         facts["perf_cells"] = len(at.get("perf_bins") or [])
@@ -655,9 +797,18 @@ def _critique(r):
         "ORACLE result — the hindsight-optimal route on the wind that actually blew (which side paid, "
         "the optimal time) — plus the REGRET (plan vs perfect foresight). The oracle sails the same boat model and "
         "the same current and waves as the boat did, so regret carries no sea-state-model or boat-model "
-        "difference. It still compares the plan's FORECAST time with the oracle's ACTUAL-wind time, so "
-        "it includes forecast error: a big or negative regret can be the forecast being wrong, not the "
-        "call. If regret.basis.note is set, say what it says when you use the regret number. When ACTUAL_TRACK is present "
+        "difference. When regret.kind is 'same_wind', regret.minutes is the plan's OWN route re-timed "
+        "on the oracle wind minus the oracle route: the route call alone, forecast error removed; "
+        "regret.forecast_error_minutes is how much longer (+) or shorter (-) the plan's route took on "
+        "that wind than its forecast said: forecast error, not the crew's call. Keep the two apart. "
+        "That is real forecast error ONLY when regret.forecast_check is 'real' (hourly analyses); "
+        "when it is 'two_forecasts' the oracle wind is itself a forecast, so call it the difference "
+        "between two forecasts and never call that wind the real wind. "
+        "When regret.kind is 'vs_forecast' the split was not possible and regret.minutes compares the "
+        "plan's FORECAST time with the oracle's time, so it includes forecast error. ORACLE_WEATHER "
+        "says which wind the oracle used: 'analyses' (each hour's analysis, closest to what blew), "
+        "'archive' (the forecast out at the start: forecast error can't show) or 'live' (the latest "
+        "forecast). If regret.basis.note is set, say what it says when you use the regret number. When ACTUAL_TRACK is present "
         "you also have the boat's REAL sailed track scored vs the oracle line: time_behind_optimal_min, "
         "extra_distance_pct (oversail), XTE off the optimal route, the first-beat side the boat actually "
         "WORKED (vs the side that paid / we recommended), and polar_pct (% of the flat-water polar the "

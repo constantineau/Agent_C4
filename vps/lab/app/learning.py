@@ -127,7 +127,8 @@ def archive_debrief(report, boat_id=None):
     # keep the stored report lean (drop the heavy oracle path / windfield arrays)
     slim = {k: report.get(k) for k in ("race_id", "race_name", "playbook_id", "start_epoch",
                                        "regret", "playbook", "caveat", "recording",
-                                       "tactics_available", "tactics_note", "no_race")}
+                                       "tactics_available", "tactics_note", "no_race",
+                                       "oracle_weather")}
     slim["oracle"] = {k: (report.get("oracle") or {}).get(k)
                       for k in ("total_hours", "favored_side", "tacks")}
     slim["actual_track"] = {k: v for k, v in at.items() if k != "perf_bins"}
