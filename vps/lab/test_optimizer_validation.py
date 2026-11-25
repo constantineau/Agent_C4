@@ -198,6 +198,36 @@ def test_oscillating_shift_as_fast_as_tacking_on_headers(amp, period):
     _known_bug(None, _err(eta, ref_h), 0.01, f"{eta:.3f} h vs {ref_h:.3f} h")
 
 
+# --- the arrival stop rule -----------------------------------------------------------------------
+class _StillWater:
+    """A current that never runs: the same water as none, but the router can't bound speed with it."""
+    loaded = True
+
+    def current_at(self, lat, lon, t):
+        return (0.0, 0.0)
+
+
+# band (nm) -> the most the route may take (h). A prune on each node's own light-air speed took
+# 7.220 and 7.275 h; kept, the boat in the new breeze gets there in 7.172 and 7.257 h.
+FILL_MAX_H = {2.0: 7.19, 3.0: 7.265}
+
+
+@pytest.mark.parametrize("band", sorted(FILL_MAX_H))
+def test_arrival_prune_keeps_a_boat_the_wind_fills_in_for(band):
+    # 6 kn on a 40 nm reach; at 6.3 h it fills to 20 kn, but only `band` nm or more off the line.
+    # A boat first lays the mark in the light air near the line. A boat farther off, in the new
+    # breeze one step later, gets there sooner and must not be dropped as "can't beat it" on the
+    # light-air speed it has now (#419 review). With a current the router can't bound speed and
+    # drops nobody, so the same water with a still current is the unpruned answer.
+    P = F.polar("keelboat")
+    wf = lambda: F.Field(lambda t, x, y: (20.0 if t >= 6.3 * 3600 and abs(y) >= band else 6.0, 0.0))  # noqa: E731
+    plain = _leg(wf(), P, 90.0, dist=40.0, res=AUTO)
+    full = _leg(wf(), P, 90.0, dist=40.0, res=AUTO, cur=_StillWater())
+    print(f"wind fills {band:.0f} nm off: {plain['eta'] / 3600:.3f} h, unpruned {full['eta'] / 3600:.3f} h")
+    assert plain["eta"] <= full["eta"] + 1.0
+    assert plain["eta"] / 3600 <= FILL_MAX_H[band]
+
+
 # --- known answers: tidal gate ------------------------------------------------------------------
 def test_tidal_gate_go_when_the_stream_is_beatable():
     # 2 kn foul for an hour, then fair: going now beats waiting, and the router goes

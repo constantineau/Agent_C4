@@ -1005,6 +1005,14 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, deadline=None,
         gs = sp * math.cos(math.radians(crab)) + c_par
         return {"gs": gs, "hdg": hdg, "sail": sail, "peel": is_peel} if gs > 0.3 else None
 
+    # the fastest this boat sails anywhere on its polars (any wind), with 5% slack; None in a
+    # current (no bound on it here). The arrival stop rule below prunes with it.
+    v_top = None
+    if cur is None:
+        speeds = [p[2] for tbl in [P] + list(SP.values()) for p in (tbl or ())
+                  if len(p) > 2 and p[2] is not None]
+        if speeds:
+            v_top = max(speeds) * max(1.0, helm_factor) * 1.05
     start = {"lat": slat, "lon": slon, "t": t0, "parent": None, "hdg": None, "sail": start_sail}
     frontier = [start]
     reached = None
@@ -1058,18 +1066,14 @@ def route_leg(wf, P, slat, slon, t0, dlat, dlon, deadline=None,
         # Stop once the next generation can't arrive sooner. Its nodes are at least a step later, but
         # near the mark the step shrinks (ENDGAME_DT), so a node one short step on can still close
         # first; stopping at the first lay missed it (#410).
-        if reached and (not local or reached["t"] <= min(n[0]["t"] for n in local) + gen_dt):
+        if reached and (not local or
+                        reached["t"] <= min(n[0]["t"] for n in local) + gen_dt * 3600.0):
             break
-        if reached:
-            # only nodes that could still beat it sail on: even at the boat's top speed here (plus
-            # any current, with slack) the rest can't get there sooner. Keeps the extra steps cheap.
-            def _could_beat(n):
-                node, tws, _twd, dmark = n[0], n[1], n[2], n[3]
-                top = max(_polar_speed(P, tws, a) for a in range(30, 181, 10)) * 1.1
-                if cur is not None:
-                    top += cur.current_at(node["lat"], node["lon"], node["t"])[1]
-                return top > 0.3 and node["t"] + dmark / top * 3600 < reached["t"]
-            local = [n for n in local if _could_beat(n)]
+        if reached and v_top:
+            # only nodes that could still beat it sail on: even straight at the mark at the boat's
+            # top speed anywhere on its polar (any wind; helm above 1 included) the rest can't get
+            # there sooner. Keeps the extra steps cheap. No bound in a current: all sail on.
+            local = [n for n in local if n[0]["t"] + n[3] / v_top * 3600.0 < reached["t"]]
         for node, tws, twd, dmark, bmark in local:
             # CONE GATE: only fan headings within a wide cone of the bearing-to-mark (drops the
             # truly-backward third), plus the VMG-optimal angles (always kept). If the whole cone is
