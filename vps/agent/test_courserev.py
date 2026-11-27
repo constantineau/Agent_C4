@@ -14,6 +14,9 @@ Pins:
   * the re-route request names the revision and carries the Lab's course under the edits;
     the Orin's route is stamped with the revision it was asked on;
   * the Pi's GPS export still trusts the Lab's chart for an edit that covers no new water.
+  * #415: with no GPS fix the saved run still refuses a finish behind the boat and lets an undo
+    of a skip go back; a skip whose next mark can't be saved fails whole (no revision kept); a
+    navigator read never sees the marks of an edit in flight (the course lock).
 
 Run in-container: PYTHONPATH=vps/agent:.:pi/archiver python3 vps/agent/test_courserev.py
 """
@@ -348,6 +351,91 @@ check("said plainly", r == {"ok": False, "note": "Couldn't save the change. Try 
 check("the old course and marks are still aboard, and still pair", after.get("available")
       and after["revision"] == before["revision"] and names() == ["Start", "Windward", "Leeward",
                                                                   "Windward", "Finish"])
+
+print("#415: no GPS fix, the saved run still decides:")
+client.post("/course/load", json={"definition": DEF, "course_id": "c"})
+NAV.pick_mark(3)                                   # the run is at lap 2's Windward
+_lt = NAV._latest
+NAV._latest = lambda: {"lat": None, "lon": None, "twd": 0.0, "tws": 12.0, "heading": None,
+                       "cog": None, "sog": None, "fix_t": None, "ages": {}}
+check("(no fix: the navigator has no next mark)", not NAV.get_navigator().get("available"))
+check("a finish behind the saved run is refused", edit(op="finish_at", pos=1, name="Leeward")["note"]
+      == "That mark is behind you." and not rev()["shortened"]
+      and NAV.progress_snapshot("wl")["i"] == 3)
+NAV.pick_mark(0)
+r = edit(op="skip_to", pos=2, name="Windward")
+check("(a skip with no fix moves the run)", r["ok"] and NAV.progress_snapshot("wl")["i"] == 3)
+r = edit(op="undo")
+check("undo of that skip, still no fix: back to the mark before it",
+      r["ok"] and r["note"].endswith("Next mark: Start.") and NAV.progress_snapshot("wl")["i"] == 0)
+NAV._latest = _lt
+
+print("#415: a skip whose navigator save fails:")
+client.post("/course/load", json={"definition": DEF, "course_id": "c"})
+NAV.pick_mark(1)
+NAV.get_navigator()                                # (a read may release the pick's hold first)
+before, snap0 = rev(), NAV.progress_snapshot("wl")
+_pm = NAV.pick_mark
+NAV.pick_mark = lambda index, route=None: {"ok": False, "save_failed": True, "route": route,
+                                           "note": "Couldn't save. Try again."}
+r = edit(op="skip_to", pos=2, name="Windward")
+NAV.pick_mark = _pm
+after = rev()
+check("the edit fails, said plainly", r == {"ok": False, "note": "Couldn't save the change. Try again."})
+check("…no new revision, no skip kept", after["revision"] == before["revision"]
+      and after["edits"] == [] and not os.path.exists(JOURNAL))
+check("…the run as it was", NAV.progress_snapshot("wl") == snap0)
+
+print("#415: a navigator read while an edit is in flight:")
+import threading  # noqa: E402
+client.post("/course/load", json={"definition": DEF, "course_id": "c"})
+B["t"] += 1
+checked, paused = threading.Event(), threading.Event()
+seen_total, nav_thread = [], []
+_rce = NAV._recover_course_edit
+
+
+def _hooked_recover():
+    _rce()
+    if threading.current_thread() in nav_thread:
+        checked.set()                              # passed the journal check: no edit yet
+        paused.wait(1.0)                           # let an edit start now, if it can
+
+
+def _nav_read():
+    seen_total.append(NAV.get_navigator().get("marks_total"))
+
+
+def _slow_failing_write(rec):
+    orinroute.write_record = _wr                   # once: the put-back writes the old record
+    paused.set()                                   # marks already replaced, record not written
+    time.sleep(0.5)
+    raise OSError("disk full")
+
+
+def _edit_read():
+    checked.wait(5)
+    orinroute.write_record = _slow_failing_write
+    try:
+        seen_edit.append(courserev.edit({"op": "finish_at", "pos": 2, "name": "Windward"}))
+    finally:
+        orinroute.write_record = _wr
+
+
+seen_edit = []
+NAV._recover_course_edit = _hooked_recover
+tn = threading.Thread(target=_nav_read)
+te = threading.Thread(target=_edit_read)
+nav_thread.append(tn)
+tn.start()
+te.start()
+tn.join(10)
+te.join(10)
+NAV._recover_course_edit = _rce
+check("(the edit failed and put the old marks back)", seen_edit and seen_edit[0]["ok"] is False
+      and len(names()) == 5)
+check("the navigator never read the marks of an edit in flight", seen_total == [5])
+check("…and nothing left to recover", not os.path.exists(JOURNAL))
 
 print("words:")
 for w in (courserev.NO_COURSE, courserev.NOTHING, courserev.BEHIND):
