@@ -397,11 +397,18 @@ def _recover():
         return False
     set_load_id(route, keep.get("load_id"))
     write_record(keep)
-    # the run, if the cut came between the marks and the run; then the edit's next mark
-    NAV.restore_progress(route, j.get("progress"))
+    # the run, if the cut came between the marks and the run; then the edit's next mark. Keeping
+    # the old course undoes the edit, so the run goes back exactly as it was, even when it
+    # already pairs with the old marks (a failed edit's pick may have moved it, #415)
+    NAV.restore_progress(route, j.get("progress"), force=keep is old)
     nav = j.get("nav_index")
     if keep is new and isinstance(nav, int) and not isinstance(nav, bool):
-        NAV.pick_mark(nav, route)
+        picked = NAV.pick_mark(nav, route)
+        if isinstance(picked, dict) and picked.get("save_failed"):
+            # the next mark is half the edit (#415): keep the journal, the next read tries again
+            print(f"[course/edit] recovery: next mark not set ({picked.get('note')}), will retry",
+                  flush=True)
+            return True
     end_edit()
     print(f"[course/edit] recovered after a cut: kept the {'new' if keep is new else 'old'}"
           " course", flush=True)

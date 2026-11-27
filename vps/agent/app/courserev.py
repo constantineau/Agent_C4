@@ -127,12 +127,19 @@ def edit(body, after_change=None):
         except courseedit.EditError as exc:
             return {"ok": False, "note": str(exc)}
         nxt = _nav_next()
+        snap = NAV.progress_snapshot(route)
+        # the saved run on its own (#415): with no fresh fix the navigator has no next mark, but
+        # the run still says which marks are behind the boat
+        saved = (snap or {}).get("i")
+        if nxt is None:
+            nxt = saved
         target = None
         if new_edit and op in ("skip_to", "finish_at"):
             # the place names a mark of the course aboard NOW (edits apply in turn), so its
             # navigator index comes from that course, before this edit
             target = courseedit.nav_index_of(rec["definition"], cid, new_edit["pos"])
-            if op == "finish_at" and nxt is not None and target is not None and target < nxt:
+            if op == "finish_at" and target is not None and any(
+                    v is not None and target < v for v in (nxt, saved)):
                 return {"ok": False, "note": BEHIND}
         if op == "skip_to" and new_edit:
             # where the navigator was, so an undo of the skip can put it back
@@ -151,10 +158,9 @@ def edit(body, after_change=None):
         if op == "skip_to" and target is not None:
             nav_to = target
         elif undone and undone.get("op") == "skip_to":
-            nav_to, nav_note = _unskip_target(undone)
+            nav_to, nav_note = _unskip_target(undone, nxt)
         kept_run = True
         journal = False
-        snap = NAV.progress_snapshot(route)
         orinroute._RECOVERING.append(1)      # this edit's own journal: not for recovery now
         try:
             number = orinroute.next_revision()
@@ -179,23 +185,36 @@ def edit(body, after_change=None):
                 orinroute.set_load_id(route, out["load_id"])
             orinroute.write_record(out)
             picked = NAV.pick_mark(nav_to, route) if nav_to is not None else None
+            if picked is not None and not picked.get("ok"):
+                # the next mark is half the change (#415): not moved → the whole edit fails
+                raise RuntimeError(f"next mark not set: {picked.get('note')}")
             orinroute.end_edit()
         except Exception as exc:  # noqa: BLE001
             print(f"[course/edit] failed: {type(exc).__name__}: {exc}", flush=True)
             # the marks may be the new ones now: put the old ones back, so the old record still
             # pairs with them (by its marks hash and load id)
             if journal:
+                # every step is tried; any that fails leaves the journal, and the next read
+                # finishes the rollback (the old marks and load id make it keep the old course)
+                done = True
                 try:
                     if new_flat != old_flat:
                         NAV.replace_marks(route, old_flat)
-                    # the run exactly as it was (new marks clamp it; a pick may have moved it)
-                    NAV.restore_progress(route, snap, force=True)
                     orinroute.set_load_id(route, rec.get("load_id"))
                     orinroute.write_record(rec)
-                    orinroute.end_edit()
                 except Exception:  # noqa: BLE001
-                    # can't put it back now: the journal stays, the next read puts it right
-                    pass
+                    done = False
+                try:
+                    # the run exactly as it was (new marks clamp it; a pick may have moved it)
+                    if snap is not None and not NAV.restore_progress(route, snap, force=True):
+                        done = False
+                except Exception:  # noqa: BLE001
+                    done = False
+                if done:
+                    try:
+                        orinroute.end_edit()
+                    except Exception:  # noqa: BLE001
+                        pass
             return {"ok": False, "note": "Couldn't save the change. Try again."}
         finally:
             orinroute._RECOVERING.clear()
@@ -207,8 +226,7 @@ def edit(body, after_change=None):
         res = {"ok": True, "revision": courseedit.summary(revision),
                "note": f"Course rev {number} saved."}
         if picked is not None:
-            res["note"] = f"Course rev {number} saved. Next mark: {picked.get('next_mark')}." \
-                if picked.get("ok") else f"Course rev {number} saved. {picked.get('note') or ''}".strip()
+            res["note"] = f"Course rev {number} saved. Next mark: {picked.get('next_mark')}."
         elif nav_note:
             res["note"] = f"Course rev {number} saved. {nav_note}"
         elif not kept_run:
@@ -216,12 +234,13 @@ def edit(body, after_change=None):
         return res
 
 
-def _unskip_target(skip):
+def _unskip_target(skip, now):
     """Undo of a skip → (navigator index to go back to, None) or (None, why not): back to the mark
-    it was on before the skip, unless the boat has moved on from the skipped-to mark since."""
+    it was on before the skip, unless the boat has moved on from the skipped-to mark since.
+    `now`: the navigator's next mark (the saved run's when there is no fresh fix)."""
     prev, to = skip.get("prev_index"), skip.get("to_index")
     if not isinstance(prev, int) or isinstance(prev, bool):
         return None, NEXT_KEPT
-    if _nav_next() != to:
+    if now != to:
         return None, MOVED_ON
     return prev, None

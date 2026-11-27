@@ -777,25 +777,30 @@ def _recover_course_edit():
 
 def get_navigator(route: str = None):
     """Next mark, ETA, leg type, and laylines from live position + wind."""
-    _recover_course_edit()
-    route = route or active_route()
-    marks = _marks(route)
-    s = _fresh(_latest())
-    if not marks:
-        out = {"available": False, "note": f"No course loaded for '{route}'."}
-        if s["lat"] is not None and s["lon"] is not None:   # the console's day/night still needs where we are (#312)
-            out["position"] = {"lat": round(s["lat"], 5), "lon": round(s["lon"], 5)}
-        return out
-    if s["lat"] is None or s["lon"] is None:
-        if s.get("fix_age_s") is not None:
-            return {"available": False, "position_age_s": round(s["fix_age_s"]),
-                    "note": f"No fresh position (last fix {_age_text(s['fix_age_s'])} ago)."}
-        return {"available": False, "note": "No position yet."}
-    lat, lon = s["lat"], s["lon"]
+    from . import orinroute
+    # the course lock across the recovery, the marks read and the run's advance (#415): a course
+    # edit can't start between the journal check and the marks, nor replace them mid-read. The
+    # fix is read inside it too, so a wait on an edit never advances the run on a stale position.
+    with orinroute.COURSE_LOCK:
+        _recover_course_edit()
+        s = _fresh(_latest())
+        route = route or active_route()
+        marks = _marks(route)
+        if not marks:
+            out = {"available": False, "note": f"No course loaded for '{route}'."}
+            if s["lat"] is not None and s["lon"] is not None:   # the console's day/night still needs where we are (#312)
+                out["position"] = {"lat": round(s["lat"], 5), "lon": round(s["lon"], 5)}
+            return out
+        if s["lat"] is None or s["lon"] is None:
+            if s.get("fix_age_s") is not None:
+                return {"available": False, "position_age_s": round(s["fix_age_s"]),
+                        "note": f"No fresh position (last fix {_age_text(s['fix_age_s'])} ago)."}
+            return {"available": False, "note": "No position yet."}
+        lat, lon = s["lat"], s["lon"]
 
-    # next mark = the first one we have not passed (plane crossing), as far as this run has
-    # confirmed it on distinct fixes, or where the crew put it
-    idx, rec = _advance(route, marks, lat, lon, _fix_key(s))
+        # next mark = the first one we have not passed (plane crossing), as far as this run has
+        # confirmed it on distinct fixes, or where the crew put it
+        idx, rec = _advance(route, marks, lat, lon, _fix_key(s))
     nxt = marks[idx]
     dist = _hav_nm(lat, lon, nxt["lat"], nxt["lon"])
     brg = _bearing(lat, lon, nxt["lat"], nxt["lon"])
