@@ -386,6 +386,43 @@ check("…no new revision, no skip kept", after["revision"] == before["revision"
       and after["edits"] == [] and not os.path.exists(JOURNAL))
 check("…the run as it was", NAV.progress_snapshot("wl") == snap0)
 
+print("#415: a failed skip whose run can't be put back either:")
+client.post("/course/load", json={"definition": DEF, "course_id": "c"})
+NAV.pick_mark(1)
+NAV.get_navigator()
+before = rev()
+_pm, _rp = NAV.pick_mark, NAV.restore_progress
+NAV.pick_mark = lambda index, route=None: {"ok": False, "save_failed": True, "route": route,
+                                           "note": "Couldn't save. Try again."}
+NAV.restore_progress = lambda *a, **k: False
+r = edit(op="skip_to", pos=2, name="Windward")
+NAV.pick_mark, NAV.restore_progress = _pm, _rp
+check("the edit fails, and the journal stays for the next read",
+      r == {"ok": False, "note": "Couldn't save the change. Try again."} and os.path.exists(JOURNAL))
+NAV.get_navigator()
+check("…the next read puts it right: the old course, no skip",
+      not os.path.exists(JOURNAL) and rev()["revision"] == before["revision"] and rev()["edits"] == [])
+
+print("#415: recovery after a cut, when the skip's next mark won't save:")
+client.post("/course/load", json={"definition": DEF, "course_id": "c"})
+NAV.pick_mark(1)
+NAV.get_navigator()
+_pm = NAV.pick_mark
+NAV.pick_mark = lambda index, route=None: (_ for _ in ()).throw(PowerCut())
+try:
+    edit(op="skip_to", pos=2, name="Windward")
+except PowerCut:
+    pass
+want = json.load(open(JOURNAL))["nav_index"]           # the cut came as the pick was saving
+NAV.pick_mark = lambda index, route=None: {"ok": False, "save_failed": True, "route": route,
+                                           "note": "Couldn't save. Try again."}
+NAV.get_navigator()
+check("the store still failing: the journal stays", os.path.exists(JOURNAL))
+NAV.pick_mark = _pm
+nav = NAV.get_navigator()
+check("…the store back: the skip's next mark lands and the journal goes",
+      nav["next_mark"]["index"] == want and not os.path.exists(JOURNAL))
+
 print("#415: a navigator read while an edit is in flight:")
 import threading  # noqa: E402
 client.post("/course/load", json={"definition": DEF, "course_id": "c"})

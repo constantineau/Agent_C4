@@ -194,17 +194,27 @@ def edit(body, after_change=None):
             # the marks may be the new ones now: put the old ones back, so the old record still
             # pairs with them (by its marks hash and load id)
             if journal:
+                # every step is tried; any that fails leaves the journal, and the next read
+                # finishes the rollback (the old marks and load id make it keep the old course)
+                done = True
                 try:
                     if new_flat != old_flat:
                         NAV.replace_marks(route, old_flat)
-                    # the run exactly as it was (new marks clamp it; a pick may have moved it)
-                    NAV.restore_progress(route, snap, force=True)
                     orinroute.set_load_id(route, rec.get("load_id"))
                     orinroute.write_record(rec)
-                    orinroute.end_edit()
                 except Exception:  # noqa: BLE001
-                    # can't put it back now: the journal stays, the next read puts it right
-                    pass
+                    done = False
+                try:
+                    # the run exactly as it was (new marks clamp it; a pick may have moved it)
+                    if snap is not None and not NAV.restore_progress(route, snap, force=True):
+                        done = False
+                except Exception:  # noqa: BLE001
+                    done = False
+                if done:
+                    try:
+                        orinroute.end_edit()
+                    except Exception:  # noqa: BLE001
+                        pass
             return {"ok": False, "note": "Couldn't save the change. Try again."}
         finally:
             orinroute._RECOVERING.clear()
