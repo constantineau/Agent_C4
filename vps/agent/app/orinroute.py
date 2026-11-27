@@ -397,8 +397,10 @@ def _recover():
         return False
     set_load_id(route, keep.get("load_id"))
     write_record(keep)
-    # the run, if the cut came between the marks and the run; then the edit's next mark
-    NAV.restore_progress(route, j.get("progress"))
+    # the run, if the cut came between the marks and the run; then the edit's next mark. Keeping
+    # the old course undoes the edit, so the run goes back exactly as it was, even when it
+    # already pairs with the old marks (a failed edit's pick may have moved it, #415)
+    NAV.restore_progress(route, j.get("progress"), force=keep is old)
     nav = j.get("nav_index")
     if keep is new and isinstance(nav, int) and not isinstance(nav, bool):
         picked = NAV.pick_mark(nav, route)

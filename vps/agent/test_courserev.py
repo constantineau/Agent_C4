@@ -403,6 +403,32 @@ NAV.get_navigator()
 check("…the next read puts it right: the old course, no skip",
       not os.path.exists(JOURNAL) and rev()["revision"] == before["revision"] and rev()["edits"] == [])
 
+print("#415: a skip that moved the run, then failed, and the run won't go back at once:")
+client.post("/course/load", json={"definition": DEF, "course_id": "c"})
+NAV.pick_mark(1)
+NAV.get_navigator()
+before, snap0 = rev(), NAV.progress_snapshot("wl")
+_ee, _rp = orinroute.end_edit, NAV.restore_progress
+
+
+def _ee_fail_once():
+    orinroute.end_edit = _ee
+    raise OSError("disk full")
+
+
+def _rp_fail_forced(route, snap, force=False):
+    NAV.restore_progress = _rp
+    return False
+
+
+orinroute.end_edit, NAV.restore_progress = _ee_fail_once, _rp_fail_forced
+r = edit(op="skip_to", pos=2, name="Windward")      # the pick landed, then the edit failed
+check("the edit fails, the journal stays", not r["ok"] and os.path.exists(JOURNAL))
+NAV.get_navigator()
+check("…the next read: the old course and the run exactly as it was",
+      not os.path.exists(JOURNAL) and rev()["revision"] == before["revision"]
+      and NAV.progress_snapshot("wl") == snap0)
+
 print("#415: recovery after a cut, when the skip's next mark won't save:")
 client.post("/course/load", json={"definition": DEF, "course_id": "c"})
 NAV.pick_mark(1)
